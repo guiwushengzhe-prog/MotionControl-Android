@@ -1,0 +1,265 @@
+{
+  "version": 2,
+  "id": "black-myth-wukong-motion",
+  "name": "《黑神话：悟空》体感",
+  "description": "髋部连续移动，快速动作负责攻击与闪避；锁定、互动和法术等低频操作优先语音。",
+  "bindings": [
+    {
+      "id": "wukong-move-x",
+      "signal": "intent_move_x",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LX"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "wukong-move-y",
+      "signal": "intent_move_y",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LY"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "wukong-light",
+      "signal": "intent_light_attack",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "X"
+      },
+      "mode": "pulse",
+      "threshold": 0.64,
+      "release_threshold": 0.35200000000000004,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 230
+    },
+    {
+      "id": "wukong-heavy",
+      "signal": "intent_heavy_attack",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "Y"
+      },
+      "mode": "pulse",
+      "threshold": 0.68,
+      "release_threshold": 0.37400000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 360
+    },
+    {
+      "id": "wukong-dodge",
+      "signal": "intent_dodge",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "B"
+      },
+      "mode": "pulse",
+      "threshold": 0.66,
+      "release_threshold": 0.36300000000000004,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 430
+    },
+    {
+      "id": "wukong-jump",
+      "signal": "intent_jump",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "A"
+      },
+      "mode": "pulse",
+      "threshold": 0.68,
+      "release_threshold": 0.37400000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 520
+    },
+    {
+      "id": "wukong-gourd",
+      "signal": "intent_gourd",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "LB"
+      },
+      "mode": "hold",
+      "threshold": 0.58,
+      "release_threshold": 0.319,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "wukong-staff-spin",
+      "signal": "intent_staff_spin",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LT"
+      },
+      "mode": "analog",
+      "threshold": 0.58,
+      "release_threshold": 0.319,
+      "scale": 1.0,
+      "deadzone": 0.02,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "wukong-lock",
+      "signal": "intent_lock_target",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "R3"
+      },
+      "mode": "pulse",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 480
+    },
+    {
+      "id": "wukong-interact",
+      "signal": "intent_interact",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "RT"
+      },
+      "mode": "analog",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.02,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 420
+    },
+    {
+      "id": "wukong-pause",
+      "signal": "intent_pause",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "START"
+      },
+      "mode": "pulse",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 650
+    },
+    {
+      "id": "wukong-auto-combo",
+      "signal": "intent_auto_combo",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "X"
+      },
+      "mode": "hold",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": false,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    }
+  ],
+  "voice": {
+    "wake_word": "体感",
+    "wake_word_required": true,
+    "phrases": {
+      "lock_target": [
+        "锁定",
+        "锁定目标"
+      ],
+      "interact": [
+        "互动",
+        "交互"
+      ],
+      "gourd": [
+        "喝药",
+        "葫芦",
+        "喝葫芦"
+      ],
+      "staff_spin": [
+        "棍花"
+      ],
+      "pause": [
+        "暂停"
+      ],
+      "spell_one": [
+        "法术一"
+      ],
+      "spell_two": [
+        "法术二"
+      ],
+      "transform": [
+        "变身"
+      ],
+      "pillar_stance": [
+        "立棍"
+      ],
+      "stop": [
+        "停止",
+        "结束"
+      ],
+      "emergency_stop": [
+        "紧急停止"
+      ]
+    },
+    "semantics": {},
+    "command_signals": {},
+    "output_amplitudes": {
+      "move": 1.0,
+      "steer": 1.0,
+      "throttle": 1.0,
+      "brake": 1.0
+    }
+  },
+  "updated_at": "2026-08-13T06:31:59.902971+00:00"
+}

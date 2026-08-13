@@ -1,0 +1,14 @@
+{
+  "name": "MotionBridge 体感桥摄像头",
+  "short_name": "体感桥",
+  "description": "在手机本地识别人体动作并连接电脑游戏输入桥",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#080b0f",
+  "theme_color": "#0b1014",
+  "orientation": "landscape",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

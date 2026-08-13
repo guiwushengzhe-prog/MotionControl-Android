@@ -1,0 +1,232 @@
+{
+  "id": "xbox-body-default",
+  "name": "Xbox 全身基础",
+  "description": "固定摄像头即可使用的全身 Xbox 360 映射起点，可按游戏修改。",
+  "bindings": [
+    {
+      "id": "move-x",
+      "signal": "move_x",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LX"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "move-y",
+      "signal": "vertical_move",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LY"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.16,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "look-x",
+      "signal": "lean_x",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "RX"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.14,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "look-y",
+      "signal": "torso_pitch",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "RY"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 2.5,
+      "deadzone": 0.08,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "a-jump",
+      "signal": "jump",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "A"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "b-squat",
+      "signal": "squat",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "B"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "x-right-punch",
+      "signal": "right_punch",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "X"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "y-left-punch",
+      "signal": "left_punch",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "Y"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "lb-left-up",
+      "signal": "left_hand_up",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "LB"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "rb-right-up",
+      "signal": "right_hand_up",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "RB"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "lt-left-pinch",
+      "signal": "left_pinch_amount",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.08,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "rt-right-pinch",
+      "signal": "right_pinch_amount",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "RT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.08,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "start-clap",
+      "signal": "clap",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "START"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "back-tpose",
+      "signal": "t_pose",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "BACK"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "dpad-left",
+      "signal": "left_kick",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "DPAD_LEFT"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "dpad-right",
+      "signal": "right_kick",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "DPAD_RIGHT"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    }
+  ],
+  "updated_at": "2026-08-08T15:33:44.762713+00:00"
+}

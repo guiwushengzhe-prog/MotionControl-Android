@@ -1,0 +1,51 @@
+# ==============================
+# Python 环境 / 缓存
+# ==============================
+.venv/
+.venv-pc/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# ==============================
+# Node / Web
+# ==============================
+mobile/node_modules/
+mobile/dist/
+
+# ==============================
+# Android / Gradle 构建产物
+# ==============================
+mobile/android/.gradle/
+mobile/android/**/build/
+mobile/android/app/src/main/assets/
+mobile/android/local.properties
+mobile/android/.idea/
+
+*.apk
+*.aab
+
+# ==============================
+# PC 打包 / 临时产物
+# ==============================
+/build/
+/dist/
+/output/
+.playwright-cli/
+
+# ==============================
+# 临时交接包 / 发布包
+# ==============================
+/*.zip
+/MotionBridge_0.4.3_fixpack/
+
+# ==============================
+# 运行时缓存 / 日志
+# ==============================
+data/*.log
+data/vgamepad-extract/
+
+# 注意：
+# data/mappings/ 必须进入 Git
+# data/profiles/ 也暂时进入 Gitdata/profiles/

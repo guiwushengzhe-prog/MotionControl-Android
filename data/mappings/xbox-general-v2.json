@@ -1,0 +1,284 @@
+{
+  "version": 2,
+  "id": "xbox-general-v2",
+  "name": "通用 Xbox（语音 v2）",
+  "description": "语音控制移动，身体控制跳跃、下蹲、拳、踢、握拳和捏合。",
+  "bindings": [
+    {
+      "id": "voice-x",
+      "signal": "voice_move_x",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LX"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.05,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "voice-y",
+      "signal": "voice_move_y",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LY"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.05,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "a-jump",
+      "signal": "jump",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "A"
+      },
+      "mode": "pulse",
+      "threshold": 0.65,
+      "release_threshold": 0.25,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 450
+    },
+    {
+      "id": "b-squat",
+      "signal": "squat",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "B"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "x-right-punch",
+      "signal": "right_punch",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "X"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "release_threshold": 0.2,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 350
+    },
+    {
+      "id": "y-left-punch",
+      "signal": "left_punch",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "Y"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "release_threshold": 0.2,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 350
+    },
+    {
+      "id": "lb-left-fist",
+      "signal": "left_fist",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "LB"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "rb-right-fist",
+      "signal": "right_fist",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "RB"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "lt-left-pinch",
+      "signal": "left_pinch_amount",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.08,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "rt-right-pinch",
+      "signal": "right_pinch_amount",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "RT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.08,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "dpad-left",
+      "signal": "left_kick",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "DPAD_LEFT"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "dpad-right",
+      "signal": "right_kick",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "DPAD_RIGHT"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    }
+  ],
+  "voice": {
+    "wake_word": "体感",
+    "phrases": {
+      "left": [
+        "向左",
+        "左"
+      ],
+      "right": [
+        "向右",
+        "右"
+      ],
+      "forward": [
+        "向前",
+        "前进"
+      ],
+      "back": [
+        "向后",
+        "后退"
+      ],
+      "forward_left": [
+        "左前",
+        "左前方"
+      ],
+      "forward_right": [
+        "右前",
+        "右前方"
+      ],
+      "back_left": [
+        "左后",
+        "左后方"
+      ],
+      "back_right": [
+        "右后",
+        "右后方"
+      ],
+      "stop": [
+        "停止",
+        "结束"
+      ],
+      "emergency_stop": [
+        "紧急停止"
+      ],
+      "steer_left": [
+        "左转"
+      ],
+      "steer_right": [
+        "右转"
+      ],
+      "steer_center": [
+        "回正"
+      ],
+      "throttle_on": [
+        "加速"
+      ],
+      "throttle_off": [
+        "松油"
+      ],
+      "brake_on": [
+        "刹车"
+      ],
+      "brake_off": [
+        "松刹"
+      ]
+    },
+    "output_amplitudes": {
+      "move": 1.0,
+      "steer": 1.0,
+      "throttle": 1.0,
+      "brake": 1.0
+    }
+  },
+  "updated_at": "2026-08-09T07:23:10.372303+00:00"
+}

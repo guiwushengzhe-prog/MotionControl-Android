@@ -1,0 +1,92 @@
+{
+  "id": "keyboard-fitness-default",
+  "name": "键盘运动基础",
+  "description": "适合先在记事本和普通键盘游戏验证动作。",
+  "bindings": [
+    {
+      "id": "key-left",
+      "signal": "move_left",
+      "target": {
+        "kind": "keyboard",
+        "control": "A"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "key-right",
+      "signal": "move_right",
+      "target": {
+        "kind": "keyboard",
+        "control": "D"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "key-up",
+      "signal": "both_hands_up",
+      "target": {
+        "kind": "keyboard",
+        "control": "W"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "key-down",
+      "signal": "squat",
+      "target": {
+        "kind": "keyboard",
+        "control": "S"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "key-space",
+      "signal": "jump",
+      "target": {
+        "kind": "keyboard",
+        "control": "SPACE"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "key-enter",
+      "signal": "clap",
+      "target": {
+        "kind": "keyboard",
+        "control": "ENTER"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    }
+  ],
+  "updated_at": "2026-08-08T15:33:44.764405+00:00"
+}

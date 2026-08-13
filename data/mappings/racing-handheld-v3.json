@@ -1,0 +1,131 @@
+{
+  "version": 2,
+  "id": "racing-handheld-v3",
+  "name": "赛车（手持增强）",
+  "description": "手持倾斜转向，触摸 ZR/ZL 控制油门与刹车。",
+  "bindings": [
+    {
+      "id": "race-handheld-steer",
+      "signal": "handheld_orientation_x",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LX"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.08,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "race-handheld-throttle",
+      "signal": "handheld_zr",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "RT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.01,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "race-handheld-brake",
+      "signal": "handheld_zl",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.01,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    }
+  ],
+  "voice": {
+    "wake_word": "体感",
+    "phrases": {
+      "left": [
+        "向左",
+        "左"
+      ],
+      "right": [
+        "向右",
+        "右"
+      ],
+      "forward": [
+        "向前",
+        "前进"
+      ],
+      "back": [
+        "向后",
+        "后退"
+      ],
+      "forward_left": [
+        "左前",
+        "左前方"
+      ],
+      "forward_right": [
+        "右前",
+        "右前方"
+      ],
+      "back_left": [
+        "左后",
+        "左后方"
+      ],
+      "back_right": [
+        "右后",
+        "右后方"
+      ],
+      "stop": [
+        "停止",
+        "结束"
+      ],
+      "emergency_stop": [
+        "紧急停止"
+      ],
+      "steer_left": [
+        "左转"
+      ],
+      "steer_right": [
+        "右转"
+      ],
+      "steer_center": [
+        "回正"
+      ],
+      "throttle_on": [
+        "加速"
+      ],
+      "throttle_off": [
+        "松油"
+      ],
+      "brake_on": [
+        "刹车"
+      ],
+      "brake_off": [
+        "松刹"
+      ]
+    },
+    "output_amplitudes": {
+      "move": 1.0,
+      "steer": 1.0,
+      "throttle": 1.0,
+      "brake": 1.0
+    }
+  },
+  "updated_at": "2026-08-09T09:59:00.319249+00:00"
+}

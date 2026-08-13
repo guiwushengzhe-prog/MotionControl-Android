@@ -1,0 +1,64 @@
+{
+  "status": "INTERNAL_RESEARCH_ONLY",
+  "candidate": "penn_core13",
+  "topology": "core13",
+  "labels": [
+    "SQUAT_PULSE",
+    "LUNGE_SHIFT",
+    "ARMS_UP_DYNAMIC",
+    "RAPID_ARM_STRIKE",
+    "SLOW_ARM_DISTRACTOR",
+    "DAILY_MOTION_DISTRACTOR"
+  ],
+  "pose_shape": [
+    "N",
+    1,
+    24,
+    13,
+    3
+  ],
+  "root_shape": [
+    "N",
+    4
+  ],
+  "output_shape": [
+    "N",
+    6
+  ],
+  "onnx_sha256": "d72dfafa02be55962aad92e40b0170bc5acd7b5bdbfcdad2c777b519601ec458",
+  "source_checkpoint_sha256": "683b3b4b0912335aee1b4eec31f3b2ce8dc81f62c73951d0200b73cc611c259c",
+  "protocol_sha256": "c9e9964434050f09715543f2da339621a1948d23aa24fed331ff2451ef2aaf3a",
+  "best_epoch": 11,
+  "preprocessing": {
+    "indices": [
+      0,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28
+    ],
+    "world": "OneEuro(0.10,80,1.0); per-frame hip center; one median torso scale per 24-frame window; no rotation",
+    "root": "image hip center [dx,dy,x_range,y_range]"
+  },
+  "verification": {
+    "sample_count": 34,
+    "max_absolute_logit_error": 2.09808349609375e-05,
+    "argmax_agreement": 1.0,
+    "providers": [
+      "CPUExecutionProvider"
+    ]
+  },
+  "official_test": {
+    "macro_f1": 0.8442,
+    "difficult_negative_false_trigger_rate": 0.1818
+  },
+  "license": "Internal non-commercial research only. Do not redistribute or use commercially."
+}

@@ -1,0 +1,246 @@
+{
+  "version": 2,
+  "id": "forza-horizon-4-motion",
+  "name": "《极限竞速：地平线4》体感",
+  "description": "身体连续转向，驾驶区保持油门，下蹲或后移连续刹车；菜单和低频操作交给语音。",
+  "bindings": [
+    {
+      "id": "fh4-steer",
+      "signal": "intent_steer_x",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LX"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.1,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "fh4-throttle",
+      "signal": "intent_throttle",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "RT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.02,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "fh4-brake",
+      "signal": "intent_brake",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.02,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "fh4-handbrake",
+      "signal": "intent_handbrake",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "A"
+      },
+      "mode": "pulse",
+      "threshold": 0.62,
+      "release_threshold": 0.341,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 420
+    },
+    {
+      "id": "fh4-pause",
+      "signal": "intent_pause",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "START"
+      },
+      "mode": "pulse",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 650
+    },
+    {
+      "id": "fh4-map",
+      "signal": "intent_map",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "BACK"
+      },
+      "mode": "pulse",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 650
+    },
+    {
+      "id": "fh4-reset",
+      "signal": "intent_reset_vehicle",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "DPAD_DOWN"
+      },
+      "mode": "pulse",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 650
+    },
+    {
+      "id": "fh4-camera",
+      "signal": "intent_change_camera",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "RB"
+      },
+      "mode": "pulse",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 450
+    },
+    {
+      "id": "fh4-rewind",
+      "signal": "intent_rewind",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "Y"
+      },
+      "mode": "pulse",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": false,
+      "hold_ms": 0,
+      "cooldown_ms": 450
+    },
+    {
+      "id": "fh4-shift-down",
+      "signal": "intent_shift_down",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "X"
+      },
+      "mode": "pulse",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": false,
+      "hold_ms": 0,
+      "cooldown_ms": 260
+    },
+    {
+      "id": "fh4-shift-up",
+      "signal": "intent_shift_up",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "B"
+      },
+      "mode": "pulse",
+      "threshold": 0.55,
+      "release_threshold": 0.30250000000000005,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": false,
+      "hold_ms": 0,
+      "cooldown_ms": 260
+    }
+  ],
+  "voice": {
+    "wake_word": "体感",
+    "phrases": {
+      "pause": [
+        "暂停"
+      ],
+      "map": [
+        "地图",
+        "打开地图"
+      ],
+      "reset_vehicle": [
+        "重置车辆",
+        "车辆重置"
+      ],
+      "change_camera": [
+        "切换视角",
+        "换视角"
+      ],
+      "rewind": [
+        "倒带"
+      ],
+      "shift_up": [
+        "升挡"
+      ],
+      "shift_down": [
+        "降挡"
+      ],
+      "cruise_on": [
+        "巡航",
+        "开始巡航"
+      ],
+      "cruise_off": [
+        "取消巡航",
+        "结束巡航"
+      ],
+      "stop": [
+        "停止",
+        "结束"
+      ],
+      "emergency_stop": [
+        "紧急停止"
+      ]
+    },
+    "output_amplitudes": {
+      "move": 1.0,
+      "steer": 1.0,
+      "throttle": 1.0,
+      "brake": 1.0
+    }
+  },
+  "updated_at": "2026-08-13T06:31:59.899974+00:00"
+}

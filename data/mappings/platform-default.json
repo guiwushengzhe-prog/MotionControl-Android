@@ -1,0 +1,165 @@
+{
+  "version": 2,
+  "id": "platform-default",
+  "name": "平台动作",
+  "description": "语音方向，身体跳跃、下蹲和攻击。",
+  "bindings": [
+    {
+      "id": "platform-x",
+      "signal": "voice_move_x",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LX"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    },
+    {
+      "id": "platform-y",
+      "signal": "voice_move_y",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LY"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    },
+    {
+      "id": "platform-jump",
+      "signal": "jump",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "A"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    },
+    {
+      "id": "platform-squat",
+      "signal": "squat",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "B"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    },
+    {
+      "id": "platform-attack",
+      "signal": "right_punch",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "X"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    }
+  ],
+  "voice": {
+    "wake_word": "体感",
+    "phrases": {
+      "left": [
+        "向左",
+        "左"
+      ],
+      "right": [
+        "向右",
+        "右"
+      ],
+      "forward": [
+        "向前",
+        "前进"
+      ],
+      "back": [
+        "向后",
+        "后退"
+      ],
+      "forward_left": [
+        "左前",
+        "左前方"
+      ],
+      "forward_right": [
+        "右前",
+        "右前方"
+      ],
+      "back_left": [
+        "左后",
+        "左后方"
+      ],
+      "back_right": [
+        "右后",
+        "右后方"
+      ],
+      "stop": [
+        "停止",
+        "结束"
+      ],
+      "emergency_stop": [
+        "紧急停止"
+      ],
+      "steer_left": [
+        "左转"
+      ],
+      "steer_right": [
+        "右转"
+      ],
+      "steer_center": [
+        "回正"
+      ],
+      "throttle_on": [
+        "加速"
+      ],
+      "throttle_off": [
+        "松油"
+      ],
+      "brake_on": [
+        "刹车"
+      ],
+      "brake_off": [
+        "松刹"
+      ]
+    },
+    "output_amplitudes": {
+      "move": 1.0,
+      "steer": 1.0,
+      "throttle": 1.0,
+      "brake": 1.0
+    }
+  },
+  "updated_at": "2026-08-09T07:16:21.990477+00:00"
+}

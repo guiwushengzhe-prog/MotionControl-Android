@@ -1,0 +1,301 @@
+{
+  "version": 2,
+  "id": "switch-handheld-v3",
+  "name": "Switch 模拟器（手持增强）",
+  "description": "手持触摸按钮加真实手机 IMU 体感；摄像头继续负责身体动作。",
+  "bindings": [
+    {
+      "id": "sh-lx",
+      "signal": "handheld_stick_x",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LX"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-ly",
+      "signal": "handheld_stick_y",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LY"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": true,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-a",
+      "signal": "handheld_a",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "A"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-b",
+      "signal": "handheld_b",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "B"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-x",
+      "signal": "handheld_x",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "X"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-y",
+      "signal": "handheld_y",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "Y"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-l",
+      "signal": "handheld_l",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "LB"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-r",
+      "signal": "handheld_r",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "RB"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-zl",
+      "signal": "handheld_zl",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-zr",
+      "signal": "handheld_zr",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "RT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-start",
+      "signal": "handheld_start",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "START"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-select",
+      "signal": "handheld_select",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "BACK"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    },
+    {
+      "id": "sh-motion",
+      "signal": "handheld_rotation",
+      "target": {
+        "kind": "dsu_motion",
+        "control": "BODY"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "release_threshold": null,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 0
+    }
+  ],
+  "voice": {
+    "wake_word": "体感",
+    "phrases": {
+      "left": [
+        "向左",
+        "左"
+      ],
+      "right": [
+        "向右",
+        "右"
+      ],
+      "forward": [
+        "向前",
+        "前进"
+      ],
+      "back": [
+        "向后",
+        "后退"
+      ],
+      "forward_left": [
+        "左前",
+        "左前方"
+      ],
+      "forward_right": [
+        "右前",
+        "右前方"
+      ],
+      "back_left": [
+        "左后",
+        "左后方"
+      ],
+      "back_right": [
+        "右后",
+        "右后方"
+      ],
+      "stop": [
+        "停止",
+        "结束"
+      ],
+      "emergency_stop": [
+        "紧急停止"
+      ],
+      "steer_left": [
+        "左转"
+      ],
+      "steer_right": [
+        "右转"
+      ],
+      "steer_center": [
+        "回正"
+      ],
+      "throttle_on": [
+        "加速"
+      ],
+      "throttle_off": [
+        "松油"
+      ],
+      "brake_on": [
+        "刹车"
+      ],
+      "brake_off": [
+        "松刹"
+      ]
+    },
+    "output_amplitudes": {
+      "move": 1.0,
+      "steer": 1.0,
+      "throttle": 1.0,
+      "brake": 1.0
+    }
+  },
+  "updated_at": "2026-08-09T09:59:00.322286+00:00"
+}

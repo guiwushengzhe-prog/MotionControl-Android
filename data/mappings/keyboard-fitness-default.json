@@ -1,0 +1,182 @@
+{
+  "version": 2,
+  "id": "keyboard-fitness-default",
+  "name": "键盘运动基础",
+  "description": "适合先在记事本和普通键盘游戏验证动作。",
+  "bindings": [
+    {
+      "id": "key-left",
+      "signal": "move_left",
+      "target": {
+        "kind": "keyboard",
+        "control": "A"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": 0.325,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    },
+    {
+      "id": "key-right",
+      "signal": "move_right",
+      "target": {
+        "kind": "keyboard",
+        "control": "D"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": 0.325,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    },
+    {
+      "id": "key-up",
+      "signal": "both_hands_up",
+      "target": {
+        "kind": "keyboard",
+        "control": "W"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": 0.325,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    },
+    {
+      "id": "key-down",
+      "signal": "squat",
+      "target": {
+        "kind": "keyboard",
+        "control": "S"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": 0.325,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    },
+    {
+      "id": "key-space",
+      "signal": "jump",
+      "target": {
+        "kind": "keyboard",
+        "control": "SPACE"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "release_threshold": 0.325,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    },
+    {
+      "id": "key-enter",
+      "signal": "clap",
+      "target": {
+        "kind": "keyboard",
+        "control": "ENTER"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "release_threshold": 0.325,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true,
+      "hold_ms": 0,
+      "cooldown_ms": 250
+    }
+  ],
+  "voice": {
+    "wake_word": "体感",
+    "phrases": {
+      "left": [
+        "向左",
+        "左"
+      ],
+      "right": [
+        "向右",
+        "右"
+      ],
+      "forward": [
+        "向前",
+        "前进"
+      ],
+      "back": [
+        "向后",
+        "后退"
+      ],
+      "forward_left": [
+        "左前",
+        "左前方"
+      ],
+      "forward_right": [
+        "右前",
+        "右前方"
+      ],
+      "back_left": [
+        "左后",
+        "左后方"
+      ],
+      "back_right": [
+        "右后",
+        "右后方"
+      ],
+      "stop": [
+        "停止",
+        "结束"
+      ],
+      "emergency_stop": [
+        "紧急停止"
+      ],
+      "steer_left": [
+        "左转"
+      ],
+      "steer_right": [
+        "右转"
+      ],
+      "steer_center": [
+        "回正"
+      ],
+      "throttle_on": [
+        "加速"
+      ],
+      "throttle_off": [
+        "松油"
+      ],
+      "brake_on": [
+        "刹车"
+      ],
+      "brake_off": [
+        "松刹"
+      ]
+    },
+    "output_amplitudes": {
+      "move": 1.0,
+      "steer": 1.0,
+      "throttle": 1.0,
+      "brake": 1.0
+    }
+  },
+  "updated_at": "2026-08-08T15:33:44.764405+00:00"
+}

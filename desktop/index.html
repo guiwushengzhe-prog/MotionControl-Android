@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>MotionBridge 0.4.3 双模型研究试用</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/app.css?v=0.4.3-dual"><link rel="stylesheet" href="/assets/algorithm-lab.css?v=0.4.3-dual"></head>
+<body><div class="app-shell">
+  <header class="topbar"><div><p class="eyebrow">MOTIONBRIDGE 0.4.3 · 双模型研究试用</p><h1>体感桥</h1></div><div class="header-actions"><span class="live-pill" id="cameraPill"><span></span><b>手机未连接</b></span><button class="danger" id="emergencyStop">紧急停止</button><button id="openAlgorithmLab">算法测试</button><button class="danger" id="shutdownButton">退出软件</button></div></header>
+  <main>
+    <section class="dashboard-grid">
+      <article class="panel connection-panel"><div class="panel-title"><h2>连接</h2><span class="status-tag" id="buildBadge">0.4.3</span></div><div class="connect-compact"><img id="qrCode" src="/api/qr?v=0.4.3" alt="手机连接二维码"><div><code id="mobileUrl">正在读取…</code><button class="ghost" id="copyUrl">复制手机地址</button></div></div><div class="metrics"><div><strong id="fps">0</strong><small>FPS</small></div><div><strong id="latency">—</strong><small>总延迟</small></div><div><strong id="actualModel">—</strong><small>当前模型</small></div><div><strong id="voiceLink">未连接</strong><small>语音</small></div></div></article>
+      <article class="panel"><div class="panel-title"><h2>运行模式</h2></div><div class="segments" id="modeControl"><button data-mode="single">单人</button><button data-mode="double">双人</button></div><div class="quick-flow"><span>连接手机</span><i>›</i><span>选择玩家</span><i>›</i><span>加入</span><i>›</i><span>启用输出</span></div></article>
+    </section>
+
+    <section class="panel"><div class="panel-title"><h2>玩家与游戏</h2><div class="inline-form compact"><input id="profileName" maxlength="50" placeholder="新玩家名称"><button id="createProfile">新建档案</button><button class="ghost" id="calibrate">校准玩家一</button></div></div><div class="players-grid" id="playersGrid"></div></section>
+
+    <section class="dashboard-grid">
+      <article class="panel"><div class="panel-title"><h2>控制布局</h2><span class="status-tag" id="layoutBadge">未设置</span></div><div class="toolbar"><label>已保存布局<select id="layoutSelect"><option value="">请选择</option></select></label><button id="useLayout">使用</button><button id="createLayout">一次设置</button><button class="ghost" id="copyLayout">复制</button><button class="ghost" id="restoreLayout">恢复推荐</button></div><div class="toolbar"><label>姿势<select id="layoutStance"><option value="standing">站姿</option><option value="seated">坐姿</option></select></label><label>运动量<select id="layoutMotion"><option value="standard">标准</option><option value="low">低运动量</option></select></label></div></article>
+      <article class="panel"><div class="panel-title"><h2>动作模型</h2><span class="status-tag" id="modelState">参数准备中</span></div><label>识别风格<select id="modelChoice"><option value="core13">稳健（默认）</option><option value="coco17">灵敏</option></select></label><div class="metrics model-metrics"><div><strong id="modelAction">—</strong><small>当前动作</small></div><div><strong id="modelConfidence">0%</strong><small>置信度</small></div><div><strong id="modelLatency">—</strong><small>模型延迟</small></div></div><label class="check"><input id="modelToggle" type="checkbox" checked>试用动作模型</label></article>
+    </section>
+
+    <section class="dashboard-grid">
+      <article class="panel"><div class="panel-title"><h2>语音命令</h2><span class="status-tag" id="voiceBadge">未连接</span></div><div id="voiceCommands" class="command-list"></div><div class="voice-diagnostics"><span id="voiceLevel">麦克风：—</span><span id="voicePartial">正在听：—</span><span id="voiceFinal">最终文字：—</span><span id="voiceExecuted">已执行：—</span></div><div class="voice-result"><b id="lastVoice">最后识别：—</b><span id="voiceHeld">未保持方向</span></div></article>
+      <article class="panel"><div class="panel-title"><h2>输出</h2><span class="status-tag" id="vigemStatus">正在检测</span></div><div class="output-status" id="outputStatus"></div><button class="wide" id="outputToggle">启用游戏输出</button><button class="wide ghost" id="installVigem" hidden>安装虚拟手柄驱动</button><small id="vigemHint"></small></article>
+    </section>
+
+    <section class="dashboard-grid">
+      <article class="panel"><div class="panel-title"><h2>悬浮层</h2></div><div class="toolbar"><button id="overlayToggle">显示 / 隐藏</button><label>透明度<input id="overlayOpacity" type="range" min="0.2" max="1" step="0.05"></label><label class="check"><input id="overlayCompact" type="checkbox">紧凑</label><label class="check"><input id="overlayClick" type="checkbox">点击穿透</label></div></article>
+      <article class="panel"><div class="panel-title"><h2>实时动作</h2></div><div id="signalGrid" class="signal-grid"></div></article>
+    </section>
+
+    <details class="panel mapping-panel"><summary><b>游戏预设与映射</b><span>高级设置</span></summary><div class="mapping-content"><div class="toolbar"><label>编辑预设<select id="mappingSelect"></select></label><button id="newMapping">新建</button><button id="copyMapping" class="ghost">复制</button><button id="renameMapping" class="ghost">重命名</button><button id="deleteMapping" class="ghost">删除</button><button id="exportMapping" class="ghost">导出</button><label class="file-button ghost">导入<input id="importMapping" type="file" accept="application/json" hidden></label><button id="saveMapping">保存</button></div><p id="conflictMessage" class="warning" hidden></p><div class="table-wrap"><table><thead><tr><th>启用</th><th>中文动作</th><th>输出类型</th><th>游戏控制</th><th>模式</th><th>高级</th></tr></thead><tbody id="bindingsBody"></tbody></table></div><details class="voice-editor"><summary>语音参数</summary><label>唤醒词<input id="wakeWord"></label><label>移动幅度<input id="voiceMove" type="number" min="0" max="1" step="0.05"></label><label>转向幅度<input id="voiceSteer" type="number" min="0" max="1" step="0.05"></label></details></div></details>
+    <details class="panel mapping-panel" id="macroPanel"><summary><b>组合键 / 宏命令</b><span>同时按 · 按住 · 延时 · 顺序操作</span></summary><div class="mapping-content">
+      <div class="toolbar"><label>编辑宏<select id="macroSelect"></select></label><button id="newMacro">新建</button><button id="copyMacro" class="ghost">复制</button><button id="renameMacro" class="ghost">重命名</button><button id="deleteMacro" class="ghost">删除</button><button id="testMacro" class="ghost">测试一次</button><button id="saveMacro">保存</button></div>
+      <div class="macro-settings"><label class="check"><input id="macroEnabled" type="checkbox">启用宏</label><label>适用游戏<select id="macroPreset"><option value="">所有预设</option></select></label><label>触发来源<select id="macroSource"><option value="action">人体动作</option><option value="voice">语音命令</option><option value="region">画面区域</option><option value="handheld">手持按键</option></select></label><label>触发信号<input id="macroSignal" list="macroSignalList" placeholder="例如 intent_spell_one"><datalist id="macroSignalList"></datalist></label><label>重复触发<select id="macroRepeat"><option value="ignore">执行中忽略</option><option value="restart">重新开始</option><option value="queue">排队执行</option></select></label><label class="check"><input id="macroReleaseCancel" type="checkbox">信号松开时取消</label></div>
+      <p class="macro-hint">一行就是一步。普通按钮组合（如 LB+X）用“同时组合”，控制填写 <code>LB,X</code>。扳机 LT/RT 是模拟轴：要做“LT+X”，先添加“摇杆 / 扳机值”步骤把 LT 设为 1，再添加 X 单击；宏结束会自动释放 LT。</p>
+      <div class="table-wrap"><table><thead><tr><th>步骤</th><th>输出类型</th><th>控制</th><th>持续 ms</th><th>值</th><th></th></tr></thead><tbody id="macroStepsBody"></tbody></table></div><div class="toolbar"><button id="addMacroStep" class="ghost">+ 添加步骤</button><span id="macroWarning" class="warning"></span></div>
+    </div></details>
+  </main>
+  <dialog id="calibrationDialog"><h2 id="calibrationTitle">准备校准</h2><p id="calibrationInstruction"></p><div id="calibrationFeedback" class="calibration-feedback"></div><div class="countdown" id="countdown">0/24</div><div class="progress"><i id="calibrationProgress"></i></div><button class="ghost" id="cancelCalibration">取消</button></dialog>
+  <dialog id="layoutGuideDialog"><h2>首次设置</h2><p id="layoutGuideStep">1 / 5 · 选择游戏与玩家</p><div class="layout-guide-list"><span>选择游戏、玩家与站姿</span><span>完成中心校准</span><span>接受推荐触发区</span><span>试触发动作与语音</span><span>保存后下次直接开始</span></div><div class="calibration-actions"><button class="ghost" id="closeLayoutGuide">稍后</button><button id="continueLayoutGuide">开始中心校准</button></div></dialog>
+  <dialog id="algorithmLabDialog" class="algorithm-lab-dialog">
+    <div class="lab-head"><div><span class="lab-kicker">REAL INPUT LAB</span><h2>算法测试</h2></div><span class="lab-shadow-badge">影子模式 · 无游戏输出</span><button class="lab-icon-button" id="closeAlgorithmLab" aria-label="关闭">×</button></div>
+    <div class="lab-setup" id="labSetup">
+      <label>测试项目<select id="labProject"></select></label>
+      <label>玩家槽位<select id="labSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label>
+      <label>候选配置<select id="labCandidatePreset"><option value="stable">稳健防误触</option><option value="responsive">快速响应</option></select></label>
+      <label>测试次数<input id="labRepetitions" type="number" min="1" max="20" value="5"></label>
+      <button id="startAlgorithmLab">开始真人测试</button>
+    </div>
+    <section class="lab-live" id="labLive" hidden>
+      <div class="lab-live-top"><span id="labLiveProject">真人测试</span><button class="danger" id="stopAlgorithmLab">结束并保存</button></div>
+      <strong id="labInstruction">准备</strong><span id="labCountdown">3.0 秒</span>
+      <div class="progress"><i id="labProgress"></i></div><small id="labFrameCount">已记录 0 帧</small>
+    </section>
+    <section id="labResults" hidden>
+      <div class="lab-result-head"><div><span class="lab-kicker">A/B REPLAY</span><h3 id="labResultTitle">测试结果</h3></div><button class="ghost" id="replayAlgorithmLab">重新重放比较</button></div>
+      <div class="lab-compare" id="labCompare"></div>
+      <div class="lab-results-grid"><article><h3>事件时间线</h3><div class="lab-table-wrap"><table><thead><tr><th>时间</th><th>期望</th><th>当前识别</th><th>候选识别</th><th>错误</th></tr></thead><tbody id="labTimeline"></tbody></table></div></article><article><h3>手势混淆矩阵</h3><div id="labConfusion"></div><h3>失败帧定位</h3><div id="labEventDetail" class="lab-event-detail">点击错误事件查看前后关键点信号</div></article></div>
+    </section>
+    <section class="lab-sessions"><div class="lab-result-head"><h3>本地会话</h3><span id="labStoragePath"></span></div><div id="labSessionList" class="lab-session-list"></div></section>
+  </dialog>
+  <div id="toast" role="status"></div>
+</div><script src="/assets/app.js?v=0.4.3-dual"></script><script src="/assets/algorithm-lab.js?v=0.4.3-dual"></script></body></html>

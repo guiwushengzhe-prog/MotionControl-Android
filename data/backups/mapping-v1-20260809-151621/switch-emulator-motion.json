@@ -1,0 +1,204 @@
+{
+  "id": "switch-emulator-motion",
+  "name": "Switch 模拟器体感基础",
+  "description": "按钮走 Xbox 虚拟手柄，身体姿态同时输出到本机 DSU 26760 端口。",
+  "bindings": [
+    {
+      "id": "switch-lx",
+      "signal": "move_x",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LX"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-ly",
+      "signal": "vertical_move",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LY"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-rx",
+      "signal": "lean_x",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "RX"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-a",
+      "signal": "right_hand_up",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "A"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-b",
+      "signal": "squat",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "B"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-x",
+      "signal": "left_hand_up",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "X"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-y",
+      "signal": "clap",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "Y"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-l",
+      "signal": "left_pinch",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "LB"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-r",
+      "signal": "right_pinch",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "RB"
+      },
+      "mode": "hold",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-zl",
+      "signal": "left_pinch_amount",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "LT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-zr",
+      "signal": "right_pinch_amount",
+      "target": {
+        "kind": "gamepad_axis",
+        "control": "RT"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-plus",
+      "signal": "both_hands_up",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "START"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-minus",
+      "signal": "t_pose",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "BACK"
+      },
+      "mode": "pulse",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    },
+    {
+      "id": "switch-motion",
+      "signal": "torso_roll",
+      "target": {
+        "kind": "dsu_motion",
+        "control": "BODY"
+      },
+      "mode": "analog",
+      "threshold": 0.5,
+      "scale": 1.0,
+      "deadzone": 0.12,
+      "invert": false,
+      "enabled": true
+    }
+  ],
+  "updated_at": "2026-08-08T15:33:44.765749+00:00"
+}
