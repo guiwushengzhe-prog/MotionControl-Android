@@ -37,6 +37,7 @@ const nativeCameraEnabled = Capacitor.isNativePlatform();
 // 原生音频（AudioRecord）仍由 nativeCameraEnabled 控制，继续保留。
 let nativeCameraOperational = false;
 let activeNativeCamera = false;
+let cameraSwitching = false;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -138,6 +139,38 @@ function clearWebCamera(): void {
   video.removeAttribute("src");
   video.load();
   video.style.display = "none";
+}
+
+function cameraLog(message: string): void {
+  console.log(`[camera] ${message}`);
+}
+
+async function openWebStream(constraints: MediaStreamConstraints): Promise<MediaStream> {
+  return await new Promise<MediaStream>((resolve, reject) => {
+    let finished = false;
+    const timer = window.setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      reject(new Error("摄像头打开超时（5 秒）"));
+    }, 5000);
+    navigator.mediaDevices.getUserMedia(constraints).then(
+      (streamValue) => {
+        if (finished) {
+          streamValue.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        finished = true;
+        window.clearTimeout(timer);
+        resolve(streamValue);
+      },
+      (error) => {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 const deviceId = getDeviceId();
@@ -263,14 +296,19 @@ async function startCamera(): Promise<void> {
       document.querySelector("#securityWarning")!.textContent=`原生相机不可用，已切换兼容模式${lastError instanceof Error?`：${lastError.message}`:""}`;nativeCameraOperational=false;
     }
   }
-  activeNativeCamera=false;activeNativeCameraId="";selectedCameraDeviceId="";setNativePreview(false);
+  activeNativeCamera=false;activeNativeCameraId="";setNativePreview(false);
   clearWebCamera();
+  await new Promise((resolve) => setTimeout(resolve, 150));
   const source = selectedCameraDeviceId ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } };
-  stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { ...source, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 30, max: 30 } } });
+  cameraLog(`getUserMedia requested source=${JSON.stringify(source)}`);
+  stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 30, max: 30 } } });
   const track = stream.getVideoTracks()[0]; const settings = track.getSettings();
   if (settings.deviceId) selectedCameraDeviceId = settings.deviceId;
   if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode;
-  video.style.display = "block";video.srcObject = stream; await video.play(); await refreshCameraDevices(); resizeCanvas(); applyMirror();
+  video.style.display = "block"; video.srcObject = stream; await video.play();
+  if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效");
+  cameraLog(`camera opened deviceId=${selectedCameraDeviceId} facing=${facingMode} size=${video.videoWidth}x${video.videoHeight}`);
+  await refreshCameraDevices(); resizeCanvas(); applyMirror();
 }
 
 async function refreshCameraDevices(): Promise<void> {
@@ -454,13 +492,33 @@ async function stop(): Promise<void> { running = false; if (reconnectTimer != nu
   await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setMicState("not_connected"); setConnection("offline"); }
 
 async function flipCamera(): Promise<void> {
-  const previousFacing=facingMode, previousId=selectedCameraDeviceId;
+  if (cameraSwitching) return;
+  cameraSwitching = true;
+  const flipButton = document.querySelector<HTMLButtonElement>("#runtimeFlip")!;
+  flipButton.disabled = true;
+  const previousFacing = facingMode, previousId = selectedCameraDeviceId;
   const desired: "user" | "environment" = previousFacing === "environment" ? "user" : "environment";
-  const target=nativeCameras.find((item)=>item.available&&item.facing===(desired==="user"?"front":"back"));
-  if(nativeCameraOperational&&!target){document.querySelector("#securityWarning")!.textContent=desired==="user"?"前置镜头不可用":"后置镜头不可用";return;}
-  facingMode=desired;selectedCameraDeviceId=nativeCameraOperational?target!.cameraId:"";syncPrecisionControls(selectedPrecision());
-  try{if(running){await startCamera();if(!activeNativeCamera)await selectPoseModel();}applyMirror();}
-  catch(error){facingMode=previousFacing;selectedCameraDeviceId=previousId;document.querySelector("#securityWarning")!.textContent=`切换镜头失败：${error instanceof Error?error.message:String(error)}`;if(running)await startCamera();applyMirror();}
+  cameraLog(`switch start from=${previousFacing}/${previousId} to=${desired}`);
+  try {
+    facingMode = desired; selectedCameraDeviceId = "";
+    if (running) { await startCamera(); }
+    applyMirror();
+    cameraLog(`switch finished facing=${facingMode} deviceId=${selectedCameraDeviceId}`);
+  } catch (error) {
+    facingMode = previousFacing; selectedCameraDeviceId = previousId;
+    const message = error instanceof Error ? error.message : String(error);
+    document.querySelector("#securityWarning")!.textContent = `切换镜头失败：${message}`;
+    cameraLog(`switch failed: ${message}`);
+    if (running) {
+      try { await startCamera(); } catch (recoverError) {
+        document.querySelector("#securityWarning")!.textContent = `切换失败且恢复失败：${recoverError instanceof Error ? recoverError.message : String(recoverError)}`;
+      }
+    }
+    applyMirror();
+  } finally {
+    cameraSwitching = false;
+    flipButton.disabled = false;
+  }
 }
 function showRole(role: "home" | "camera" | "handheld"): void { activeRole = role;if(role!=="camera"||!activeNativeCamera)setNativePreview(false);roleCard.classList.toggle("hidden", role !== "home"); setupCard.classList.toggle("hidden", role !== "camera"); handheldCard.classList.toggle("hidden", role !== "handheld"); document.querySelector("#pageTitle")!.textContent = role === "handheld" ? "手持手柄" : role === "camera" ? "摄像头" : "体感桥"; }
 
@@ -473,11 +531,40 @@ async function suspendHandheld(): Promise<void> { clearTouches();if(handheldTime
 function updateStick(event: PointerEvent): void { const stick=document.querySelector<HTMLElement>("#stick")!;const rect=stick.getBoundingClientRect();const x=Math.max(-1,Math.min(1,(event.clientX-(rect.left+rect.width/2))/(rect.width*.38)));const y=Math.max(-1,Math.min(1,(event.clientY-(rect.top+rect.height/2))/(rect.height*.38)));stickState={x,y};stick.querySelector<HTMLElement>("i")!.style.transform=`translate(${x*34}px,${y*34}px)`; }
 
 async function chooseCamera(deviceId: string): Promise<void> {
-  selectedCameraDeviceId = deviceId;
-  if(nativeCameraOperational){const camera=nativeCameras.find((item)=>item.cameraId===deviceId);if(camera)facingMode=camera.facing==="front"?"user":"environment";localStorage.setItem("motionbridge-native-camera-last",deviceId);}else{const label = cameraDevices.find((item) => item.deviceId === deviceId)?.label.toLowerCase() || "";if (label.includes("front")) facingMode = "user"; else if (label.includes("back")) facingMode = "environment";}
-  cameraDeviceSelect.value = runtimeCameraDevice.value = deviceId;
-  if (running) { await startCamera(); if(!activeNativeCamera)await selectPoseModel(); }
-  applyMirror();
+  if (cameraSwitching) return;
+  cameraSwitching = true;
+  const previousId = selectedCameraDeviceId, previousFacing = facingMode;
+  cameraLog(`choose start deviceId=${deviceId}`);
+  try {
+    selectedCameraDeviceId = deviceId;
+    if (nativeCameraOperational) {
+      const camera = nativeCameras.find((item) => item.cameraId === deviceId);
+      if (camera) facingMode = camera.facing === "front" ? "user" : "environment";
+      localStorage.setItem("motionbridge-native-camera-last", deviceId);
+    } else {
+      const label = cameraDevices.find((item) => item.deviceId === deviceId)?.label.toLowerCase() || "";
+      if (label.includes("front")) facingMode = "user";
+      else if (label.includes("back")) facingMode = "environment";
+    }
+    cameraDeviceSelect.value = runtimeCameraDevice.value = deviceId;
+    if (running) { await startCamera(); }
+    applyMirror();
+    cameraLog(`choose finished deviceId=${selectedCameraDeviceId} facing=${facingMode}`);
+  } catch (error) {
+    selectedCameraDeviceId = previousId; facingMode = previousFacing;
+    cameraDeviceSelect.value = runtimeCameraDevice.value = previousId;
+    const message = error instanceof Error ? error.message : String(error);
+    document.querySelector("#securityWarning")!.textContent = `切换镜头失败：${message}`;
+    cameraLog(`choose failed: ${message}`);
+    if (running) {
+      try { await startCamera(); } catch (recoverError) {
+        document.querySelector("#securityWarning")!.textContent = `切换失败且恢复失败：${recoverError instanceof Error ? recoverError.message : String(recoverError)}`;
+      }
+    }
+    applyMirror();
+  } finally {
+    cameraSwitching = false;
+  }
 }
 
 document.querySelector("#cameraRole")!.addEventListener("click",()=>{void NativeCamera.setDisplayMode({role:"camera"}).catch(()=>{}).then(()=>{showRole("camera");syncPrecisionControls(selectedPrecision());return refreshCameraDevices();}).then(()=>startFramingPreview()).catch(()=>{});});
