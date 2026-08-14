@@ -1624,11 +1624,12 @@ def create_app(data_root: Path | None = None, enable_outputs: bool = True) -> Fa
                 await websocket.send_json({"type": "error", "message": "音频必须是 16kHz 单声道 PCM16"})
                 await websocket.close(code=1003)
                 return
-            mappings = state.mapping_store.list()
+            test_mode = bool(hello.get("test_mode", False))
+            current_mappings = [mapping for mapping in (state.current_mapping(0), state.current_mapping(1)) if mapping is not None]
             model_path = PROJECT_ROOT / "models" / "vosk-model-small-cn-0.22"
             if not model_path.exists():
                 model_path = state.data_root / "models" / "vosk-model-small-cn-0.22"
-            recognizer = VoskStreamRecognizer(model_path, grammar_phrases(mappings))
+            recognizer = VoskStreamRecognizer(model_path, grammar_phrases(current_mappings))
             diagnostics = AudioStreamDiagnostics()
             state.voice.connect(str(hello.get("device_id", "unknown-audio")))
             state.voice_link_state = "connected"
@@ -1645,6 +1646,7 @@ def create_app(data_root: Path | None = None, enable_outputs: bool = True) -> Fa
                 "type": "audio_ready", "sample_rate": 16_000, "channels": 1, "format": "pcm16le",
                 "recognizer_mode": recognizer.mode, "grammar_count": recognizer.grammar_count,
                 "unsupported_phrase_count": recognizer.unsupported_phrase_count,
+                "test_mode": test_mode,
             })
             while True:
                 message = await websocket.receive()
@@ -1670,6 +1672,11 @@ def create_app(data_root: Path | None = None, enable_outputs: bool = True) -> Fa
                     continue
                 state.voice.set_final(text)
                 current = [state.current_mapping(0), state.current_mapping(1)]
+                await websocket.send_json({"type": "voice_final", "text": text})
+                if test_mode:
+                    result = state.voice.parse_text(text, current, 2 if state.run_mode == "double" else 1)
+                    await websocket.send_json({"type": "voice_result", "text": text, "test_mode": True, **result})
+                    continue
                 result = state.voice.apply_text(text, current, 2 if state.run_mode == "double" else 1)
                 if result.get("ok"):
                     state.voice_audio_status["last_command"] = result.get("command")
@@ -1677,7 +1684,6 @@ def create_app(data_root: Path | None = None, enable_outputs: bool = True) -> Fa
                     state.last_signals[slot] = state._compose_signals(slot, state.last_camera_signals[slot])
                     state.mapping_engines[slot].process(state.last_signals[slot])
                     state.update_macro_sources(slot, voice=state.voice.signals(slot))
-                await websocket.send_json({"type": "voice_final", "text": text})
                 await websocket.send_json({"type": "voice_result", "text": text, **result})
         except WebSocketDisconnect:
             pass

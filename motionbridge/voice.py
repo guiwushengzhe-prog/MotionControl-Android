@@ -135,6 +135,22 @@ class VoiceController:
             self.last_final = text
             self.last_partial = ""
 
+    def parse_text(self, text: str, mappings: list[MappingProfile | None], player_count: int) -> dict[str, object]:
+        """Parse only; never mutate held inputs or emit game output.
+
+        Used by the voice test path so the raw recognition result and the
+        command-match result can be shown separately without triggering keys.
+        """
+        reference = next((mapping for mapping in mappings if mapping is not None), None)
+        if reference is None:
+            return {"ok": False, "message": "玩家尚未选择游戏预设"}
+        slot, command, error = self.parser.parse(text, reference, player_count)
+        self.last_result = text
+        self.last_error = error
+        if error or slot is None or command is None:
+            return {"ok": False, "slot": slot, "command": command, "message": error or "无效命令"}
+        return {"ok": True, "slot": slot, "command": command, "message": "命令匹配成功"}
+
     def apply_text(self, text: str, mappings: list[MappingProfile | None], player_count: int) -> dict[str, object]:
         reference = next((mapping for mapping in mappings if mapping is not None), None)
         if reference is None:
