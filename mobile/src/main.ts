@@ -33,7 +33,9 @@ type NativeCameraApi = {
 const NativeCamera = registerPlugin<NativeCameraApi>("NativeCamera");
 (window as any).MotionBridgeNativeCamera = NativeCamera;
 const nativeCameraEnabled = Capacitor.isNativePlatform();
-let nativeCameraOperational = nativeCameraEnabled;
+// 人体识别切回网页版（8月9日同款 MediaPipe）。原生 Camera2 链路识别不稳定，暂不启用；
+// 原生音频（AudioRecord）仍由 nativeCameraEnabled 控制，继续保留。
+let nativeCameraOperational = false;
 let activeNativeCamera = false;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
