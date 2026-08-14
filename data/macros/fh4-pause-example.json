@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "id": "fh4-pause-example",
+  "name": "地平线4：暂停（示例）",
+  "description": "默认关闭；请先在游戏控制设置中核对 START 对应操作。",
+  "enabled": false,
+  "preset_ids": [
+    "forza-horizon-4-motion"
+  ],
+  "triggers": [
+    {
+      "id": "voice-pause",
+      "source": "voice",
+      "signal": "intent_pause",
+      "activation": "rising",
+      "threshold": 0.5,
+      "release_threshold": 0.25,
+      "direction": "positive",
+      "release_cancels": false,
+      "enabled": true
+    }
+  ],
+  "steps": [
+    {
+      "type": "tap",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "START"
+      },
+      "targets": [],
+      "steps": [],
+      "duration_ms": 90,
+      "value": null,
+      "from_value": null
+    }
+  ],
+  "repeat_policy": "ignore",
+  "max_queue": 1,
+  "cooldown_ms": 650,
+  "mutex_group": null,
+  "mutex_policy": "cancel_existing",
+  "output_priority": 100,
+  "updated_at": "2026-08-14T04:39:31.991375+00:00"
+}

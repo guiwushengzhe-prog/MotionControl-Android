@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "id": "wukong-dodge-light-example",
+  "name": "黑神话：闪避后轻击（示例）",
+  "description": "默认关闭；这是可撤销的 Xbox 顺序示例，具体键位未经实玩保证。",
+  "enabled": false,
+  "preset_ids": [
+    "black-myth-wukong-motion"
+  ],
+  "triggers": [
+    {
+      "id": "action-combo",
+      "source": "action",
+      "signal": "intent_dodge_light",
+      "activation": "rising",
+      "threshold": 0.5,
+      "release_threshold": 0.25,
+      "direction": "positive",
+      "release_cancels": false,
+      "enabled": true
+    }
+  ],
+  "steps": [
+    {
+      "type": "tap",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "B"
+      },
+      "targets": [],
+      "steps": [],
+      "duration_ms": 75,
+      "value": null,
+      "from_value": null
+    },
+    {
+      "type": "delay",
+      "target": null,
+      "targets": [],
+      "steps": [],
+      "duration_ms": 110,
+      "value": null,
+      "from_value": null
+    },
+    {
+      "type": "tap",
+      "target": {
+        "kind": "gamepad_button",
+        "control": "X"
+      },
+      "targets": [],
+      "steps": [],
+      "duration_ms": 80,
+      "value": null,
+      "from_value": null
+    }
+  ],
+  "repeat_policy": "ignore",
+  "max_queue": 1,
+  "cooldown_ms": 700,
+  "mutex_group": "wukong-attack",
+  "mutex_policy": "cancel_existing",
+  "output_priority": 100,
+  "updated_at": "2026-08-14T04:39:32.003824+00:00"
+}
