@@ -204,28 +204,8 @@ async function selectPoseModel(force = false, requested?: PrecisionMode): Promis
   }
   document.querySelector("#loading")!.classList.remove("hidden");
   const mode = requested || selectedPrecision(); localStorage.setItem(`${modelCacheKey()}-mode`, mode); syncPrecisionControls(mode);
-  const cached = force ? null : localStorage.getItem(`${modelCacheKey()}-auto`) as ModelGrade | null;
-  if (mode !== "auto") {
-    poseLandmarker?.close(); poseLandmarker = await createPose(mode); showGrade(mode, "手动选择");
-  } else if (cached && ["lite", "full", "heavy"].includes(cached)) {
-    poseLandmarker?.close(); poseLandmarker = await createPose(cached); showGrade(cached, "自动选择");
-  } else {
-    const results: { grade: ModelGrade; fps: number; p95: number }[] = [];
-    for (const grade of ["lite", "full", "heavy"] as ModelGrade[]) {
-      document.querySelector("#loadingText")!.textContent = `正在为 ${grade} 模型测速 4 秒…`;
-      const candidate = await createPose(grade); const samples: number[] = []; const started = performance.now(); let frames = 0;
-      while (performance.now() - started < 4000) {
-        const t = performance.now(); candidate.detectForVideo(video, t); samples.push(performance.now() - t); frames++;
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      }
-      candidate.close(); samples.sort((a, b) => a - b);
-      results.push({ grade, fps: frames / 4, p95: samples[Math.min(samples.length - 1, Math.floor(samples.length * .95))] || 999 });
-    }
-    const valid = results.filter((item) => item.fps >= 15 && item.p95 <= 60);
-    const chosen = (valid.at(-1) || results[0]).grade;
-    localStorage.setItem(`${modelCacheKey()}-auto`, chosen); localStorage.setItem(`${modelCacheKey()}-results`, JSON.stringify(results));
-    poseLandmarker?.close(); poseLandmarker = await createPose(chosen); showGrade(chosen, results.map((r) => `${r.grade}:${r.fps.toFixed(0)}fps/P95 ${r.p95.toFixed(0)}ms`).join(" · "));
-  }
+  const grade = mode === "auto" ? "full" : mode;
+  poseLandmarker?.close(); poseLandmarker = await createPose(grade); showGrade(grade, mode === "auto" ? "自动（均衡）" : "手动选择");
   await loadGesture();
   document.querySelector("#loading")!.classList.add("hidden");
 }
