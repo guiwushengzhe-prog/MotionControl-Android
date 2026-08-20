@@ -43,6 +43,7 @@ import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker;
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult;
 
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -93,6 +94,7 @@ final class NativeCameraRuntime {
     private float inferenceFps;
     private JSArray cachedHands = new JSArray();
     private long inferenceSequence;
+    private long lastPoseTimestampMs;
     private long imageReaderFrameCount;
     private long submittedFrameCount;
     private long detectCallCount;
@@ -107,6 +109,15 @@ final class NativeCameraRuntime {
     private boolean analysisResizePending;
     private volatile long cameraGeneration;
     private volatile boolean inferenceEnabled;
+    private final List<SmoothedPose> smoothedPoses = new ArrayList<>();
+
+    /** One-frame EMA (指数滑动平均) for low-confidence landmark noise only. */
+    private static final class SmoothedPose {
+        final float[] x = new float[33];
+        final float[] y = new float[33];
+        final float[] z = new float[33];
+        boolean initialized;
+    }
 
     NativeCameraRuntime(Context context, ViewfinderView viewfinderView, Listener listener) {
         this.context = context;
@@ -350,7 +361,13 @@ final class NativeCameraRuntime {
         try {
             if (!running || generation != cameraGeneration) return;
             long capturedAt = System.currentTimeMillis();
-            long timestamp = android.os.SystemClock.uptimeMillis();
+            // Camera timestamps are monotonic and remain tied to the captured frame even
+            // when inference drops frames.  Enforce strict increase for VIDEO mode.
+            long timestamp = image.getTimestamp() > 0
+                    ? image.getTimestamp() / 1_000_000L
+                    : android.os.SystemClock.uptimeMillis();
+            if (timestamp <= lastPoseTimestampMs) timestamp = lastPoseTimestampMs + 1;
+            lastPoseTimestampMs = timestamp;
             long started = android.os.SystemClock.elapsedRealtimeNanos();
             if (yuvConverter == null) yuvConverter = new YuvToRgbConverter(context);
             Bitmap bitmap = yuvConverter.convert(image);
@@ -377,14 +394,17 @@ final class NativeCameraRuntime {
             }
             JSObject frame = new JSObject();
             frame.put("capturedAtMs", capturedAt); frame.put("cameraId", cameraId); frame.put("facing", facing);
-            frame.put("width", orientedWidth()); frame.put("height", orientedHeight());
-            frame.put("inferenceWidth", inferenceSize.getWidth()); frame.put("inferenceHeight", inferenceSize.getHeight());
+            // Landmark coordinates are in MediaPipe's rotated inference image.  Report
+            // that image's oriented dimensions, while preview dimensions remain separate.
+            frame.put("width", orientedDimension(bitmap.getWidth(), bitmap.getHeight(), true));
+            frame.put("height", orientedDimension(bitmap.getWidth(), bitmap.getHeight(), false));
+            frame.put("inferenceWidth", bitmap.getWidth()); frame.put("inferenceHeight", bitmap.getHeight());
             frame.put("previewMirrored", facing.equals("front")); frame.put("coordinatesMirrored", false);
             frame.put("actualModel", modelGrade); frame.put("inferenceMs", inferenceMs); frame.put("captureFps", captureFps);
             frame.put("previewFps", previewFps); frame.put("inferenceFps", inferenceFps);
             addPoseDiagnostics(frame, pose, bitmap);
             if (generation != cameraGeneration) return;
-            frame.put("poses", encodePoses(pose)); frame.put("hands", cachedHands);
+            frame.put("poses", encodePoses(pose, android.os.SystemClock.elapsedRealtime())); frame.put("hands", cachedHands);
             listener.onFrame(frame);
             updateAnalysisProfile(pose, android.os.SystemClock.elapsedRealtime(), inferenceMs);
         } catch (Exception error) {
@@ -400,26 +420,56 @@ final class NativeCameraRuntime {
         }
     }
 
-    private JSArray encodePoses(PoseLandmarkerResult result) {
+    private JSArray encodePoses(PoseLandmarkerResult result, long nowMs) {
         JSArray poses = new JSArray();
         for (int i = 0; i < result.landmarks().size(); i++) {
             JSObject item = new JSObject(); item.put("detection_id", null);
-            item.put("pose", encodeNormalized(result.landmarks().get(i)));
+            item.put("pose", encodeNormalized(i, result.landmarks().get(i), nowMs));
             item.put("world_pose", i < result.worldLandmarks().size() ? encodeWorld(result.worldLandmarks().get(i)) : null);
             poses.put(item);
         }
+        while (smoothedPoses.size() > result.landmarks().size()) smoothedPoses.remove(smoothedPoses.size() - 1);
         return poses;
     }
 
-    private JSArray encodeNormalized(List<NormalizedLandmark> points) {
+    private JSArray encodeNormalized(int poseIndex, List<NormalizedLandmark> points, long nowMs) {
         JSArray output = new JSArray();
-        for (NormalizedLandmark point : points) {
-            // ImageProcessingOptions already rotates the input for MediaPipe. Its normalized
-            // output is in that upright coordinate system; rotating here again corrupts it.
-            JSObject value = new JSObject(); value.put("x", point.x()); value.put("y", point.y()); value.put("z", point.z());
-            value.put("visibility", point.visibility().orElse(1f)); output.put(value);
+        if (points == null) return output;
+        if (points.size() != 33) {
+            for (NormalizedLandmark point : points) appendLandmark(output, point.x(), point.y(), point.z(), point.visibility().orElse(1f));
+            return output;
+        }
+        while (smoothedPoses.size() <= poseIndex) smoothedPoses.add(new SmoothedPose());
+        SmoothedPose previous = smoothedPoses.get(poseIndex);
+        // A new person/long gap must not inherit a previous person's coordinates.
+        if (nowMs - lastPoseDetectedMs > 220 || !previous.initialized) {
+            for (int i = 0; i < points.size(); i++) {
+                NormalizedLandmark point = points.get(i);
+                previous.x[i] = point.x(); previous.y[i] = point.y(); previous.z[i] = point.z();
+                appendLandmark(output, point.x(), point.y(), point.z(), point.visibility().orElse(1f));
+            }
+            previous.initialized = true;
+            return output;
+        }
+        for (int i = 0; i < points.size(); i++) {
+            NormalizedLandmark point = points.get(i);
+            float visibility = point.visibility().orElse(1f);
+            // Reliable points respond quickly; uncertain points use one-frame damping.
+            float alpha = visibility >= 0.55f ? 0.72f : 0.42f;
+            float x = previous.x[i] + alpha * (point.x() - previous.x[i]);
+            float y = previous.y[i] + alpha * (point.y() - previous.y[i]);
+            float z = previous.z[i] + alpha * (point.z() - previous.z[i]);
+            previous.x[i] = x; previous.y[i] = y; previous.z[i] = z;
+            appendLandmark(output, x, y, z, visibility);
         }
         return output;
+    }
+
+    private void appendLandmark(JSArray output, float x, float y, float z, float visibility) {
+        // ImageProcessingOptions already rotates the input for MediaPipe. Its normalized
+        // output is in that upright coordinate system; rotating here again corrupts it.
+        JSObject value = new JSObject(); value.put("x", x); value.put("y", y); value.put("z", z);
+        value.put("visibility", visibility); output.put(value);
     }
 
     private JSArray encodeWorld(List<Landmark> points) {
@@ -436,6 +486,7 @@ final class NativeCameraRuntime {
         emptyPoseStreak = 0; lastPoseDetectedMs = 0; lastDiagnosticLogMs = 0;
         minimumPoseVisibility = 0f; lastInferenceError = ""; analysisResizePending = false;
         sizeProfileChangedMs = android.os.SystemClock.elapsedRealtime();
+        lastPoseTimestampMs = 0; smoothedPoses.clear();
     }
 
     private void addPoseDiagnostics(JSObject frame, PoseLandmarkerResult result, Bitmap bitmap) {
@@ -528,8 +579,13 @@ final class NativeCameraRuntime {
         }
     }
 
-    private int orientedWidth() { return rotationDegrees == 90 || rotationDegrees == 270 ? captureSize.getHeight() : captureSize.getWidth(); }
-    private int orientedHeight() { return rotationDegrees == 90 || rotationDegrees == 270 ? captureSize.getWidth() : captureSize.getHeight(); }
+    private int orientedWidth() { return orientedDimension(captureSize.getWidth(), captureSize.getHeight(), true); }
+    private int orientedHeight() { return orientedDimension(captureSize.getWidth(), captureSize.getHeight(), false); }
+
+    private int orientedDimension(int width, int height, boolean horizontal) {
+        boolean quarterTurn = rotationDegrees == 90 || rotationDegrees == 270;
+        return horizontal == quarterTurn ? height : width;
+    }
 
     private int relativeRotation(int sensor, boolean front) {
         WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
