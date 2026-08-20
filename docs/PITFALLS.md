@@ -182,3 +182,6 @@ Viewfinder（取景组件）清晰且 Camera2（安卓原生相机接口）达�
 ## 2026-08-21：原生 Pose 输入必须统一裁剪、步长、方向和时间轴
 
 Camera2 的 YUV_420_888（安卓相机 YUV 图像格式）不能按紧密排列的 NV12/NV21（常见 YUV 打包格式）读取：每个平面都必须使用自身的 cropRect（有效裁剪区）、rowStride（行步长）和 pixelStride（像素步长），否则不同设备会出现拉伸、偏移或颜色异常。MediaPipe PoseLandmarker 的 `ImageProcessingOptions.rotationDegrees` 已负责把输入转为正向坐标，关键点编码端不能再次旋转；发送的 width/height 也应对应实际推理位图的正向尺寸。VIDEO（视频）模式的时间戳应优先来自相机帧自身的单调时间，并在丢帧/高帧率下强制递增。实时控制不额外做时域平滑，避免延迟或掩盖输入方向/画幅问题。
+## 2026-08-21：原生相机链收敛到 CameraX
+
+自写 Camera2 双 Surface、物理镜头扫描、Viewfinder 承载层和 YUV_420_888（安卓相机 YUV 图像格式）转 Bitmap（位图）细节在当前样机上长期难以证明 Pose33（33点人体关键点）输入可靠。基础链改用 CameraX（安卓官方相机封装）的 Preview（预览）+ ImageAnalysis（图像分析）共享生命周期：PreviewView（官方预览控件）负责显示变换，ImageProxy（分析帧）直接交给 MediaImageBuilder（MediaPipe 官方图像构造器），rotationDegrees（旋转角度）只使用 ImageProxy.imageInfo 提供的一次。只枚举可绑定的通用前置/后置选择器；超广角和物理镜头以后在基础真人链稳定后再恢复。

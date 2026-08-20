@@ -38,8 +38,10 @@ dependencies {
     implementation "com.google.mediapipe:tasks-vision:0.10.14"
     implementation "com.alphacephei:vosk-android:0.3.47@aar"
     implementation "net.java.dev.jna:jna:5.13.0@aar"
-    implementation "androidx.camera.viewfinder:viewfinder-core:1.6.1"
-    implementation "androidx.camera.viewfinder:viewfinder-view:1.6.1"
+    implementation "androidx.camera:camera-camera2:1.4.2"
+    implementation "androidx.camera:camera-core:1.4.2"
+    implementation "androidx.camera:camera-lifecycle:1.4.2"
+    implementation "androidx.camera:camera-view:1.4.2"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

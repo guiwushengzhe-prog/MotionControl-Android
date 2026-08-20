@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "prebuild": "node scripts/prepare-assets.mjs",
     "build": "tsc && vite build",
     "check": "tsc --noEmit",
     "android:add": "cap add android",
@@ -13,8 +12,7 @@
     "android:open": "cap open android"
   },
   "dependencies": {
-    "@capacitor/core": "6.2.1",
-    "@mediapipe/tasks-vision": "0.10.22-rc.20250304"
+    "@capacitor/core": "6.2.1"
   },
   "devDependencies": {
     "@capacitor/android": "6.2.1",
