@@ -15,11 +15,12 @@ type PrecisionMode = "auto" | ModelGrade;
 type SensorSample = { qx: number; qy: number; qz: number; qw: number; gx: number; gy: number; gz: number; ax: number; ay: number; az: number; timestamp: number; running: boolean };
 const SensorBridge = registerPlugin<{ start(): Promise<void>; getLatest(): Promise<SensorSample>; stop(): Promise<void> }>("SensorBridge");
 type NativeAudioApi = {
-  start(): Promise<{sampleRate:number;channels:number;format:string;source:string}>; stop(): Promise<void>;
-  addListener(eventName:"audioData", listener:(event:{pcm:string;byteLength:number;rms:number})=>void):Promise<PluginListenerHandle>;
+  start(): Promise<{sampleRate:number;channels:number;format:string;source:string;recognizerReady:boolean}>; stop(): Promise<void>;
+  addListener(eventName:"voiceText", listener:(event:{text:string;confidence?:number;final:boolean})=>void):Promise<PluginListenerHandle>;
   addListener(eventName:"audioError", listener:(event:{message:string})=>void):Promise<PluginListenerHandle>;
 };
 const NativeAudio = registerPlugin<NativeAudioApi>("NativeAudio");
+type VoiceStatus = "off" | "connecting" | "listening" | "error" | "unauthorized";
 type NativeCameraDescriptor = { cameraId: string; facing: string; focalLengths: number[]; sensorWidthMm?: number; sensorHeightMm?: number; sensorOrientation: number; logicalMultiCamera: boolean; physicalCameraIds: string[]; available?: boolean; openMode?: string; errorCode?: number; errorMessage?: string; width?: number; height?: number; previewFps?: number; maxFps?:number; supports30Fps?:boolean };
 type PoseDiagnostics = { imageReaderFrames:number;submittedFrames:number;detectCalls:number;detectErrors:number;poseCount:number;bitmapWidth:number;bitmapHeight:number;rotationDegrees:number;analysisProfile:string;minimumPoseVisibility:number;lastError?:string;rawFirstPoint?:{x:number;y:number;visibility:number};encodedFirstPoint?:{x:number;y:number;visibility:number} };
 type NativePoseFrame = { capturedAtMs: number; cameraId: string; facing: "front" | "back"; width: number; height: number; inferenceWidth:number; inferenceHeight:number; previewMirrored: boolean; coordinatesMirrored: false; actualModel: ModelGrade; inferenceMs: number; captureFps: number; previewFps: number; inferenceFps: number; poseCount:number; poseDiagnostics:PoseDiagnostics; poses: {detection_id:null;pose:NormalizedLandmark[];world_pose:NormalizedLandmark[]|null}[]; hands: GestureCache };
@@ -41,7 +42,7 @@ let cameraSwitching = false;
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <video id="camera" autoplay playsinline muted></video><canvas id="overlay"></canvas><div class="shade"></div>
-  <header><div><p>MOTIONBRIDGE 0.7.4</p><h1 id="pageTitle">体感桥</h1></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
+  <header><div><p>MOTIONBRIDGE 0.7.5</p><h1 id="pageTitle">体感桥</h1></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
   <main>
     <section class="setup-card role-card" id="roleCard"><h2>选择角色</h2><div class="role-grid"><button id="cameraRole">摄像头</button><button id="handheldRole">手持手柄</button></div></section>
     <section class="setup-card hidden" id="setupCard">
@@ -62,6 +63,7 @@ app.innerHTML = `
       <div class="shoulders"><button data-pad="l">LB</button><button data-pad="zl">LT</button><button data-pad="zr">RT</button><button data-pad="r">RB</button></div><div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div></div>
     </section>
   </main>
+  <div class="voice-control hidden" id="voiceControl"><label><input id="voiceToggle" type="checkbox">语音控制</label><span id="voiceState">关闭</span></div>
   <div class="guide hidden" id="guide"></div>
   <div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头…</b></div>`;
 
@@ -77,6 +79,9 @@ const setupCard = document.querySelector<HTMLElement>("#setupCard")!;
 const runtimeCard = document.querySelector<HTMLElement>("#runtimeCard")!;
 const handheldCard = document.querySelector<HTMLElement>("#handheldCard")!;
 const badge = document.querySelector<HTMLElement>("#connectionBadge")!;
+const voiceControl = document.querySelector<HTMLElement>("#voiceControl")!;
+const voiceToggle = document.querySelector<HTMLInputElement>("#voiceToggle")!;
+const voiceStateLabel = document.querySelector<HTMLElement>("#voiceState")!;
 
 function setNativePreview(active: boolean): void {
   document.documentElement.classList.toggle("native-preview", active);
@@ -87,13 +92,8 @@ let vision: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = 
 let poseLandmarker: PoseLandmarker | null = null;
 let gestureRecognizer: GestureRecognizer | null = null;
 let stream: MediaStream | null = null;
-let micStream: MediaStream | null = null;
 let socket: WebSocket | null = null;
-let audioSocket: WebSocket | null = null;
-let audioContext: AudioContext | null = null;
-let audioProcessor: ScriptProcessorNode | null = null;
-let audioSource: MediaStreamAudioSourceNode | null = null;
-let nativeAudioDataListener: PluginListenerHandle | null = null;
+let nativeVoiceTextListener: PluginListenerHandle | null = null;
 let nativeAudioErrorListener: PluginListenerHandle | null = null;
 let running = false;
 let facingMode: "user" | "environment" = "environment";
@@ -107,13 +107,9 @@ let nativeAutoStartedAt = 0;
 let nativeAutoFallbackDone = false;
 let nativeModelBenchmark: {grade:ModelGrade;started:number;samples:number[]} | null = null;
 let currentModel: ModelGrade | null = null;
-let voiceState: "not_connected" | "connected" | "enabled" | "silent" | "unauthorized" | "failed" = "not_connected";
-let microphoneSource = "unknown";
-let audioReady = false;
-let audioBytesSent = 0;
-let voiceTestMode = false;
-let audioFallbackTimer: number | null = null;
-let lastVoiceFinalText = "";
+let voiceEnabled = false;
+let voiceState: VoiceStatus = "off";
+let lastVoiceText = "";
 let activeRole: "home" | "camera" | "handheld" = "home";
 let handheldSocket: WebSocket | null = null;
 let handheldTimer: number | null = null;
@@ -274,7 +270,7 @@ async function start(): Promise<void> {
       await NativeCamera.enableInference({model:grade});showGrade(grade,mode==="auto"?"自动选择":"手动选择");
     }else{await startCamera();if(!activeNativeCamera)await selectPoseModel();}
     running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); applyMirror();
-    // 本版只传人体关键点；语音由电脑端/其他输入源负责，手机不申请麦克风。
+    // 语音在摄像头手机本地离线识别，只通过 /ws/input 发送短文本。
     connectSocket(socketUrl);
     wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; if (!activeNativeCamera) requestAnimationFrame(predict);
   } catch (error) { setConnection("error"); alert(error instanceof Error ? error.message : String(error)); await stop(); }
@@ -376,8 +372,8 @@ function widestStableBack(cameras:NativeCameraDescriptor[]):NativeCameraDescript
 
 function connectSocket(url: string): void {
   if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url);
-  socket.addEventListener("open", () => { setConnection("online"); syncClock(); });
-  socket.addEventListener("close", () => { setConnection("offline"); if (running) reconnectTimer = window.setTimeout(() => connectSocket(url), 1500); });
+  socket.addEventListener("open", () => { setConnection("online"); if (voiceEnabled) setVoiceStatus("listening", "正在听"); syncClock(); });
+  socket.addEventListener("close", () => { setConnection("offline"); if (voiceEnabled) void stopVoiceControl(); if (running) reconnectTimer = window.setTimeout(() => connectSocket(url), 1500); });
   socket.addEventListener("error", () => setConnection("error"));
   socket.addEventListener("message", (event) => {
     const received = performance.now(); const message = JSON.parse(event.data) as any;
@@ -396,212 +392,70 @@ function syncClock(): void {
   lastClockSyncAt = performance.now(); socket.send(JSON.stringify({ type: "clock_sync", client_sent_ms: lastClockSyncAt }));
 }
 
-async function startMicrophone(inputUrl: string, testMode = false): Promise<void> {
-  await stopMicrophone();
-  voiceTestMode = testMode;
-  audioReady = false;
-  audioBytesSent = 0;
-  lastVoiceFinalText = "";
-  setMicState("not_connected");
-  updateMicDetail(testMode ? "语音测试：等待通道初始化…" : "正在连接语音通道…");
-  updateMicSource("unknown");
-  updateMicReady(false);
-  updateMicBytes(0);
-  updateMicWs("connecting");
-
-  audioSocket = new WebSocket(normalizeSocketUrl(inputUrl, "/ws/audio"));
-  audioSocket.binaryType = "arraybuffer";
-
-  // 关键：先注册所有监听，再等待任何异步步骤，避免错过 open 事件。
-  audioSocket.addEventListener("open", () => {
-    updateMicWs("connected");
-    setMicState("connected");
-    audioSocket?.send(JSON.stringify({
-      type: "audio_start", device_id: deviceId, sample_rate: 16000,
-      input_sample_rate: 16000, channels: 1, format: "pcm16le",
-      source: microphoneSource || "unknown", test_mode: testMode,
-    }));
-  });
-
-  audioSocket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
-    if (message.type === "audio_ready") {
-      audioReady = true;
-      updateMicReady(true);
-      setMicState("connected");
-      updateMicDetail(message.recognizer_mode === "grammar" ? `命令词识别已就绪（${message.grammar_count || 0} 条）` : "开放语音识别已就绪");
-      void startAudioCapture();
-    } else if (message.type === "audio_level") {
-      setMicState(message.audio_active ? "enabled" : message.stream_alive ? "silent" : "connected");
-      updateMicDetail(message.audio_active ? `有效音量 ${Math.round(message.rms)}` : "未听到声音，请靠近麦克风");
-    } else if (message.type === "voice_partial") {
-      updateMicDetail(`听到：${message.text}`);
-    } else if (message.type === "voice_final") {
-      lastVoiceFinalText = message.text;
-      updateMicDetail(`识别：${message.text}`);
-    } else if (message.type === "voice_result") {
-      const resultText = message.test_mode
-        ? (message.ok ? `命令匹配：${voiceCommandName(message.command)}` : `命令未执行：${message.message || message.text}`)
-        : (message.ok ? `已执行：${voiceCommandName(message.command)}` : `未执行：${message.message || message.text}`);
-      updateMicDetail(resultText);
-    } else if (message.type === "error") {
-      updateMicDetail(message.message || "语音错误");
-      setMicState("failed");
-    }
-  });
-
-  audioSocket.addEventListener("error", () => { setMicState("failed"); updateMicWs("error"); });
-  audioSocket.addEventListener("close", () => {
-    updateMicWs("closed");
-    updateMicReady(false);
-    audioReady = false;
-    if (running && !["unauthorized", "failed"].includes(voiceState)) {
-      setMicState("failed");
-      updateMicDetail("音频已断开，保持命令已释放");
-    }
-  });
+function setVoiceStatus(status: VoiceStatus, detail?: string): void {
+  voiceState = status;
+  voiceStateLabel.textContent = detail || ({off: "关闭", connecting: "连接中", listening: "正在听", error: "错误", unauthorized: "未授权"}[status]);
+  voiceStateLabel.className = `voice-state ${status}`;
 }
 
-async function startAudioCapture(): Promise<void> {
-  cancelAudioFallback();
-  if (nativeCameraEnabled) {
-    try {
-      await startNativeAudioCapture();
-      return;
-    } catch (error) {
-      updateMicDetail(`原生录音失败，已回退：${error instanceof Error ? error.message : String(error)}`);
-    }
+function poseVoiceState(): "not_connected" | "connected" | "enabled" | "unauthorized" | "failed" {
+  return voiceState === "off" ? "not_connected" : voiceState === "connecting" ? "connected" :
+    voiceState === "listening" ? "enabled" : voiceState === "unauthorized" ? "unauthorized" : "failed";
+}
+
+async function stopVoiceControl(showOff = true): Promise<void> {
+  voiceEnabled = false;
+  await nativeVoiceTextListener?.remove().catch(() => {});
+  await nativeAudioErrorListener?.remove().catch(() => {});
+  nativeVoiceTextListener = null;
+  nativeAudioErrorListener = null;
+  lastVoiceText = "";
+  await NativeAudio.stop().catch(() => {});
+  if (showOff) {
+    voiceToggle.checked = false;
+    setVoiceStatus("off");
   }
+}
+
+async function startVoiceControl(): Promise<void> {
+  if (activeRole !== "camera") {
+    voiceToggle.checked = false;
+    setVoiceStatus("error", "仅摄像头可用");
+    return;
+  }
+  if (voiceEnabled) return;
+  setVoiceStatus("connecting");
   try {
-    await startWebAudioCapture();
+    const ready = await NativeAudio.start();
+    if (!ready.recognizerReady) throw new Error("语音模型错误");
+    voiceEnabled = true;
+    nativeVoiceTextListener = await NativeAudio.addListener("voiceText", (event) => {
+      if (!event.text) return;
+      lastVoiceText = event.text;
+      setVoiceStatus("listening", event.text);
+      if (event.final && socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 256000) {
+        const frame: Record<string, unknown> = {
+          type: "voice_text", role: "camera", device_id: deviceId,
+          sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs,
+          text: event.text,
+        };
+        if (event.confidence != null) frame.confidence = event.confidence;
+        socket.send(JSON.stringify(frame));
+      }
+    });
+    nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => {
+      setVoiceStatus("error", event.message || "语音错误");
+      void stopVoiceControl(false);
+    });
+    setVoiceStatus("listening", socket?.readyState === WebSocket.OPEN ? "正在听" : "未连接");
   } catch (error) {
-    const denied = error instanceof DOMException && ["NotAllowedError", "SecurityError"].includes(error.name);
-    setMicState(denied ? "unauthorized" : "failed");
-    updateMicDetail(denied ? "麦克风未授权" : `语音采集失败：${error instanceof Error ? error.message : String(error)}`);
-    console.warn(error);
+    const message = error instanceof Error ? error.message : String(error);
+    const denied = /未授权|permission|denied/i.test(message);
+    await stopVoiceControl(false);
+    voiceToggle.checked = false;
+    const modelError = /模型|model|recognizer|vosk/i.test(message);
+    setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : modelError ? "模型错误" : message || "错误");
   }
-}
-
-async function startNativeAudioCapture(): Promise<void> {
-  microphoneSource = "native_audiorecord";
-  updateMicSource("native");
-  const format = await NativeAudio.start();
-  microphoneSource = format.source || "native_audiorecord";
-  nativeAudioDataListener = await NativeAudio.addListener("audioData", (event) => {
-    if (!audioReady || audioSocket?.readyState !== WebSocket.OPEN) return;
-    if (audioSocket.bufferedAmount > 128000) return;
-    audioSocket.send(base64ToArrayBuffer(event.pcm));
-    audioBytesSent += event.byteLength;
-    updateMicBytes(audioBytesSent);
-    updateMicDetail(`手机音量 ${Math.round(event.rms)}`);
-  });
-  nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => {
-    updateMicDetail(event.message);
-    setMicState("failed");
-  });
-  scheduleAudioFallback();
-}
-
-async function startWebAudioCapture(): Promise<void> {
-  microphoneSource = "web_audio";
-  updateMicSource("web");
-  micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
-  audioContext = new AudioContext({ latencyHint: "interactive" });
-  await audioContext.resume();
-  audioSource = audioContext.createMediaStreamSource(micStream);
-  audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-  audioProcessor.onaudioprocess = (event) => {
-    if (!audioReady || audioSocket?.readyState !== WebSocket.OPEN) return;
-    if (audioSocket.bufferedAmount > 128000) return;
-    const input = event.inputBuffer.getChannelData(0);
-    const pcm = resample(input, audioContext!.sampleRate, 16000);
-    const bytes = floatToPcm16(pcm);
-    audioSocket.send(bytes);
-    audioBytesSent += bytes.byteLength;
-    updateMicBytes(audioBytesSent);
-    updateMicDetail(`手机音量 ${Math.round(floatRms(pcm) * 32767)}`);
-  };
-  audioSource.connect(audioProcessor);
-  audioProcessor.connect(audioContext.destination);
-}
-
-function scheduleAudioFallback(): void {
-  cancelAudioFallback();
-  audioFallbackTimer = window.setTimeout(() => {
-    if (audioBytesSent === 0 && audioSocket?.readyState === WebSocket.OPEN) {
-      updateMicDetail("原生录音 3 秒无数据，自动回退 WebAudio");
-      void stopNativeAudioCapture().then(() => startWebAudioCapture()).catch(() => {});
-    }
-  }, 3000);
-}
-
-function cancelAudioFallback(): void {
-  if (audioFallbackTimer != null) { window.clearTimeout(audioFallbackTimer); audioFallbackTimer = null; }
-}
-
-async function stopNativeAudioCapture(): Promise<void> {
-  cancelAudioFallback();
-  await nativeAudioDataListener?.remove().catch(() => {});
-  await nativeAudioErrorListener?.remove().catch(() => {});
-  nativeAudioDataListener = null;
-  nativeAudioErrorListener = null;
-  if (nativeCameraEnabled) await NativeAudio.stop().catch(() => {});
-}
-
-async function stopMicrophone(): Promise<void> {
-  cancelAudioFallback();
-  audioReady = false;
-  audioBytesSent = 0;
-  lastVoiceFinalText = "";
-  audioSocket?.close();
-  audioSocket = null;
-  micStream?.getTracks().forEach((track) => track.stop());
-  micStream = null;
-  audioProcessor?.disconnect();
-  audioSource?.disconnect();
-  audioProcessor = null;
-  audioSource = null;
-  await audioContext?.close().catch(() => {});
-  audioContext = null;
-  await nativeAudioDataListener?.remove().catch(() => {});
-  await nativeAudioErrorListener?.remove().catch(() => {});
-  nativeAudioDataListener = null;
-  nativeAudioErrorListener = null;
-  if (nativeCameraEnabled) await NativeAudio.stop().catch(() => {});
-}
-function setMicState(value: typeof voiceState): void {
-  voiceState = value;
-  const label = document.querySelector<HTMLElement>("#micState");
-  if (label) label.textContent = ({not_connected:"未连接",connected:"通道已连接",enabled:"声音有效",silent:"没有听到声音",unauthorized:"麦克风未授权",failed:"语音连接失败"})[value];
-  for (const id of ["retryVoice", "runtimeRetryVoice"]) document.querySelector<HTMLElement>(`#${id}`)?.classList.toggle("hidden", !["unauthorized", "failed"].includes(value));
-}
-function updateMicDetail(text:string):void{const el=document.querySelector<HTMLElement>("#micDetail");if(el)el.textContent=text;}
-function updateMicSource(source: "native" | "web" | "unknown"): void {
-  const label = source === "native" ? "原生 AudioRecord" : source === "web" ? "WebAudio 回退" : "—";
-  const el=document.querySelector<HTMLElement>("#micSource");if(el)el.textContent = `来源：${label}`;
-}
-function updateMicReady(ready: boolean): void {
-  const el=document.querySelector<HTMLElement>("#micReady");if(el)el.textContent = `audio_ready：${ready ? "是" : "否"}`;
-}
-function updateMicBytes(bytes: number): void {
-  const el=document.querySelector<HTMLElement>("#micBytes");if(el)el.textContent = `已发送 ${bytes} B`;
-}
-function updateMicWs(state: string): void {
-  const label = ({ connecting: "连接中", connected: "已连接", closed: "已断开", error: "异常" } as Record<string, string>)[state] || state;
-  const el=document.querySelector<HTMLElement>("#micWs");if(el)el.textContent = `通道：${label}`;
-}
-function base64ToArrayBuffer(value:string):ArrayBuffer{const binary=atob(value),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes.buffer;}
-function floatRms(input:Float32Array):number{let sum=0;for(const sample of input)sum+=sample*sample;return Math.sqrt(sum/Math.max(1,input.length));}
-function voiceCommandName(command:string):string{return({start:"开始",stop:"停止",left:"向左",right:"向右",jump:"跳跃",emergency_stop:"紧急停止"} as Record<string,string>)[command]||command||"命令";}
-
-function resample(input: Float32Array, from: number, to: number): Float32Array {
-  if (from === to) return input; const length = Math.max(1, Math.round(input.length * to / from)); const output = new Float32Array(length);
-  for (let i = 0; i < length; i++) { const position = i * from / to; const left = Math.floor(position); const right = Math.min(input.length - 1, left + 1); const mix = position - left; output[i] = input[left] * (1 - mix) + input[right] * mix; }
-  return output;
-}
-
-function floatToPcm16(input: Float32Array): ArrayBuffer {
-  const result = new Int16Array(input.length); for (let i = 0; i < input.length; i++) result[i] = Math.round(Math.max(-1, Math.min(1, input[i])) * 32767); return result.buffer;
 }
 
 function predict(now: number): void {
@@ -616,7 +470,7 @@ function predict(now: number): void {
   if (socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 256000) {
     const compact = (points: NormalizedLandmark[]) => compactLandmarks(points, false);
     socket.send(JSON.stringify({ type: "pose_frame_v2", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, sent_at_ms: Date.now() + serverClockOffsetMs,
-      width: video.videoWidth, height: video.videoHeight, camera_facing: facingMode, camera_id: selectedCameraDeviceId||"logical", orientation_degrees: 0, preview_mirrored: facingMode === "user", coordinates_mirrored: false, actual_model: currentModel, voice_state: voiceState,
+      width: video.videoWidth, height: video.videoHeight, camera_facing: facingMode, camera_id: selectedCameraDeviceId||"logical", orientation_degrees: 0, preview_mirrored: facingMode === "user", coordinates_mirrored: false, actual_model: currentModel, voice_state: poseVoiceState(),
       poses: poseResult.landmarks.map((pose, index) => ({ detection_id: null, pose: compact(pose), world_pose: poseResult.worldLandmarks[index] ? compactLandmarks(poseResult.worldLandmarks[index], false) : null })),
       hands: [], inference_ms: elapsed }));
     document.querySelector("#sendState")!.textContent = poseResult.landmarks.length ? `发送 ${poseResult.landmarks.length} 人` : "等待人体";
@@ -631,7 +485,7 @@ function handleNativePoseFrame(frame: NativePoseFrame): void {
   lastNativePoseCount=frame.poseCount??frame.poses.length;lastPoseDiagnostics=frame.poseDiagnostics;
   draw(frame.poses.map((item)=>item.pose),frame.hands); const cameraFps=document.querySelector<HTMLElement>("#cameraFps");const localFps=document.querySelector<HTMLElement>("#localFps");if(cameraFps)cameraFps.textContent=String(Math.round(frame.previewFps||frame.captureFps));if(localFps)localFps.textContent=String(Math.round(frame.inferenceFps||0));
   if(socket?.readyState===WebSocket.OPEN&&socket.bufferedAmount<256000){
-    socket.send(JSON.stringify({type:"pose_frame_v2",role:"camera",device_id:deviceId,sequence:sequence++,captured_at_ms:frame.capturedAtMs+serverClockOffsetMs,sent_at_ms:Date.now()+serverClockOffsetMs,width:frame.width,height:frame.height,camera_facing:facingMode,camera_id:frame.cameraId,orientation_degrees:0,preview_mirrored:frame.previewMirrored,coordinates_mirrored:false,actual_model:frame.actualModel,voice_state:voiceState,pose_diagnostics:frame.poseDiagnostics,poses:frame.poses,hands:frame.hands,inference_ms:frame.inferenceMs}));
+    socket.send(JSON.stringify({type:"pose_frame_v2",role:"camera",device_id:deviceId,sequence:sequence++,captured_at_ms:frame.capturedAtMs+serverClockOffsetMs,sent_at_ms:Date.now()+serverClockOffsetMs,width:frame.width,height:frame.height,camera_facing:facingMode,camera_id:frame.cameraId,orientation_degrees:0,preview_mirrored:frame.previewMirrored,coordinates_mirrored:false,actual_model:frame.actualModel,voice_state:poseVoiceState(),pose_diagnostics:frame.poseDiagnostics,poses:frame.poses,hands:frame.hands,inference_ms:frame.inferenceMs}));
     document.querySelector("#sendState")!.textContent=poseStatusText(false);
   }else if(!frame.poses.length){
     document.querySelector("#sendState")!.textContent=poseStatusText(false);
@@ -675,8 +529,8 @@ function setConnection(state: ConnectionState): void { badge.className = `badge 
 
 async function stop(): Promise<void> { running = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null;
   if(nativeCameraEnabled){await NativeCamera.stopCamera().catch(()=>{});setNativePreview(false);activeNativeCamera=false;}
-  clearWebCamera(); await stopMicrophone();
-  await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setMicState("not_connected"); setConnection("offline"); }
+  clearWebCamera(); await stopVoiceControl();
+  await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline"); }
 
 async function flipCamera(): Promise<void> {
   if (cameraSwitching) return;
@@ -707,14 +561,14 @@ async function flipCamera(): Promise<void> {
     flipButton.disabled = false;
   }
 }
-function showRole(role: "home" | "camera" | "handheld"): void { activeRole = role;if(role!=="camera"||!activeNativeCamera)setNativePreview(false);roleCard.classList.toggle("hidden", role !== "home"); setupCard.classList.toggle("hidden", role !== "camera"); handheldCard.classList.toggle("hidden", role !== "handheld"); document.querySelector("#pageTitle")!.textContent = role === "handheld" ? "手持手柄" : role === "camera" ? "摄像头" : "体感桥"; }
+function showRole(role: "home" | "camera" | "handheld"): void { activeRole = role;if(role!=="camera"||!activeNativeCamera)setNativePreview(false);roleCard.classList.toggle("hidden", role !== "home"); setupCard.classList.toggle("hidden", role !== "camera"); handheldCard.classList.toggle("hidden", role !== "handheld"); voiceControl.classList.toggle("hidden", role !== "camera"); document.querySelector("#pageTitle")!.textContent = role === "handheld" ? "手持手柄" : role === "camera" ? "摄像头" : "体感桥"; }
 
 let sensorPolling = false;
 async function sendHandheldFrame(): Promise<void> { if (sensorPolling || handheldSocket?.readyState !== WebSocket.OPEN) return; sensorPolling = true; try { const sample = await SensorBridge.getLatest(); const touches: Record<string, unknown>[] = [...padState].map((control) => ({control, pressed:true})); if (Math.abs(stickState.x) > .02 || Math.abs(stickState.y) > .02) touches.push({control:"stick",x:stickState.x,y:stickState.y}); handheldSocket.send(JSON.stringify({type:"sensor_frame",role:"sensor",device_id:deviceId,sequence:handheldSequence++,captured_at_ms:Date.now(),player_slot:Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value),quaternion:{x:sample.qx,y:sample.qy,z:sample.qz,w:sample.qw},orientation:{},rotation_rate:{x:sample.gx,y:sample.gy,z:sample.gz},acceleration:{x:sample.ax,y:sample.ay,z:sample.az},touches,recenter:handheldRecenter})); if (handheldRecenter) { handheldRecenter=false; document.querySelector("#sensorState")!.textContent="已居中"; } handheldFrames++; const now=performance.now(); if(now-handheldFpsStarted>=1000){document.querySelector("#sensorFps")!.textContent=`${Math.round(handheldFrames*1000/(now-handheldFpsStarted))} FPS`;handheldFrames=0;handheldFpsStarted=now;} } catch (error) { document.querySelector("#sensorState")!.textContent=error instanceof Error?error.message:"传感器异常"; } finally { sensorPolling=false; } }
 function clearTouches(): void { padState.clear(); stickState={x:0,y:0}; document.querySelector<HTMLElement>("#stick i")!.style.transform="translate(0,0)"; document.querySelectorAll("[data-pad]").forEach((el)=>el.classList.remove("pressed")); void sendHandheldFrame(); }
 async function startHandheld(): Promise<void> { showRole("handheld"); try { await SensorBridge.start(); wakeLock=await navigator.wakeLock?.request("screen").catch(()=>null)??null; const address=handheldServerInput.value.trim()||serverInput.value.trim(); if(!address) throw new Error("请填写电脑服务器地址"); serverInput.value=address; localStorage.setItem("motionbridge-server",address); const url=normalizeSocketUrl(address); handheldSocket=new WebSocket(url); handheldSocket.addEventListener("open",()=>{document.querySelector("#handheldConnection")!.className="badge online";document.querySelector("#handheldConnection b")!.textContent="已连接电脑";document.querySelector("#sensorState")!.textContent="自然持握 1 秒";window.setTimeout(()=>{handheldRecenter=true;},1000);}); handheldSocket.addEventListener("message",(event)=>{const message=JSON.parse(event.data);if(message.type==="error"){document.querySelector("#sensorState")!.textContent=message.message||"连接失败";}}); handheldSocket.addEventListener("close",()=>{clearTouches();document.querySelector("#handheldConnection")!.className="badge error";document.querySelector("#handheldConnection b")!.textContent="电脑已断开";}); handheldTimer=window.setInterval(()=>void sendHandheldFrame(),16); } catch(error){document.querySelector("#sensorState")!.textContent=error instanceof Error?error.message:"传感器不可用";} }
-async function stopHandheld(): Promise<void> { clearTouches(); if(handheldTimer!=null)window.clearInterval(handheldTimer);handheldTimer=null;await new Promise((resolve)=>setTimeout(resolve,35));handheldSocket?.close();handheldSocket=null;await SensorBridge.stop().catch(()=>{});await wakeLock?.release().catch(()=>{});wakeLock=null;await NativeCamera.setDisplayMode({role:"home"}).catch(()=>{});showRole("home");setConnection("offline"); }
-async function suspendHandheld(): Promise<void> { clearTouches();if(handheldTimer!=null)window.clearInterval(handheldTimer);handheldTimer=null;await new Promise((resolve)=>setTimeout(resolve,35));handheldSocket?.close();handheldSocket=null;await SensorBridge.stop().catch(()=>{});document.querySelector("#sensorState")!.textContent="已暂停"; }
+async function stopHandheld(): Promise<void> { await stopVoiceControl(); clearTouches(); if(handheldTimer!=null)window.clearInterval(handheldTimer);handheldTimer=null;await new Promise((resolve)=>setTimeout(resolve,35));handheldSocket?.close();handheldSocket=null;await SensorBridge.stop().catch(()=>{});await wakeLock?.release().catch(()=>{});wakeLock=null;await NativeCamera.setDisplayMode({role:"home"}).catch(()=>{});showRole("home");setConnection("offline"); }
+async function suspendHandheld(): Promise<void> { await stopVoiceControl(); clearTouches();if(handheldTimer!=null)window.clearInterval(handheldTimer);handheldTimer=null;await new Promise((resolve)=>setTimeout(resolve,35));handheldSocket?.close();handheldSocket=null;await SensorBridge.stop().catch(()=>{});document.querySelector("#sensorState")!.textContent="已暂停"; }
 function updateStick(event: PointerEvent): void { const stick=document.querySelector<HTMLElement>("#stick")!;const rect=stick.getBoundingClientRect();const x=Math.max(-1,Math.min(1,(event.clientX-(rect.left+rect.width/2))/(rect.width*.38)));const y=Math.max(-1,Math.min(1,(event.clientY-(rect.top+rect.height/2))/(rect.height*.38)));stickState={x,y};stick.querySelector<HTMLElement>("i")!.style.transform=`translate(${x*34}px,${y*34}px)`; }
 
 async function chooseCamera(deviceId: string): Promise<void> {
@@ -758,20 +612,20 @@ document.querySelector("#cameraRole")!.addEventListener("click",()=>{void Native
 document.querySelector("#handheldRole")!.addEventListener("click",()=>{
   // Switching roles always releases the camera first; the handheld role must not
   // leave a Camera2 session or MediaPipe runtime alive in the background.
-  void (running || activeNativeCamera ? stop() : Promise.resolve())
+  void (running || activeNativeCamera || voiceEnabled ? stop() : Promise.resolve())
     .then(()=>NativeCamera.setDisplayMode({role:"handheld"}).catch(()=>{}))
     .then(()=>startHandheld());
 });
 document.querySelector("#cameraHome")!.addEventListener("click",()=>{void stop().then(()=>NativeCamera.setDisplayMode({role:"home"}).catch(()=>{})).then(()=>showRole("home"));});
 document.querySelector("#startButton")!.addEventListener("click", () => void start()); document.querySelector("#stopButton")!.addEventListener("click", () => void stop());
 for (const select of [cameraDeviceSelect, runtimeCameraDevice]) select.addEventListener("change", () => void chooseCamera(select.value));
-// 识别档位、语音、映射和校准入口在手机端隐藏；电脑端统一管理。
+voiceToggle.addEventListener("change", () => void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()));
 document.querySelector("#centerSensor")!.addEventListener("click",()=>{handheldRecenter=true;document.querySelector("#sensorState")!.textContent="正在居中";});document.querySelector("#stopHandheld")!.addEventListener("click",()=>void stopHandheld());
 document.querySelectorAll<HTMLElement>("[data-pad]").forEach((button)=>{button.addEventListener("pointerdown",(event)=>{event.preventDefault();button.setPointerCapture(event.pointerId);padState.add(button.dataset.pad!);button.classList.add("pressed");});const release=()=>{padState.delete(button.dataset.pad!);button.classList.remove("pressed");};button.addEventListener("pointerup",release);button.addEventListener("pointercancel",release);button.addEventListener("lostpointercapture",release);});
 const stick=document.querySelector<HTMLElement>("#stick")!;stick.addEventListener("pointerdown",(event)=>{stick.setPointerCapture(event.pointerId);updateStick(event);});stick.addEventListener("pointermove",(event)=>{if(stick.hasPointerCapture(event.pointerId))updateStick(event);});const releaseStick=()=>{stickState={x:0,y:0};stick.querySelector<HTMLElement>("i")!.style.transform="translate(0,0)";};stick.addEventListener("pointerup",releaseStick);stick.addEventListener("pointercancel",releaseStick);
 window.addEventListener("resize", resizeCanvas);
-document.addEventListener("visibilitychange", () => { if(document.hidden&&activeRole==="handheld")void suspendHandheld();if(document.visibilityState==="visible"&&activeRole==="handheld"&&handheldTimer==null)void startHandheld();if(document.visibilityState==="visible"&&running&&nativeCameraOperational)void startCamera().catch((error)=>alert(error instanceof Error?error.message:String(error))); if (document.visibilityState === "visible" && (running || activeRole==="handheld") && !wakeLock) void navigator.wakeLock?.request("screen").then((lock) => { wakeLock = lock; }).catch(() => {}); });
-window.addEventListener("beforeunload",clearTouches);
+document.addEventListener("visibilitychange", () => { if(document.hidden&&voiceEnabled)void stopVoiceControl();if(document.hidden&&activeRole==="handheld")void suspendHandheld();if(document.visibilityState==="visible"&&activeRole==="handheld"&&handheldTimer==null)void startHandheld();if(document.visibilityState==="visible"&&running&&nativeCameraOperational)void startCamera().catch((error)=>alert(error instanceof Error?error.message:String(error))); if (document.visibilityState === "visible" && (running || activeRole==="handheld") && !wakeLock) void navigator.wakeLock?.request("screen").then((lock) => { wakeLock = lock; }).catch(() => {}); });
+window.addEventListener("beforeunload",()=>{clearTouches();void stopVoiceControl();});
 if(nativeCameraEnabled){void NativeCamera.addListener("poseResult",handleNativePoseFrame);void NativeCamera.addListener("cameraError",(event)=>{document.querySelector("#sendState")!.textContent=event.message;setNativePreview(false);activeNativeCamera=false;if(running){void NativeCamera.stopCamera().catch(()=>{});}});}
 if(nativeCameraEnabled)void NativeCamera.setDisplayMode({role:"home"}).catch(()=>{});
 if ("serviceWorker" in navigator && location.protocol !== "file:") void navigator.serviceWorker.register("./sw.js").catch(() => {});

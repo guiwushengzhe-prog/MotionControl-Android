@@ -23,6 +23,11 @@ h1 { margin: 0; font-size: clamp(20px, 4vw, 32px); letter-spacing: -.04em; }
 .badge.connecting i { background: #ffd84c; }
 .badge.online i { background: #c8ff38; box-shadow: 0 0 12px #c8ff38; }
 .badge.error i { background: #ff6b45; }
+.voice-control { pointer-events: auto; position: fixed; z-index: 5; top: max(62px, env(safe-area-inset-top)); right: max(20px, env(safe-area-inset-right)); display: flex; align-items: center; gap: 10px; padding: 8px 11px; border: 1px solid rgba(255,255,255,.2); border-radius: 10px; background: rgba(8,11,15,.82); backdrop-filter: blur(12px); font-size: 11px; }
+.voice-control label { display: flex; align-items: center; gap: 7px; color: #f5f7f8; }
+.voice-control input { width: 16px; height: 16px; margin: 0; accent-color: #c8ff38; }
+.voice-state { color: #9aa6b0; min-width: 42px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.voice-state.connecting { color: #ffd84c; }.voice-state.listening { color: #c8ff38; }.voice-state.error,.voice-state.unauthorized { color: #ff9b7f; }
 main { position: fixed; z-index: 4; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .setup-card { pointer-events: auto; width: min(460px, calc(100vw - 32px)); padding: 22px; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: rgba(11,16,20,.88); backdrop-filter: blur(18px); box-shadow: 0 20px 80px rgba(0,0,0,.45); }
 .setup-card h2 { margin: 0 0 5px; font-size: 24px; }
