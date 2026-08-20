@@ -185,3 +185,6 @@ Camera2 的 YUV_420_888（安卓相机 YUV 图像格式）不能按紧密排列�
 ## 2026-08-21：原生相机链收敛到 CameraX
 
 自写 Camera2 双 Surface、物理镜头扫描、Viewfinder 承载层和 YUV_420_888（安卓相机 YUV 图像格式）转 Bitmap（位图）细节在当前样机上长期难以证明 Pose33（33点人体关键点）输入可靠。基础链改用 CameraX（安卓官方相机封装）的 Preview（预览）+ ImageAnalysis（图像分析）共享生命周期：PreviewView（官方预览控件）负责显示变换，ImageProxy（分析帧）直接交给 MediaImageBuilder（MediaPipe 官方图像构造器），rotationDegrees（旋转角度）只使用 ImageProxy.imageInfo 提供的一次。只枚举可绑定的通用前置/后置选择器；超广角和物理镜头以后在基础真人链稳定后再恢复。
+## 2026-08-21：摄像头识别路径再次回到 WebView
+
+CameraX/Camera2 原生识别在当前样机上未能证明人体关键点稳定，因此正式路径改回历史上已使用的 WebView（网页视图）`getUserMedia`（网页媒体采集）+ MediaPipe Tasks Vision（网页姿态模型）。视频预览、骨架画布与前置镜像共用同一显示变换；每一帧只允许一次 VIDEO（视频模式）推理，并以视频时间或单调时间戳发送 `pose_frame_v2`（姿态帧协议）。NativeAudio（原生 Vosk 离线语音）和 SensorBridge（手持传感器）保持独立，手持角色不初始化摄像头或姿态模型。
