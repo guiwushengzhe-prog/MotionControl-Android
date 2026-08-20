@@ -33,19 +33,15 @@ import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.google.mediapipe.framework.image.MPImage;
 import com.google.mediapipe.framework.image.BitmapImageBuilder;
-import com.google.mediapipe.tasks.components.containers.Category;
 import com.google.mediapipe.tasks.components.containers.Landmark;
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark;
 import com.google.mediapipe.tasks.core.BaseOptions;
 import com.google.mediapipe.tasks.core.Delegate;
 import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions;
 import com.google.mediapipe.tasks.vision.core.RunningMode;
-import com.google.mediapipe.tasks.vision.gesturerecognizer.GestureRecognizer;
-import com.google.mediapipe.tasks.vision.gesturerecognizer.GestureRecognizerResult;
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker;
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -72,7 +68,6 @@ final class NativeCameraRuntime {
     private Surface previewSurface;
     private ViewfinderSurfaceSession viewfinderSurfaceSession;
     private PoseLandmarker poseLandmarker;
-    private GestureRecognizer gestureRecognizer;
     private YuvToRgbConverter yuvConverter;
     private final AtomicBoolean inferenceBusy = new AtomicBoolean(false);
     private volatile boolean running;
@@ -170,11 +165,6 @@ final class NativeCameraRuntime {
     private void loadModels(String grade) {
         closeModels();
         poseLandmarker = createPose(grade, Delegate.GPU);
-        try {
-            gestureRecognizer = createGesture(Delegate.GPU);
-        } catch (Exception gpuError) {
-            gestureRecognizer = createGesture(Delegate.CPU);
-        }
     }
 
     private PoseLandmarker createPose(String grade, Delegate delegate) {
@@ -200,16 +190,6 @@ final class NativeCameraRuntime {
                             .setMinPoseDetectionConfidence(.45f).setMinPosePresenceConfidence(.5f)
                             .setMinTrackingConfidence(.55f).build());
         }
-    }
-
-    private GestureRecognizer createGesture(Delegate delegate) {
-        BaseOptions base = BaseOptions.builder().setModelAssetPath("public/models/gesture_recognizer.task")
-                .setDelegate(delegate).build();
-        return GestureRecognizer.createFromOptions(context,
-                GestureRecognizer.GestureRecognizerOptions.builder().setBaseOptions(base)
-                        .setRunningMode(RunningMode.VIDEO).setNumHands(4)
-                        .setMinHandDetectionConfidence(.5f).setMinHandPresenceConfidence(.5f)
-                        .setMinTrackingConfidence(.5f).build());
     }
 
     private void requestViewfinderSurface() {
@@ -387,12 +367,6 @@ final class NativeCameraRuntime {
                 lastInferenceError = shortError(detectError);
                 throw detectError;
             }
-            // Pose drives the latency-sensitive body loop. Hand gestures are held between
-            // reliable samples, so 30 FPS capture only needs about 4-8 gesture checks/sec.
-            if (gestureRecognizer != null && inferenceSequence++ % 8 == 0) {
-                GestureRecognizerResult gestures = gestureRecognizer.recognizeForVideo(mpImage, processing, timestamp);
-                cachedHands = encodeHands(gestures);
-            }
             float inferenceMs = (android.os.SystemClock.elapsedRealtimeNanos() - started) / 1_000_000f;
             inferenceFrameCount++;
             long fpsNow = android.os.SystemClock.elapsedRealtime();
@@ -435,19 +409,6 @@ final class NativeCameraRuntime {
             poses.put(item);
         }
         return poses;
-    }
-
-    private JSArray encodeHands(GestureRecognizerResult result) {
-        JSArray hands = new JSArray();
-        for (int i = 0; i < result.landmarks().size(); i++) {
-            JSObject hand = new JSObject(); hand.put("landmarks", encodeNormalized(result.landmarks().get(i)));
-            List<Category> handedness = i < result.handedness().size() ? result.handedness().get(i) : new ArrayList<>();
-            List<Category> gestures = i < result.gestures().size() ? result.gestures().get(i) : new ArrayList<>();
-            hand.put("handedness", handedness.isEmpty() ? "Unknown" : handedness.get(0).categoryName());
-            hand.put("gesture", gestures.isEmpty() ? "None" : gestures.get(0).categoryName());
-            hand.put("gesture_score", gestures.isEmpty() ? 0f : gestures.get(0).score()); hands.put(hand);
-        }
-        return hands;
     }
 
     private JSArray encodeNormalized(List<NormalizedLandmark> points) {
@@ -633,7 +594,6 @@ final class NativeCameraRuntime {
 
     private void closeModels() {
         if (poseLandmarker != null) { poseLandmarker.close(); poseLandmarker = null; }
-        if (gestureRecognizer != null) { gestureRecognizer.close(); gestureRecognizer = null; }
     }
 
     void destroy() {

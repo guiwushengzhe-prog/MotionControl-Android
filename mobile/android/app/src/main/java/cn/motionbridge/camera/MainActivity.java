@@ -8,7 +8,6 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(SensorBridgePlugin.class);
         registerPlugin(NativeCameraPlugin.class);
-        registerPlugin(NativeAudioPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

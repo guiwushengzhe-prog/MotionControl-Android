@@ -33,41 +33,43 @@ type NativeCameraApi = {
 const NativeCamera = registerPlugin<NativeCameraApi>("NativeCamera");
 (window as any).MotionBridgeNativeCamera = NativeCamera;
 const nativeCameraEnabled = Capacitor.isNativePlatform();
-// 人体识别切回网页版（8月9日同款 MediaPipe）。原生 Camera2 链路识别不稳定，暂不启用；
-// 原生音频（AudioRecord）仍由 nativeCameraEnabled 控制，继续保留。
-let nativeCameraOperational = false;
+// Android 默认使用 Camera2 + Viewfinder + 原生 MediaPipe；浏览器仍保留兼容回退。
+let nativeCameraOperational = nativeCameraEnabled;
 let activeNativeCamera = false;
 let cameraSwitching = false;
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <video id="camera" autoplay playsinline muted></video><canvas id="overlay"></canvas><div class="shade"></div>
-  <header><div><p>MOTIONBRIDGE 0.4.3</p><h1 id="pageTitle">体感桥</h1></div><div id="connectionBadge" class="badge"><i></i><b>未连接</b></div></header>
+  <header><div><p>MOTIONBRIDGE 0.7.4</p><h1 id="pageTitle">体感桥</h1></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
   <main>
     <section class="setup-card role-card" id="roleCard"><h2>选择角色</h2><div class="role-grid"><button id="cameraRole">摄像头</button><button id="handheldRole">手持手柄</button></div></section>
     <section class="setup-card hidden" id="setupCard">
       <div class="card-head"><h2>摄像头</h2><button id="cameraHome" class="text-button">返回首页</button></div>
       <label>电脑服务器地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑地址:8765/ws/input"></label>
-      <label>镜头<select id="cameraDeviceSelect"><option value="">后置镜头</option></select></label>
-      <label>识别精度<select id="precisionSelect"><option value="auto">自动</option><option value="lite">流畅</option><option value="full">均衡</option><option value="heavy">精确</option></select></label>
-      <div class="actions"><button id="startButton">开始识别</button><button id="retryVoice" class="secondary hidden">重新授权 / 开启语音</button></div>
+      <label>镜头<select id="cameraDeviceSelect"><option value="__auto__">自动</option></select></label>
+      <div class="actions"><button id="startButton">开始识别</button></div>
       <p class="warning" id="securityWarning"></p>
     </section>
     <section class="runtime-card hidden" id="runtimeCard">
-      <div><strong id="cameraFps">0</strong><small>相机 FPS</small></div><div><strong id="localFps">0</strong><small>识别 FPS</small></div><div><strong id="sendState">等待人体</strong><small>识别</small></div><div><strong id="modelGrade">—</strong><small>当前模型</small></div><div class="voice-diagnostic"><strong id="micState">未连接</strong><small>语音</small><em id="micDetail">尚未采集</em><span id="micSource">来源：—</span><span id="micWs">通道：—</span><span id="micReady">audio_ready：否</span><span id="micBytes">已发送 0 B</span></div>
-      <label class="runtime-select">镜头<select id="runtimeCameraDevice"><option value="">后置镜头</option></select></label>
-      <label class="runtime-select">识别精度<select id="runtimePrecision"><option value="auto">自动</option><option value="lite">流畅</option><option value="full">均衡</option><option value="heavy">精确</option></select></label>
-      <button id="runtimeFlip" class="secondary">切换镜头</button><button id="voiceTest" class="secondary">语音测试</button><button id="runtimeRetryVoice" class="secondary hidden">开启语音</button><button id="stopButton" class="stop">停止识别</button>
+      <div class="runtime-state"><strong id="sendState">等待完整人体</strong><small>识别状态</small></div>
+      <label class="runtime-select">镜头<select id="runtimeCameraDevice"><option value="__auto__">自动</option></select></label>
+      <button id="stopButton" class="stop">停止识别</button>
     </section>
-    <section class="handheld-card hidden" id="handheldCard"><div class="handheld-top"><span id="handheldConnection" class="badge"><i></i><b>未连接</b></span><label>绑定玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span><b id="sensorFps">0 FPS</b><small id="sensorState">等待传感器</small></span><button id="centerSensor">重新居中</button><button id="stopHandheld" class="stop">停止手柄</button></div><div class="shoulders"><button data-pad="l">L</button><button data-pad="zl">ZL</button><button data-pad="zr">ZR</button><button data-pad="r">R</button></div><div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div></div></section>
+    <section class="handheld-card hidden" id="handheldCard">
+      <div class="handheld-top handheld-connection-row"><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><label>电脑服务器地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑地址:8765/ws/input"></label></div>
+      <div class="handheld-top"><label>绑定玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span><b id="sensorFps">0 FPS</b><small id="sensorState">等待传感器</small></span><button id="centerSensor">重新居中</button><button id="stopHandheld" class="stop">停止手柄</button></div>
+      <div class="shoulders"><button data-pad="l">LB</button><button data-pad="zl">LT</button><button data-pad="zr">RT</button><button data-pad="r">RB</button></div><div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div></div>
+    </section>
   </main>
   <div class="guide hidden" id="guide"></div>
-  <div class="loading hidden" id="loading"><i></i><b id="loadingText">正在加载识别模型…</b></div>`;
+  <div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头…</b></div>`;
 
 const video = document.querySelector<HTMLVideoElement>("#camera")!;
 const canvas = document.querySelector<HTMLCanvasElement>("#overlay")!;
 const context = canvas.getContext("2d")!;
 const serverInput = document.querySelector<HTMLInputElement>("#serverUrl")!;
+const handheldServerInput = document.querySelector<HTMLInputElement>("#handheldServerUrl")!;
 const cameraDeviceSelect = document.querySelector<HTMLSelectElement>("#cameraDeviceSelect")!;
 const runtimeCameraDevice = document.querySelector<HTMLSelectElement>("#runtimeCameraDevice")!;
 const roleCard = document.querySelector<HTMLElement>("#roleCard")!;
@@ -180,6 +182,11 @@ async function openWebStream(constraints: MediaStreamConstraints): Promise<Media
 
 const deviceId = getDeviceId();
 serverInput.value = localStorage.getItem("motionbridge-server") || getSuggestedServer();
+handheldServerInput.value = localStorage.getItem("motionbridge-server") || getSuggestedServer();
+handheldServerInput.addEventListener("change", () => {
+  const value = handheldServerInput.value.trim();
+  if (value) { serverInput.value = value; localStorage.setItem("motionbridge-server", value); }
+});
 if (!window.isSecureContext && !["localhost", "127.0.0.1"].includes(location.hostname)) {
   document.querySelector("#securityWarning")!.textContent = "当前页面不是可信 HTTPS，浏览器可能禁止摄像头或麦克风；Android 安装包不受此限制。";
 }
@@ -231,8 +238,13 @@ async function loadGesture(): Promise<void> {
 }
 
 function modelCacheKey(): string { return `motionbridge-model-${deviceId}-${activeNativeCameraId || selectedCameraDeviceId || facingMode}`; }
-function selectedPrecision(): PrecisionMode { return (localStorage.getItem(`${modelCacheKey()}-mode`) as PrecisionMode | null) || "auto"; }
-function syncPrecisionControls(value: PrecisionMode): void { document.querySelector<HTMLSelectElement>("#precisionSelect")!.value = value; document.querySelector<HTMLSelectElement>("#runtimePrecision")!.value = value; }
+function selectedPrecision(): PrecisionMode { return "auto"; }
+function syncPrecisionControls(value: PrecisionMode): void {
+  const first = document.querySelector<HTMLSelectElement>("#precisionSelect");
+  const second = document.querySelector<HTMLSelectElement>("#runtimePrecision");
+  if (first) first.value = value;
+  if (second) second.value = value;
+}
 
 async function selectPoseModel(force = false, requested?: PrecisionMode): Promise<void> {
   if (activeNativeCamera) {
@@ -244,12 +256,13 @@ async function selectPoseModel(force = false, requested?: PrecisionMode): Promis
   const mode = requested || selectedPrecision(); localStorage.setItem(`${modelCacheKey()}-mode`, mode); syncPrecisionControls(mode);
   const grade = mode === "auto" ? "full" : mode;
   poseLandmarker?.close(); poseLandmarker = await createPose(grade); showGrade(grade, mode === "auto" ? "自动（均衡）" : "手动选择");
-  await loadGesture();
   document.querySelector("#loading")!.classList.add("hidden");
 }
 
 function showGrade(grade: ModelGrade, title: string): void {
-  currentModel = grade; const label = document.querySelector<HTMLElement>("#modelGrade")!; label.textContent = ({ lite: "流畅", full: "均衡", heavy: "精确" })[grade]; label.title = title;
+  currentModel = grade;
+  const label = document.querySelector<HTMLElement>("#modelGrade");
+  if (label) { label.textContent = ({ lite: "流畅", full: "均衡", heavy: "精确" })[grade]; label.title = title; }
 }
 
 async function start(): Promise<void> {
@@ -257,11 +270,12 @@ async function start(): Promise<void> {
     const socketUrl = normalizeSocketUrl(serverInput.value); serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl);
     setConnection("connecting");
     if(activeNativeCamera){
-      const mode=selectedPrecision();const grade=mode==="auto"?((localStorage.getItem(`${modelCacheKey()}-native-auto`) as ModelGrade|null)||"lite"):mode;
+      const mode=selectedPrecision();const grade=mode==="auto"?((localStorage.getItem(`${modelCacheKey()}-native-auto`) as ModelGrade|null)||"full"):mode;
       await NativeCamera.enableInference({model:grade});showGrade(grade,mode==="auto"?"自动选择":"手动选择");
     }else{await startCamera();if(!activeNativeCamera)await selectPoseModel();}
     running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); applyMirror();
-    connectSocket(socketUrl); void startMicrophone(socketUrl);
+    // 本版只传人体关键点；语音由电脑端/其他输入源负责，手机不申请麦克风。
+    connectSocket(socketUrl);
     wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; if (!activeNativeCamera) requestAnimationFrame(predict);
   } catch (error) { setConnection("error"); alert(error instanceof Error ? error.message : String(error)); await stop(); }
 }
@@ -284,7 +298,7 @@ async function startCamera(): Promise<void> {
     const available=nativeCameras.filter((item)=>item.available); const backs=available.filter((item)=>item.facing==="back");
     let descriptor=selectedCameraDeviceId!=="__auto__"?available.find((item)=>item.cameraId===selectedCameraDeviceId):undefined;
     descriptor||=widestStableBack(backs)||available.find((item)=>item.facing===(facingMode==="user"?"front":"back"))||available[0];
-    if (!descriptor) {nativeCameraOperational=false;} else {
+    if (!descriptor) { if (nativeCameraEnabled) throw new Error("没有可用的原生镜头"); nativeCameraOperational=false; } else {
       const sameFacing=available.filter((item)=>item.facing===descriptor!.facing);
       const candidates=[descriptor,...sameFacing.slice().sort((a,b)=>Math.abs(horizontalFov(a)-65)-Math.abs(horizontalFov(b)-65))].filter((item,index,list)=>list.findIndex((other)=>other.cameraId===item.cameraId)===index);
       const mode=selectedPrecision();let lastError:unknown;
@@ -298,6 +312,7 @@ async function startCamera(): Promise<void> {
           cameraDeviceSelect.value=runtimeCameraDevice.value=selectedCameraDeviceId;nativeAutoStartedAt=performance.now();nativeAutoFallbackDone=false;resizeCanvas();applyMirror();return;
         }catch(error){lastError=error;await NativeCamera.stopCamera().catch(()=>{});setNativePreview(false);}
       }
+      if (nativeCameraEnabled) throw (lastError instanceof Error ? lastError : new Error("原生相机捕获会话建立失败"));
       document.querySelector("#securityWarning")!.textContent=`原生相机不可用，已切换兼容模式${lastError instanceof Error?`：${lastError.message}`:""}`;nativeCameraOperational=false;
     }
   }
@@ -340,7 +355,11 @@ async function refreshCameraDevices(): Promise<void> {
       for(const select of [cameraDeviceSelect,runtimeCameraDevice]){select.innerHTML=options||'<option value="">无可用镜头</option>';select.value=selectedCameraDeviceId;}
       document.querySelector("#securityWarning")!.textContent="";
       return;
-    } catch(error){nativeCameraOperational=false;document.querySelector("#securityWarning")!.textContent=`原生相机不可用，使用兼容模式${error instanceof Error?`：${error.message}`:""}`;}
+    } catch(error){
+      if (nativeCameraEnabled) throw error;
+      nativeCameraOperational=false;
+      document.querySelector("#securityWarning")!.textContent=`原生相机不可用，使用兼容模式${error instanceof Error?`：${error.message}`:""}`;
+    }
     finally { document.querySelector("#loading")!.classList.add("hidden"); }
   }
   cameraDevices = (await navigator.mediaDevices.enumerateDevices()).filter((item) => item.kind === "videoinput");
@@ -550,21 +569,26 @@ async function stopMicrophone(): Promise<void> {
   nativeAudioErrorListener = null;
   if (nativeCameraEnabled) await NativeAudio.stop().catch(() => {});
 }
-function setMicState(value: typeof voiceState): void { voiceState = value; const text = ({not_connected:"未连接",connected:"通道已连接",enabled:"声音有效",silent:"没有听到声音",unauthorized:"麦克风未授权",failed:"语音连接失败"})[value]; document.querySelector("#micState")!.textContent = text; document.querySelector("#retryVoice")!.classList.toggle("hidden", !["unauthorized","failed"].includes(value)); document.querySelector("#runtimeRetryVoice")!.classList.toggle("hidden", !["unauthorized","failed"].includes(value)); }
-function updateMicDetail(text:string):void{document.querySelector("#micDetail")!.textContent=text;}
+function setMicState(value: typeof voiceState): void {
+  voiceState = value;
+  const label = document.querySelector<HTMLElement>("#micState");
+  if (label) label.textContent = ({not_connected:"未连接",connected:"通道已连接",enabled:"声音有效",silent:"没有听到声音",unauthorized:"麦克风未授权",failed:"语音连接失败"})[value];
+  for (const id of ["retryVoice", "runtimeRetryVoice"]) document.querySelector<HTMLElement>(`#${id}`)?.classList.toggle("hidden", !["unauthorized", "failed"].includes(value));
+}
+function updateMicDetail(text:string):void{const el=document.querySelector<HTMLElement>("#micDetail");if(el)el.textContent=text;}
 function updateMicSource(source: "native" | "web" | "unknown"): void {
   const label = source === "native" ? "原生 AudioRecord" : source === "web" ? "WebAudio 回退" : "—";
-  document.querySelector("#micSource")!.textContent = `来源：${label}`;
+  const el=document.querySelector<HTMLElement>("#micSource");if(el)el.textContent = `来源：${label}`;
 }
 function updateMicReady(ready: boolean): void {
-  document.querySelector("#micReady")!.textContent = `audio_ready：${ready ? "是" : "否"}`;
+  const el=document.querySelector<HTMLElement>("#micReady");if(el)el.textContent = `audio_ready：${ready ? "是" : "否"}`;
 }
 function updateMicBytes(bytes: number): void {
-  document.querySelector("#micBytes")!.textContent = `已发送 ${bytes} B`;
+  const el=document.querySelector<HTMLElement>("#micBytes");if(el)el.textContent = `已发送 ${bytes} B`;
 }
 function updateMicWs(state: string): void {
   const label = ({ connecting: "连接中", connected: "已连接", closed: "已断开", error: "异常" } as Record<string, string>)[state] || state;
-  document.querySelector("#micWs")!.textContent = `通道：${label}`;
+  const el=document.querySelector<HTMLElement>("#micWs");if(el)el.textContent = `通道：${label}`;
 }
 function base64ToArrayBuffer(value:string):ArrayBuffer{const binary=atob(value),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes.buffer;}
 function floatRms(input:Float32Array):number{let sum=0;for(const sample of input)sum+=sample*sample;return Math.sqrt(sum/Math.max(1,input.length));}
@@ -594,18 +618,18 @@ function predict(now: number): void {
     socket.send(JSON.stringify({ type: "pose_frame_v2", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, sent_at_ms: Date.now() + serverClockOffsetMs,
       width: video.videoWidth, height: video.videoHeight, camera_facing: facingMode, camera_id: selectedCameraDeviceId||"logical", orientation_degrees: 0, preview_mirrored: facingMode === "user", coordinates_mirrored: false, actual_model: currentModel, voice_state: voiceState,
       poses: poseResult.landmarks.map((pose, index) => ({ detection_id: null, pose: compact(pose), world_pose: poseResult.worldLandmarks[index] ? compactLandmarks(poseResult.worldLandmarks[index], false) : null })),
-      hands: gestureCache.map((hand) => ({ handedness: hand.handedness, landmarks: compact(hand.landmarks), gesture: hand.gesture, gesture_score: hand.gesture_score })), inference_ms: elapsed }));
+      hands: [], inference_ms: elapsed }));
     document.querySelector("#sendState")!.textContent = poseResult.landmarks.length ? `发送 ${poseResult.landmarks.length} 人` : "等待人体";
   } else if (!poseResult.landmarks.length) document.querySelector("#sendState")!.textContent = "等待人体";
   if (performance.now() - lastClockSyncAt > 5000) syncClock(); frameCounter++; fpsCounter++;
-  if (now - fpsStarted >= 1000) { const fps=Math.round(fpsCounter * 1000 / (now - fpsStarted));document.querySelector("#cameraFps")!.textContent=String(fps);document.querySelector("#localFps")!.textContent = String(fps); fpsCounter = 0; fpsStarted = now; }
+  if (now - fpsStarted >= 1000) { const fps=Math.round(fpsCounter * 1000 / (now - fpsStarted));document.querySelector<HTMLElement>("#cameraFps")?.replaceChildren(document.createTextNode(String(fps)));document.querySelector<HTMLElement>("#localFps")?.replaceChildren(document.createTextNode(String(fps))); fpsCounter = 0; fpsStarted = now; }
 }
 
 function handleNativePoseFrame(frame: NativePoseFrame): void {
   if (!running) return;
   nativeFrameWidth=frame.width;nativeFrameHeight=frame.height;facingMode=frame.facing==="front"?"user":"environment";currentModel=frame.actualModel;
   lastNativePoseCount=frame.poseCount??frame.poses.length;lastPoseDiagnostics=frame.poseDiagnostics;
-  draw(frame.poses.map((item)=>item.pose),frame.hands); document.querySelector("#cameraFps")!.textContent=String(Math.round(frame.previewFps||frame.captureFps));document.querySelector("#localFps")!.textContent=String(Math.round(frame.inferenceFps||0));
+  draw(frame.poses.map((item)=>item.pose),frame.hands); const cameraFps=document.querySelector<HTMLElement>("#cameraFps");const localFps=document.querySelector<HTMLElement>("#localFps");if(cameraFps)cameraFps.textContent=String(Math.round(frame.previewFps||frame.captureFps));if(localFps)localFps.textContent=String(Math.round(frame.inferenceFps||0));
   if(socket?.readyState===WebSocket.OPEN&&socket.bufferedAmount<256000){
     socket.send(JSON.stringify({type:"pose_frame_v2",role:"camera",device_id:deviceId,sequence:sequence++,captured_at_ms:frame.capturedAtMs+serverClockOffsetMs,sent_at_ms:Date.now()+serverClockOffsetMs,width:frame.width,height:frame.height,camera_facing:facingMode,camera_id:frame.cameraId,orientation_degrees:0,preview_mirrored:frame.previewMirrored,coordinates_mirrored:false,actual_model:frame.actualModel,voice_state:voiceState,pose_diagnostics:frame.poseDiagnostics,poses:frame.poses,hands:frame.hands,inference_ms:frame.inferenceMs}));
     document.querySelector("#sendState")!.textContent=poseStatusText(false);
@@ -688,7 +712,7 @@ function showRole(role: "home" | "camera" | "handheld"): void { activeRole = rol
 let sensorPolling = false;
 async function sendHandheldFrame(): Promise<void> { if (sensorPolling || handheldSocket?.readyState !== WebSocket.OPEN) return; sensorPolling = true; try { const sample = await SensorBridge.getLatest(); const touches: Record<string, unknown>[] = [...padState].map((control) => ({control, pressed:true})); if (Math.abs(stickState.x) > .02 || Math.abs(stickState.y) > .02) touches.push({control:"stick",x:stickState.x,y:stickState.y}); handheldSocket.send(JSON.stringify({type:"sensor_frame",role:"sensor",device_id:deviceId,sequence:handheldSequence++,captured_at_ms:Date.now(),player_slot:Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value),quaternion:{x:sample.qx,y:sample.qy,z:sample.qz,w:sample.qw},orientation:{},rotation_rate:{x:sample.gx,y:sample.gy,z:sample.gz},acceleration:{x:sample.ax,y:sample.ay,z:sample.az},touches,recenter:handheldRecenter})); if (handheldRecenter) { handheldRecenter=false; document.querySelector("#sensorState")!.textContent="已居中"; } handheldFrames++; const now=performance.now(); if(now-handheldFpsStarted>=1000){document.querySelector("#sensorFps")!.textContent=`${Math.round(handheldFrames*1000/(now-handheldFpsStarted))} FPS`;handheldFrames=0;handheldFpsStarted=now;} } catch (error) { document.querySelector("#sensorState")!.textContent=error instanceof Error?error.message:"传感器异常"; } finally { sensorPolling=false; } }
 function clearTouches(): void { padState.clear(); stickState={x:0,y:0}; document.querySelector<HTMLElement>("#stick i")!.style.transform="translate(0,0)"; document.querySelectorAll("[data-pad]").forEach((el)=>el.classList.remove("pressed")); void sendHandheldFrame(); }
-async function startHandheld(): Promise<void> { showRole("handheld"); try { await SensorBridge.start(); wakeLock=await navigator.wakeLock?.request("screen").catch(()=>null)??null; const url=normalizeSocketUrl(serverInput.value); handheldSocket=new WebSocket(url); handheldSocket.addEventListener("open",()=>{document.querySelector("#handheldConnection")!.className="badge online";document.querySelector("#handheldConnection b")!.textContent="已连接";document.querySelector("#sensorState")!.textContent="自然持握 1 秒";window.setTimeout(()=>{handheldRecenter=true;},1000);}); handheldSocket.addEventListener("message",(event)=>{const message=JSON.parse(event.data);if(message.type==="error"){document.querySelector("#sensorState")!.textContent=message.message||"绑定失败";}}); handheldSocket.addEventListener("close",()=>{clearTouches();document.querySelector("#handheldConnection")!.className="badge error";document.querySelector("#handheldConnection b")!.textContent="已断开";}); handheldTimer=window.setInterval(()=>void sendHandheldFrame(),16); } catch(error){document.querySelector("#sensorState")!.textContent=error instanceof Error?error.message:"传感器不可用";} }
+async function startHandheld(): Promise<void> { showRole("handheld"); try { await SensorBridge.start(); wakeLock=await navigator.wakeLock?.request("screen").catch(()=>null)??null; const address=handheldServerInput.value.trim()||serverInput.value.trim(); if(!address) throw new Error("请填写电脑服务器地址"); serverInput.value=address; localStorage.setItem("motionbridge-server",address); const url=normalizeSocketUrl(address); handheldSocket=new WebSocket(url); handheldSocket.addEventListener("open",()=>{document.querySelector("#handheldConnection")!.className="badge online";document.querySelector("#handheldConnection b")!.textContent="已连接电脑";document.querySelector("#sensorState")!.textContent="自然持握 1 秒";window.setTimeout(()=>{handheldRecenter=true;},1000);}); handheldSocket.addEventListener("message",(event)=>{const message=JSON.parse(event.data);if(message.type==="error"){document.querySelector("#sensorState")!.textContent=message.message||"连接失败";}}); handheldSocket.addEventListener("close",()=>{clearTouches();document.querySelector("#handheldConnection")!.className="badge error";document.querySelector("#handheldConnection b")!.textContent="电脑已断开";}); handheldTimer=window.setInterval(()=>void sendHandheldFrame(),16); } catch(error){document.querySelector("#sensorState")!.textContent=error instanceof Error?error.message:"传感器不可用";} }
 async function stopHandheld(): Promise<void> { clearTouches(); if(handheldTimer!=null)window.clearInterval(handheldTimer);handheldTimer=null;await new Promise((resolve)=>setTimeout(resolve,35));handheldSocket?.close();handheldSocket=null;await SensorBridge.stop().catch(()=>{});await wakeLock?.release().catch(()=>{});wakeLock=null;await NativeCamera.setDisplayMode({role:"home"}).catch(()=>{});showRole("home");setConnection("offline"); }
 async function suspendHandheld(): Promise<void> { clearTouches();if(handheldTimer!=null)window.clearInterval(handheldTimer);handheldTimer=null;await new Promise((resolve)=>setTimeout(resolve,35));handheldSocket?.close();handheldSocket=null;await SensorBridge.stop().catch(()=>{});document.querySelector("#sensorState")!.textContent="已暂停"; }
 function updateStick(event: PointerEvent): void { const stick=document.querySelector<HTMLElement>("#stick")!;const rect=stick.getBoundingClientRect();const x=Math.max(-1,Math.min(1,(event.clientX-(rect.left+rect.width/2))/(rect.width*.38)));const y=Math.max(-1,Math.min(1,(event.clientY-(rect.top+rect.height/2))/(rect.height*.38)));stickState={x,y};stick.querySelector<HTMLElement>("i")!.style.transform=`translate(${x*34}px,${y*34}px)`; }
@@ -730,21 +754,24 @@ async function chooseCamera(deviceId: string): Promise<void> {
   }
 }
 
-document.querySelector("#cameraRole")!.addEventListener("click",()=>{void NativeCamera.setDisplayMode({role:"camera"}).catch(()=>{}).then(()=>{showRole("camera");syncPrecisionControls(selectedPrecision());return refreshCameraDevices();}).then(()=>startFramingPreview()).catch(()=>{});});
-document.querySelector("#handheldRole")!.addEventListener("click",()=>{void NativeCamera.setDisplayMode({role:"handheld"}).catch(()=>{}).then(()=>startHandheld());});
+document.querySelector("#cameraRole")!.addEventListener("click",()=>{void NativeCamera.setDisplayMode({role:"camera"}).catch(()=>{}).then(()=>{showRole("camera");return refreshCameraDevices();}).then(()=>startFramingPreview()).catch(()=>{});});
+document.querySelector("#handheldRole")!.addEventListener("click",()=>{
+  // Switching roles always releases the camera first; the handheld role must not
+  // leave a Camera2 session or MediaPipe runtime alive in the background.
+  void (running || activeNativeCamera ? stop() : Promise.resolve())
+    .then(()=>NativeCamera.setDisplayMode({role:"handheld"}).catch(()=>{}))
+    .then(()=>startHandheld());
+});
 document.querySelector("#cameraHome")!.addEventListener("click",()=>{void stop().then(()=>NativeCamera.setDisplayMode({role:"home"}).catch(()=>{})).then(()=>showRole("home"));});
 document.querySelector("#startButton")!.addEventListener("click", () => void start()); document.querySelector("#stopButton")!.addEventListener("click", () => void stop());
-document.querySelector("#runtimeFlip")!.addEventListener("click", () => void flipCamera());
 for (const select of [cameraDeviceSelect, runtimeCameraDevice]) select.addEventListener("change", () => void chooseCamera(select.value));
-for(const id of ["precisionSelect","runtimePrecision"]){document.querySelector<HTMLSelectElement>(`#${id}`)!.addEventListener("change",(event)=>{const value=(event.target as HTMLSelectElement).value as PrecisionMode;syncPrecisionControls(value);localStorage.setItem(`${modelCacheKey()}-mode`,value);if(running)void selectPoseModel(false,value);});}
-for(const id of ["retryVoice","runtimeRetryVoice"]){document.querySelector(`#${id}`)!.addEventListener("click",()=>{void startMicrophone(normalizeSocketUrl(serverInput.value));});}
-document.querySelector("#voiceTest")!.addEventListener("click",()=>{const next=!voiceTestMode;document.querySelector<HTMLButtonElement>("#voiceTest")!.textContent=next?"退出语音测试":"语音测试";void startMicrophone(normalizeSocketUrl(serverInput.value),next);});
+// 识别档位、语音、映射和校准入口在手机端隐藏；电脑端统一管理。
 document.querySelector("#centerSensor")!.addEventListener("click",()=>{handheldRecenter=true;document.querySelector("#sensorState")!.textContent="正在居中";});document.querySelector("#stopHandheld")!.addEventListener("click",()=>void stopHandheld());
 document.querySelectorAll<HTMLElement>("[data-pad]").forEach((button)=>{button.addEventListener("pointerdown",(event)=>{event.preventDefault();button.setPointerCapture(event.pointerId);padState.add(button.dataset.pad!);button.classList.add("pressed");});const release=()=>{padState.delete(button.dataset.pad!);button.classList.remove("pressed");};button.addEventListener("pointerup",release);button.addEventListener("pointercancel",release);button.addEventListener("lostpointercapture",release);});
 const stick=document.querySelector<HTMLElement>("#stick")!;stick.addEventListener("pointerdown",(event)=>{stick.setPointerCapture(event.pointerId);updateStick(event);});stick.addEventListener("pointermove",(event)=>{if(stick.hasPointerCapture(event.pointerId))updateStick(event);});const releaseStick=()=>{stickState={x:0,y:0};stick.querySelector<HTMLElement>("i")!.style.transform="translate(0,0)";};stick.addEventListener("pointerup",releaseStick);stick.addEventListener("pointercancel",releaseStick);
 window.addEventListener("resize", resizeCanvas);
 document.addEventListener("visibilitychange", () => { if(document.hidden&&activeRole==="handheld")void suspendHandheld();if(document.visibilityState==="visible"&&activeRole==="handheld"&&handheldTimer==null)void startHandheld();if(document.visibilityState==="visible"&&running&&nativeCameraOperational)void startCamera().catch((error)=>alert(error instanceof Error?error.message:String(error))); if (document.visibilityState === "visible" && (running || activeRole==="handheld") && !wakeLock) void navigator.wakeLock?.request("screen").then((lock) => { wakeLock = lock; }).catch(() => {}); });
 window.addEventListener("beforeunload",clearTouches);
-if(nativeCameraEnabled){void NativeCamera.addListener("poseResult",handleNativePoseFrame);void NativeCamera.addListener("cameraError",(event)=>{document.querySelector("#sendState")!.textContent=event.message;setNativePreview(false);activeNativeCamera=false;if(running){nativeCameraOperational=false;void NativeCamera.stopCamera().catch(()=>{}).then(()=>startCamera()).then(()=>selectPoseModel()).catch(()=>{});}});}
+if(nativeCameraEnabled){void NativeCamera.addListener("poseResult",handleNativePoseFrame);void NativeCamera.addListener("cameraError",(event)=>{document.querySelector("#sendState")!.textContent=event.message;setNativePreview(false);activeNativeCamera=false;if(running){void NativeCamera.stopCamera().catch(()=>{});}});}
 if(nativeCameraEnabled)void NativeCamera.setDisplayMode({role:"home"}).catch(()=>{});
 if ("serviceWorker" in navigator && location.protocol !== "file:") void navigator.serviceWorker.register("./sw.js").catch(() => {});
