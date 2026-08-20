@@ -2,9 +2,6 @@ package cn.motionbridge.camera;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
-import android.media.AudioFormat;
-import android.media.AudioRecord;
-import android.media.MediaRecorder;
 
 import androidx.core.content.ContextCompat;
 
@@ -19,6 +16,8 @@ import com.getcapacitor.annotation.PermissionCallback;
 import org.json.JSONObject;
 import org.vosk.Model;
 import org.vosk.Recognizer;
+import org.vosk.android.RecognitionListener;
+import org.vosk.android.SpeechService;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -28,16 +27,14 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * Camera-role-only offline Chinese recognition. Audio never leaves the phone;
- * JavaScript receives final text events and sends the small voice_text frame.
+ * Camera-role-only offline Chinese recognition. Vosk SpeechService owns the
+ * Android recorder and audio buffering; JavaScript receives final text only.
  */
 @CapacitorPlugin(name = "NativeAudio", permissions = {
         @Permission(alias = "microphone", strings = { Manifest.permission.RECORD_AUDIO })
 })
 public class NativeAudioPlugin extends Plugin {
     private static final int SAMPLE_RATE = 16_000;
-    private static final int CHANNEL = AudioFormat.CHANNEL_IN_MONO;
-    private static final int ENCODING = AudioFormat.ENCODING_PCM_16BIT;
     private static final String MODEL_ASSET = "vosk-model-small-cn-0.22.complete.zip";
     private static final String MODEL_DIR_NAME = "vosk-model-small-cn-0.22";
     private static final String MODEL_MARKER = ".complete";
@@ -47,8 +44,7 @@ public class NativeAudioPlugin extends Plugin {
             + "\"体感 确认\",\"体感 返回\",\"[unk]\"]";
 
     private final Object lock = new Object();
-    private AudioRecord recorder;
-    private Thread captureThread;
+    private SpeechService speechService;
     private Model model;
     private Recognizer recognizer;
     private volatile boolean running;
@@ -79,29 +75,18 @@ public class NativeAudioPlugin extends Plugin {
                 call.resolve(formatResult());
                 return;
             }
-            int minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING);
-            if (minimum <= 0) {
-                call.reject("手机不支持 16kHz 单声道 PCM16 录音");
-                return;
-            }
             try {
                 File modelDirectory = prepareModel();
                 model = new Model(modelDirectory.getAbsolutePath());
                 recognizer = new Recognizer(model, SAMPLE_RATE, COMMAND_GRAMMAR);
-                int bufferSize = Math.max(minimum * 2, 3_200);
-                recorder = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                        SAMPLE_RATE, CHANNEL, ENCODING, bufferSize);
-                if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
-                    throw new IllegalStateException("AudioRecord 初始化失败");
-                }
-                recorder.startRecording();
+                speechService = new SpeechService(recognizer, SAMPLE_RATE);
                 running = true;
-                captureThread = new Thread(() -> captureLoop(Math.max(minimum, 1_600)),
-                        "MotionBridgeOfflineVoice");
-                captureThread.start();
+                if (!speechService.startListening(new VoiceListener())) {
+                    throw new IOException("语音服务已经在运行");
+                }
                 call.resolve(formatResult());
             } catch (Exception error) {
-                stopRecorder();
+                stopRecognizer();
                 call.reject("语音模型错误: " + safeMessage(error), error);
             }
         }
@@ -109,7 +94,7 @@ public class NativeAudioPlugin extends Plugin {
 
     @PluginMethod
     public void stop(PluginCall call) {
-        stopRecorder();
+        stopRecognizer();
         call.resolve();
     }
 
@@ -118,34 +103,37 @@ public class NativeAudioPlugin extends Plugin {
                 .put("sampleRate", SAMPLE_RATE)
                 .put("channels", 1)
                 .put("format", "pcm16le")
-                .put("source", "native_vosk")
-                .put("recognizerReady", model != null && recognizer != null);
+                .put("source", "native_vosk_speech_service")
+                .put("recognizerReady", running && model != null && recognizer != null && speechService != null);
     }
 
-    private void captureLoop(int requestedBufferSize) {
-        byte[] buffer = new byte[requestedBufferSize - (requestedBufferSize % 2)];
-        while (running) {
-            AudioRecord activeRecorder = recorder;
-            Recognizer activeRecognizer = recognizer;
-            if (activeRecorder == null || activeRecognizer == null) break;
-            int read = activeRecorder.read(buffer, 0, buffer.length, AudioRecord.READ_BLOCKING);
-            if (read > 0) {
-                if ((read & 1) == 1) read--;
-                if (read <= 0) continue;
-                try {
-                    if (activeRecognizer.acceptWaveForm(buffer, read)) {
-                        emitFinalText(activeRecognizer.getResult());
-                    }
-                } catch (Exception error) {
-                    notifyListeners("audioError", new JSObject().put("message", "语音识别错误: " + safeMessage(error)));
-                    running = false;
-                    break;
-                }
-            } else if (read < 0) {
-                notifyListeners("audioError", new JSObject().put("message", "AudioRecord 读取失败: " + read));
-                running = false;
-                break;
-            }
+    private final class VoiceListener implements RecognitionListener {
+        @Override
+        public void onPartialResult(String hypothesis) {
+            // Partial hypotheses are deliberately kept local; only final text
+            // can become a control command and be sent as voice_text.
+        }
+
+        @Override
+        public void onResult(String hypothesis) {
+            emitFinalText(hypothesis);
+        }
+
+        @Override
+        public void onFinalResult(String hypothesis) {
+            emitFinalText(hypothesis);
+        }
+
+        @Override
+        public void onError(Exception error) {
+            running = false;
+            notifyListeners("audioError", new JSObject().put("message", "语音识别错误: " + safeMessage(error)));
+        }
+
+        @Override
+        public void onTimeout() {
+            running = false;
+            notifyListeners("audioError", new JSObject().put("message", "语音识别超时"));
         }
     }
 
@@ -163,31 +151,29 @@ public class NativeAudioPlugin extends Plugin {
         }
     }
 
-    private void stopRecorder() {
+    /** Stop the official service before closing its recognizer and model. */
+    private void stopRecognizer() {
+        SpeechService activeService;
+        Recognizer activeRecognizer;
+        Model activeModel;
         running = false;
-        AudioRecord activeRecorder;
-        Thread activeThread;
         synchronized (lock) {
-            activeRecorder = recorder;
-            recorder = null;
-            activeThread = captureThread;
-            captureThread = null;
-            if (recognizer != null) {
-                try { recognizer.close(); } catch (Exception ignored) { }
-                recognizer = null;
-            }
-            if (model != null) {
-                try { model.close(); } catch (Exception ignored) { }
-                model = null;
-            }
+            activeService = speechService;
+            speechService = null;
+            activeRecognizer = recognizer;
+            recognizer = null;
+            activeModel = model;
+            model = null;
         }
-        if (activeRecorder != null) {
-            try { activeRecorder.stop(); } catch (IllegalStateException ignored) { }
-            activeRecorder.release();
+        if (activeService != null) {
+            try { activeService.stop(); } catch (Exception ignored) { }
+            try { activeService.shutdown(); } catch (Exception ignored) { }
         }
-        if (activeThread != null && activeThread != Thread.currentThread()) {
-            try { activeThread.join(400); }
-            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+        if (activeRecognizer != null) {
+            try { activeRecognizer.close(); } catch (Exception ignored) { }
+        }
+        if (activeModel != null) {
+            try { activeModel.close(); } catch (Exception ignored) { }
         }
     }
 
@@ -250,7 +236,6 @@ public class NativeAudioPlugin extends Plugin {
         if (!target.exists()) return;
         File[] children = target.listFiles();
         if (children != null) for (File child : children) deleteTree(child);
-        // This is only called for the exact app-private model directory.
         if (!target.delete()) target.deleteOnExit();
     }
 
@@ -261,13 +246,13 @@ public class NativeAudioPlugin extends Plugin {
 
     @Override
     protected void handleOnPause() {
-        stopRecorder();
+        stopRecognizer();
         super.handleOnPause();
     }
 
     @Override
     protected void handleOnDestroy() {
-        stopRecorder();
+        stopRecognizer();
         super.handleOnDestroy();
     }
 }
