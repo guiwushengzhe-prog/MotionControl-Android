@@ -41,26 +41,27 @@ input, select { width: 100%; color: #f5f7f8; background: #080c10; border: 1px so
 button { border: 0; border-radius: 9px; padding: 11px 15px; background: #c8ff38; color: #111704; font: inherit; font-weight: 900; }
 button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; background: transparent; }
 .warning { color: #ffb29d !important; margin-bottom: 0; }
-.runtime-card { pointer-events: auto; position: fixed; z-index: 4; left: 12px; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); }
-.status-row { display: flex; align-items: stretch; gap: 6px; }
-.status-summary { width: auto; flex: 1; min-height: 42px; display: flex; align-items: center; gap: 12px; padding: 9px 13px; border: 1px solid rgba(255,255,255,.18); border-radius: 12px; color: #f5f7f8; background: rgba(8,12,16,.72); backdrop-filter: blur(14px); font-size: 11px; text-align: left; }
-.status-hide, .status-show { color: #d7e0e6; border: 1px solid rgba(255,255,255,.2); background: rgba(8,12,16,.78); backdrop-filter: blur(14px); font-size: 10px; font-weight: 700; white-space: nowrap; }
-.status-hide { padding: 7px 9px; }
-.status-show { position: fixed; z-index: 5; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); padding: 7px 9px; border-radius: 9px; }
-.status-show.hidden { display: none; }
+.runtime-card { pointer-events: auto; position: fixed; z-index: 4; left: 50%; bottom: max(12px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(720px, calc(100vw - 24px)); padding: 12px; border: 1px solid rgba(255,255,255,.2); border-radius: 16px; background: rgba(8,12,16,.86); backdrop-filter: blur(16px); box-shadow: 0 16px 48px rgba(0,0,0,.34); }
+.status-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 14px; min-height: 38px; color: #f5f7f8; font-size: 11px; }
 .status-summary strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-summary span { flex: 0 0 auto; color: #aab5be; white-space: nowrap; }
 .status-summary span b { color: #f5f7f8; font-weight: 800; }
 .status-summary small { max-width: 32vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ffb29d; font-size: 10px; }
-.status-drawer { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 9px; border: 1px solid rgba(255,255,255,.15); border-radius: 12px; background: rgba(8,12,16,.88); backdrop-filter: blur(14px); }
-.status-drawer.hidden { display: none; }
-.runtime-select { min-width: 130px; }
-.runtime-select select { padding: 8px; }
-.drawer-voice { display: flex; align-items: center; gap: 10px; margin-left: auto; color: #f5f7f8; font-size: 11px; }
-.drawer-voice label { display: flex; align-items: center; gap: 6px; }
-.drawer-voice input { width: 16px; height: 16px; margin: 0; accent-color: #c8ff38; }
-.drawer-voice span { color: #aab5be; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-drawer .stop { padding: 9px 13px; }
+.runtime-camera-choice { display: grid; gap: 7px; margin-top: 10px; }
+.control-label { color: #aab5be; font-size: 11px; }
+.camera-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.camera-buttons button { color: #e9f0f4; border: 1px solid #394650; background: #131b23; padding: 10px 12px; touch-action: manipulation; }
+.camera-buttons button.selected { color: #111704; border-color: #c8ff38; background: #c8ff38; }
+.camera-switch-state { min-height: 14px; color: #ffb29d; font-size: 10px; }
+.runtime-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.runtime-voice { display: flex; align-items: center; gap: 10px; margin-right: auto; color: #f5f7f8; font-size: 11px; }
+.runtime-voice label { display: flex; align-items: center; gap: 6px; }
+.runtime-voice input { width: 16px; height: 16px; margin: 0; accent-color: #c8ff38; }
+.runtime-voice span { color: #aab5be; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-hide, .status-show { color: #d7e0e6; border: 1px solid rgba(255,255,255,.2); background: rgba(8,12,16,.78); backdrop-filter: blur(14px); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.status-hide { padding: 9px 11px; }
+.status-show { pointer-events: auto; position: fixed; z-index: 6; right: max(12px, env(safe-area-inset-right)); bottom: calc(max(12px, env(safe-area-inset-bottom)) + 8px); min-width: 76px; min-height: 34px; padding: 7px 10px; border-radius: 9px; touch-action: manipulation; }
+.status-show.hidden { display: none; }
 .guide { position: fixed; z-index: 4; top: 50%; left: 50%; width: min(72vw, 720px); aspect-ratio: 1.25; transform: translate(-50%, -48%); border: 1px dashed rgba(200,255,56,.4); border-radius: 42% 42% 20% 20%; pointer-events: none; }
 .guide span { position: absolute; top: -25px; left: 50%; transform: translateX(-50%); width: max-content; color: #c8ff38; font-size: 10px; }
 .loading { position: fixed; z-index: 7; inset: 0; background: rgba(5,8,11,.9); display: grid; place-content: center; justify-items: center; gap: 15px; }
@@ -92,15 +93,13 @@ button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; backg
 .middle-buttons { display: grid; gap: 10px; }
 @media (orientation: portrait) {
   .guide { width: 82vw; aspect-ratio: .56; }
-  .runtime-card { left: 8px; right: 8px; }
+  .runtime-card { left: 50%; width: calc(100vw - 16px); }
   .status-summary { gap: 7px; padding: 8px 9px; font-size: 10px; }
   .status-hide { padding: 7px 8px; }
   .status-summary span { max-width: 20vw; overflow: hidden; text-overflow: ellipsis; }
-  .status-drawer { flex-wrap: wrap; }
-  .runtime-select { min-width: 0; flex: 1 1 45%; }
-  .runtime-select select { min-width: 0; padding: 8px 6px; }
-  .status-drawer > button { min-width: 0; margin: 0 !important; padding: 9px 8px; }
-  .drawer-voice { margin-left: 0; }
+  .runtime-actions { align-items: stretch; }
+  .runtime-voice { width: 100%; margin-right: 0; }
+  .runtime-actions > button { flex: 1; min-width: 0; padding: 9px 8px; }
   .handheld-card { inset-top: 70px; }
   .gamepad { grid-template-columns: 1fr 1fr; }
   .middle-buttons { grid-column: 1/-1; grid-row: 2; grid-template-columns: 1fr 1fr; }

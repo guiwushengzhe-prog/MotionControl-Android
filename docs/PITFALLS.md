@@ -192,3 +192,7 @@ CameraX/Camera2 原生识别在当前样机上未能证明人体关键点稳定�
 ## 2026-08-21：WebView 固定 Full 模型与单一前置镜像
 
 为避免“摄像头帧率”和“模型是否启动”混淆，摄像头角色固定使用随包的 `pose_landmarker_full.task`，运行前必须完成 FilesetResolver（模型运行时资源解析器）和 PoseLandmarker（姿态识别器）初始化；`window.__motionDebug` 只提供开发诊断，不堆到正式界面。前置画面、骨架和遮罩放在同一 `cameraStage`（取景容器）上，仅容器执行一次水平镜像，发送关键点仍保持未镜像坐标。
+
+## 2026-08-21：Android 构建基线固定为 JDK 21
+
+Android 工程现在以 JDK 21 LTS（长期支持版）作为统一构建基线，`@capacitor/app`（Capacitor 官方应用生命周期插件）的 backButton（系统返回键）实现随 `npx cap sync android` 正常纳入 APK。同步后的 Java source/target compatibility（源码/目标兼容级别）必须保持 21；不要再用旧的 Java 17 修复脚本覆盖生成的 Gradle 配置。
