@@ -188,3 +188,7 @@ Camera2 的 YUV_420_888（安卓相机 YUV 图像格式）不能按紧密排列�
 ## 2026-08-21：摄像头识别路径再次回到 WebView
 
 CameraX/Camera2 原生识别在当前样机上未能证明人体关键点稳定，因此正式路径改回历史上已使用的 WebView（网页视图）`getUserMedia`（网页媒体采集）+ MediaPipe Tasks Vision（网页姿态模型）。视频预览、骨架画布与前置镜像共用同一显示变换；每一帧只允许一次 VIDEO（视频模式）推理，并以视频时间或单调时间戳发送 `pose_frame_v2`（姿态帧协议）。NativeAudio（原生 Vosk 离线语音）和 SensorBridge（手持传感器）保持独立，手持角色不初始化摄像头或姿态模型。
+
+## 2026-08-21：WebView 固定 Full 模型与单一前置镜像
+
+为避免“摄像头帧率”和“模型是否启动”混淆，摄像头角色固定使用随包的 `pose_landmarker_full.task`，运行前必须完成 FilesetResolver（模型运行时资源解析器）和 PoseLandmarker（姿态识别器）初始化；`window.__motionDebug` 只提供开发诊断，不堆到正式界面。前置画面、骨架和遮罩放在同一 `cameraStage`（取景容器）上，仅容器执行一次水平镜像，发送关键点仍保持未镜像坐标。
