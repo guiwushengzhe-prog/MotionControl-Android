@@ -11,7 +11,9 @@ html.native-preview body::after,
 html.native-preview body #app::before,
 html.native-preview body #app::after { background: transparent !important; }
 html.native-preview body #camera { visibility: hidden; background: transparent; }
-#camera, #overlay, .shade { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+#cameraStage { position: fixed; inset: 0; width: 100%; height: 100%; transform-origin: center; }
+#cameraStage.front-mirror { transform: scaleX(-1); }
+#camera, #overlay, .shade { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 #camera { background: radial-gradient(circle at center, #17242b, #080b0f 70%); }
 #overlay { z-index: 2; background: transparent; }
 .shade { z-index: 3; pointer-events: none; background: linear-gradient(180deg, rgba(0,0,0,.64), transparent 30%, transparent 65%, rgba(0,0,0,.72)); }
