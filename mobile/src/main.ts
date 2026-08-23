@@ -23,10 +23,14 @@ type MotionDebug = {
   lastInferenceMs: number;
 };
 declare global { interface Window { __motionDebug: MotionDebug; } }
+type LocalVoiceText = { text: string; rawText?: string; final: boolean; recognizer: string; recognizedAtMs: number };
+type LocalVoiceCommand = { commandId: string; phrase: string; recognizer: string; recognizedAtMs: number };
 type NativeAudioApi = {
-  start(): Promise<{ sampleRate: number; channels: number; format: string; source: string; recognizerReady: boolean }>;
+  start(): Promise<{ sampleRate: number; channels: number; format: string; source: string; recognizerReady: boolean; audioReady: boolean }>;
   stop(): Promise<void>;
-  addListener(eventName: "voiceText", listener: (event: { text: string; confidence?: number; final: boolean }) => void): Promise<PluginListenerHandle>;
+  addListener(eventName: "voiceCommand", listener: (event: LocalVoiceCommand) => void): Promise<PluginListenerHandle>;
+  addListener(eventName: "voiceText", listener: (event: LocalVoiceText) => void): Promise<PluginListenerHandle>;
+  addListener(eventName: "voiceState", listener: (event: { state: string; message: string }) => void): Promise<PluginListenerHandle>;
   addListener(eventName: "audioError", listener: (event: { message: string }) => void): Promise<PluginListenerHandle>;
 };
 const NativeAudio = registerPlugin<NativeAudioApi>("NativeAudio");
@@ -35,20 +39,20 @@ const SensorBridge = registerPlugin<{ start(): Promise<void>; getLatest(): Promi
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <div id="cameraStage"><video id="camera" autoplay playsinline muted></video><canvas id="overlay"></canvas><div class="shade"></div><canvas id="inferenceCanvas" aria-hidden="true"></canvas></div>
-  <header><div><p>MOTIONBRIDGE 0.8.1</p><h1 id="pageTitle">体感控制</h1></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
+  <header><div><p>MOTIONBRIDGE 0.9.5</p><h1 id="pageTitle">体感控制</h1></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
   <main>
     <section class="setup-card role-card" id="roleCard"><h2>选择角色</h2><div class="role-grid"><button id="cameraRole">摄像头</button><button id="handheldRole">手持手柄</button></div></section>
     <section class="setup-card hidden" id="setupCard">
       <div class="card-head"><h2>摄像头</h2><button id="cameraHome" class="text-button">返回首页</button></div>
       <label>电脑服务器地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑地址:8765/ws/input"></label>
       <label>镜头<select id="cameraDeviceSelect"><option value="__auto__">自动</option></select></label>
-      <label>识别模型<select id="modelSelect"><option value="full">Full（精度）</option><option value="lite">Lite（流畅）</option></select></label>
-      <div class="actions"><button id="startButton">开始识别</button></div><p class="warning" id="securityWarning"></p>
+      <label class="technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option><option value="lite">Lite（流畅）</option></select></label>
+      <div class="actions"><button id="startButton">开始体感</button></div><p class="warning" id="securityWarning"></p>
     </section>
     <section class="runtime-card hidden" id="runtimeCard">
-      <div class="status-summary"><strong id="sendState">等待完整人体</strong><span>连接 <b id="panelConnection">未连接电脑</b></span><span>摄像头 <b id="cameraFps">0 FPS</b></span><span>识别 <b id="localFps">0 FPS</b></span><span>单人</span><span id="modelStatus">Full33</span><span id="delegateStatus">—</span><small id="modelError"></small></div>
+      <div class="status-summary"><strong id="sendState">等待完整人体</strong><span>连接 <b id="panelConnection">未连接电脑</b></span><span class="technical">摄像头 <b id="cameraFps">0 FPS</b></span><span class="technical">识别 <b id="localFps">0 FPS</b></span><span>单人</span><span class="technical" id="modelStatus">Full33</span><span class="technical" id="delegateStatus">—</span><small class="technical" id="modelError"></small></div>
       <div class="runtime-camera-choice"><span class="control-label">镜头</span><div class="camera-buttons" role="group" aria-label="选择镜头"><button id="frontCameraButton" type="button" aria-pressed="false">前置镜头</button><button id="backCameraButton" type="button" aria-pressed="false">后置镜头</button></div><small id="cameraSwitchState" class="camera-switch-state"></small></div>
-      <div class="runtime-actions"><div class="runtime-voice" id="voiceControl"><label><input id="voiceToggle" type="checkbox">语音控制</label><span id="voiceState">关闭</span></div><button id="stopButton" class="stop">停止识别</button><button id="hideStatus" class="status-hide" type="button">隐藏控制</button></div>
+      <div class="runtime-actions"><div class="runtime-voice" id="voiceControl"><label><input id="voiceToggle" type="checkbox">语音控制</label><span id="voiceState">关闭</span></div><button id="stopButton" class="stop">停止体感</button><button id="hideStatus" class="status-hide" type="button">隐藏控制</button></div>
     </section>
     <button id="showStatus" class="status-show hidden" type="button">显示控制</button>
     <section class="handheld-card hidden" id="handheldCard">
@@ -91,7 +95,9 @@ let handheldSocket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let handheldTimer: number | null = null;
 let wakeLock: WakeLockSentinel | null = null;
+let nativeVoiceCommandListener: PluginListenerHandle | null = null;
 let nativeVoiceTextListener: PluginListenerHandle | null = null;
+let nativeVoiceStateListener: PluginListenerHandle | null = null;
 let nativeAudioErrorListener: PluginListenerHandle | null = null;
 let running = false;
 let activeRole: "home" | "camera" | "handheld" = "home";
@@ -163,8 +169,48 @@ function cameraRatioProfiles(): CameraRatioProfile[] { return [{ width: 540, hei
 async function startCamera(): Promise<void> { clearWebCamera(); await new Promise((resolve) => setTimeout(resolve, 100)); const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } }; stream = null; for (const profile of cameraRatioProfiles()) { try { stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height }, aspectRatio: { exact: profile.ratio }, frameRate: { ideal: TARGET_FPS, max: TARGET_FPS } } }); break; } catch { /* Try the 4:3 fallback, then the device default below. */ } } if (!stream) stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 540 }, height: { ideal: 960 }, frameRate: { ideal: TARGET_FPS, max: TARGET_FPS } } }); const track = stream.getVideoTracks()[0]; try { await track.applyConstraints({ frameRate: { ideal: TARGET_FPS, max: TARGET_FPS } }); } catch { /* Some WebView camera providers ignore frame-rate constraints; keep the real value. */ } const settings = track.getSettings(); if (settings.deviceId) selectedCameraDeviceId = settings.deviceId; if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode; motionDebug.facingMode = facingMode; updateCameraButtons(); video.style.display = "block"; video.srcObject = stream; await video.play(); if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效"); motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight; await refreshCameraDevices(); resizeCanvas(); applyMirror(); startCameraFrameCounter(); }
 
 async function start(): Promise<void> { try { const socketUrl = normalizeSocketUrl(serverInput.value); serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); await loadPoseModel(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); connectSocket(socketUrl); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; requestAnimationFrame(predict); } catch (error) { setConnection("error"); alert(error instanceof Error ? error.message : String(error)); await stop(); } }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); if (voiceEnabled) setVoiceStatus("listening", "正在听"); syncClock(); }); socket.addEventListener("close", () => { setConnection("offline"); if (voiceEnabled) void stopVoiceControl(); if (running) reconnectTimer = window.setTimeout(() => connectSocket(url), 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; }); }
+function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); if (voiceEnabled) setVoiceStatus("listening", "正在听"); syncClock(); }); socket.addEventListener("close", () => { setConnection("offline"); if (voiceEnabled) void stopVoiceControl(); if (running) reconnectTimer = window.setTimeout(() => connectSocket(url), 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
 function syncClock(): void { if (socket?.readyState !== WebSocket.OPEN) return; lastClockSyncAt = performance.now(); socket.send(JSON.stringify({ type: "clock_sync", client_sent_ms: lastClockSyncAt })); }
+
+function jpegPayloadBytes(base64: string): number {
+  return Math.floor(base64.length * 3 / 4);
+}
+
+async function sendSceneSnapshot(request: any): Promise<void> {
+  if (!running || video.readyState < 2 || !video.videoWidth || !video.videoHeight || socket?.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  const maxWidth = Math.max(320, Math.min(1280, Number(request?.max_width || 960)));
+  let quality = Math.max(0.55, Math.min(0.95, Number(request?.jpeg_quality || 88) / 100));
+  let scale = Math.min(1, maxWidth / Math.max(video.videoWidth, video.videoHeight));
+  let jpeg = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const width = Math.max(1, Math.round(video.videoWidth * scale));
+    const height = Math.max(1, Math.round(video.videoHeight * scale));
+    const snapshot = document.createElement("canvas");
+    snapshot.width = width;
+    snapshot.height = height;
+    snapshot.getContext("2d", { alpha: false })!.drawImage(video, 0, 0, width, height);
+    jpeg = snapshot.toDataURL("image/jpeg", quality).split(",", 2)[1] || "";
+    if (jpeg && jpegPayloadBytes(jpeg) <= 700_000) break;
+    scale *= 0.84;
+    quality = Math.max(0.60, quality - 0.07);
+  }
+  if (!jpeg) return;
+  socket.send(JSON.stringify({
+    type: "scene_snapshot",
+    role: "camera",
+    device_id: deviceId,
+    purpose: request?.purpose || "capture",
+    captured_at_ms: Date.now() + serverClockOffsetMs,
+    width: video.videoWidth,
+    height: video.videoHeight,
+    camera_facing: facingMode,
+    preview_mirrored: facingMode === "user",
+    coordinates_mirrored: false,
+    jpeg_base64: jpeg,
+  }));
+}
 
 function compactLandmarks(points: NormalizedLandmark[]): NormalizedLandmark[] { return points.map(({ x, y, z, visibility }) => ({ x, y, z, visibility: visibility ?? 1 })); }
 function resizeInferenceCanvas(): void { const sourceWidth = video.videoWidth; const sourceHeight = video.videoHeight; if (!sourceWidth || !sourceHeight) return; const scale = Math.min(1, 640 / Math.max(sourceWidth, sourceHeight)); const width = Math.max(1, Math.round(sourceWidth * scale)); const height = Math.max(1, Math.round(sourceHeight * scale)); if (inferenceCanvas.width !== width || inferenceCanvas.height !== height) { inferenceCanvas.width = width; inferenceCanvas.height = height; } inferenceContext.drawImage(video, 0, 0, width, height); }
@@ -176,8 +222,8 @@ function cameraFrame(): void { if (!cameraFrameLoop || !stream) return; cameraFr
 function startCameraFrameCounter(): void { cameraFrameLoop = typeof video.requestVideoFrameCallback === "function"; cameraFrameCount = 0; cameraFpsStarted = performance.now(); if (cameraFrameLoop) video.requestVideoFrameCallback(() => cameraFrame()); }
 function applyMirror(): void { document.querySelector<HTMLElement>("#cameraStage")?.classList.toggle("front-mirror", facingMode === "user"); }
 
-async function stopVoiceControl(showOff = true): Promise<void> { voiceEnabled = false; await nativeVoiceTextListener?.remove().catch(() => {}); await nativeAudioErrorListener?.remove().catch(() => {}); nativeVoiceTextListener = null; nativeAudioErrorListener = null; lastVoiceText = ""; await NativeAudio.stop().catch(() => {}); if (showOff) { voiceToggle.checked = false; setVoiceStatus("off"); } }
-async function startVoiceControl(): Promise<void> { if (activeRole !== "camera") { voiceToggle.checked = false; setVoiceStatus("error", "仅摄像头可用"); return; } if (voiceEnabled) return; setVoiceStatus("connecting"); try { const ready = await NativeAudio.start(); if (!ready.recognizerReady) throw new Error("语音模型错误"); voiceEnabled = true; nativeVoiceTextListener = await NativeAudio.addListener("voiceText", (event) => { if (!event.text) return; lastVoiceText = event.text; setVoiceStatus("listening", event.text); if (event.final && socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 256000) { const frame: Record<string, unknown> = { type: "voice_text", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, text: event.text }; if (event.confidence != null) frame.confidence = event.confidence; socket.send(JSON.stringify(frame)); } }); nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => { setVoiceStatus("error", event.message || "语音错误"); void stopVoiceControl(false); }); setVoiceStatus("listening", socket?.readyState === WebSocket.OPEN ? "正在听" : "未连接电脑"); } catch (error) { const message = error instanceof Error ? error.message : String(error); const denied = /未授权|permission|denied/i.test(message); await stopVoiceControl(false); voiceToggle.checked = false; setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : /模型|model|recognizer|vosk/i.test(message) ? "模型错误" : message || "错误"); } }
+async function stopVoiceControl(showOff = true): Promise<void> { voiceEnabled = false; await nativeVoiceCommandListener?.remove().catch(() => {}); await nativeVoiceTextListener?.remove().catch(() => {}); await nativeVoiceStateListener?.remove().catch(() => {}); await nativeAudioErrorListener?.remove().catch(() => {}); nativeVoiceCommandListener = null; nativeVoiceTextListener = null; nativeVoiceStateListener = null; nativeAudioErrorListener = null; lastVoiceText = ""; await NativeAudio.stop().catch(() => {}); if (showOff) { voiceToggle.checked = false; setVoiceStatus("off"); } }
+async function startVoiceControl(): Promise<void> { if (activeRole !== "camera") { voiceToggle.checked = false; setVoiceStatus("error", "仅摄像头可用"); return; } if (voiceEnabled) return; if (socket?.readyState !== WebSocket.OPEN) { voiceToggle.checked = false; setVoiceStatus("error", "请先连接电脑"); return; } setVoiceStatus("connecting", "加载手机语音模型"); try { const ready = await NativeAudio.start(); if (!ready.recognizerReady) throw new Error("语音模型错误"); voiceEnabled = true; nativeVoiceCommandListener = await NativeAudio.addListener("voiceCommand", (event) => { const phrase = (event.phrase || "").trim(); const commandId = (event.commandId || "").trim(); if (!voiceEnabled || !phrase) return; setVoiceStatus("listening", `识别：${phrase}`); if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "电脑已断开"); return; } const frame: Record<string, unknown> = { type: "voice_command", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, command_id: commandId, phrase, source: "android_sherpa_command_kws_v094" }; socket.send(JSON.stringify(frame)); }); nativeVoiceStateListener = await NativeAudio.addListener("voiceState", (event) => { if (!voiceEnabled) return; const detail = event.message || (event.state === "command" ? "已识别命令" : event.state === "listening" ? "语音识别已就绪" : "等待语音"); setVoiceStatus(event.state === "connecting" ? "connecting" : "listening", detail); }); nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => { setVoiceStatus("error", event.message || "手机语音错误"); void stopVoiceControl(false); }); setVoiceStatus("listening", "语音识别已就绪"); } catch (error) { const message = error instanceof Error ? error.message : String(error); const denied = /未授权|permission|denied/i.test(message); await stopVoiceControl(false); voiceToggle.checked = false; setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : /模型|model|recognizer|vosk/i.test(message) ? "模型错误" : message || "错误"); } }
 
 async function stop(): Promise<void> { running = false; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline"); }
 async function chooseCamera(cameraId: string): Promise<void> { selectedCameraDeviceId = cameraId; cameraDeviceSelect.value = cameraId; if (running) await startCamera(); applyMirror(); }
