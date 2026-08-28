@@ -1,4 +1,4 @@
-const CACHE = "motionbridge-mobile-v3";
+const CACHE = "motioncontrol-mobile-1.00";
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(["./", "./manifest.webmanifest", "./icon.svg"])));
 });

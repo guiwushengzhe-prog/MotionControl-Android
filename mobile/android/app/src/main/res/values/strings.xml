@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">体感桥摄像头</string>
-    <string name="title_activity_main">体感桥摄像头</string>
+    <string name="app_name">MotionControl 手机端</string>
+    <string name="title_activity_main">MotionControl 手机端</string>
     <string name="package_name">cn.motionbridge.camera</string>
     <string name="custom_url_scheme">cn.motionbridge.camera</string>
 </resources>

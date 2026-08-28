@@ -6,6 +6,16 @@ import "./style.css";
 type ConnectionState = "offline" | "connecting" | "online" | "error";
 type VoiceStatus = "off" | "connecting" | "listening" | "error" | "unauthorized";
 type ModelChoice = "full" | "lite";
+type SyncedAction = { type?: string; target?: string; behavior?: string };
+type SyncedBinding = { label?: string; action?: SyncedAction; disabled?: boolean };
+type ControlConfigV1 = {
+  type: "control_config_v1";
+  version?: string;
+  game?: { id?: string; name?: string; appid?: number | null };
+  bindings?: { zones?: Record<string, SyncedBinding>; motions?: Record<string, SyncedBinding>; poses?: Record<string, SyncedBinding>; voice?: Record<string, SyncedBinding> };
+  zones?: Record<string, unknown>;
+  vertical_look?: Record<string, unknown>;
+};
 type SensorSample = { qx: number; qy: number; qz: number; qw: number; gx: number; gy: number; gz: number; ax: number; ay: number; az: number; timestamp: number; running: boolean };
 type MotionDebug = {
   videoReady: boolean;
@@ -23,12 +33,10 @@ type MotionDebug = {
   lastInferenceMs: number;
 };
 declare global { interface Window { __motionDebug: MotionDebug; } }
-type LocalVoiceText = { text: string; rawText?: string; final: boolean; recognizer: string; recognizedAtMs: number };
-type LocalVoiceCommand = { commandId: string; phrase: string; recognizer: string; recognizedAtMs: number };
+type LocalVoiceText = { text: string; confidence?: number; final: boolean; recognizer: string; recognizedAtMs: number };
 type NativeAudioApi = {
   start(): Promise<{ sampleRate: number; channels: number; format: string; source: string; recognizerReady: boolean; audioReady: boolean }>;
   stop(): Promise<void>;
-  addListener(eventName: "voiceCommand", listener: (event: LocalVoiceCommand) => void): Promise<PluginListenerHandle>;
   addListener(eventName: "voiceText", listener: (event: LocalVoiceText) => void): Promise<PluginListenerHandle>;
   addListener(eventName: "voiceState", listener: (event: { state: string; message: string }) => void): Promise<PluginListenerHandle>;
   addListener(eventName: "audioError", listener: (event: { message: string }) => void): Promise<PluginListenerHandle>;
@@ -39,25 +47,32 @@ const SensorBridge = registerPlugin<{ start(): Promise<void>; getLatest(): Promi
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <div id="cameraStage"><video id="camera" autoplay playsinline muted></video><canvas id="overlay"></canvas><div class="shade"></div><canvas id="inferenceCanvas" aria-hidden="true"></canvas></div>
-  <header><div><p>MOTIONBRIDGE 0.9.5</p><h1 id="pageTitle">体感控制</h1></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
+  <header class="app-header"><div class="mobile-brand"><p>MOTIONCONTROL 1.00</p><h1 id="pageTitle">手机控制端</h1><small>固定摄像头 · 手持控制器</small></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
   <main>
-    <section class="setup-card role-card" id="roleCard"><h2>选择角色</h2><div class="role-grid"><button id="cameraRole">摄像头</button><button id="handheldRole">手持手柄</button></div></section>
+    <section class="setup-card role-card" id="roleCard">
+      <span class="eyebrow">开始</span><h2>这台手机要做什么？</h2><p class="role-lead">固定在玩家前方时选“摄像头”；拿在手里时选“手持手柄”。</p>
+      <div class="role-grid"><button id="cameraRole" class="role-option recommended"><span class="role-symbol">●</span><strong>固定摄像头</strong><small>推荐 · 识别人和动作</small></button><button id="handheldRole" class="role-option"><span class="role-symbol">◆</span><strong>手持手柄</strong><small>陀螺仪 + 虚拟按键</small></button></div>
+    </section>
     <section class="setup-card hidden" id="setupCard">
-      <div class="card-head"><h2>摄像头</h2><button id="cameraHome" class="text-button">返回首页</button></div>
-      <label>电脑服务器地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑地址:8765/ws/input"></label>
-      <label>镜头<select id="cameraDeviceSelect"><option value="__auto__">自动</option></select></label>
+      <div class="card-head"><div><span class="eyebrow">摄像头模式</span><h2>连接电脑</h2></div><button id="cameraHome" class="text-button">返回</button></div>
+      <p class="setup-help">电脑端保持 MotionControl 打开，填写它显示的局域网地址即可。以后会自动记住。</p>
+      <label>电脑地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label>
+      <label>使用镜头<select id="cameraDeviceSelect"><option value="__auto__">自动选择</option></select></label>
       <label class="technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option><option value="lite">Lite（流畅）</option></select></label>
-      <div class="actions"><button id="startButton">开始体感</button></div><p class="warning" id="securityWarning"></p>
+      <div class="actions"><button id="startButton" class="start-primary">连接并开始</button></div><p class="warning" id="securityWarning"></p>
     </section>
     <section class="runtime-card hidden" id="runtimeCard">
-      <div class="status-summary"><strong id="sendState">等待完整人体</strong><span>连接 <b id="panelConnection">未连接电脑</b></span><span class="technical">摄像头 <b id="cameraFps">0 FPS</b></span><span class="technical">识别 <b id="localFps">0 FPS</b></span><span>单人</span><span class="technical" id="modelStatus">Full33</span><span class="technical" id="delegateStatus">—</span><small class="technical" id="modelError"></small></div>
-      <div class="runtime-camera-choice"><span class="control-label">镜头</span><div class="camera-buttons" role="group" aria-label="选择镜头"><button id="frontCameraButton" type="button" aria-pressed="false">前置镜头</button><button id="backCameraButton" type="button" aria-pressed="false">后置镜头</button></div><small id="cameraSwitchState" class="camera-switch-state"></small></div>
-      <div class="runtime-actions"><div class="runtime-voice" id="voiceControl"><label><input id="voiceToggle" type="checkbox">语音控制</label><span id="voiceState">关闭</span></div><button id="stopButton" class="stop">停止体感</button><button id="hideStatus" class="status-hide" type="button">隐藏控制</button></div>
+      <div class="runtime-primary"><div><span class="eyebrow">识别状态</span><strong id="sendState">等待完整人体</strong></div><span class="runtime-link">电脑 <b id="panelConnection">未连接</b></span></div>
+      <div class="profile-sync" id="cameraProfileSync"><div class="profile-sync-head"><span>当前游戏</span><b id="cameraProfileGame">等待电脑同步</b><small id="cameraProfileState">未同步</small></div><div id="cameraProfileCoverage" class="profile-coverage">等待映射</div><div class="profile-sync-bindings" id="cameraProfileBindings"></div></div>
+      <div class="technical runtime-tech"><span>摄像头 <b id="cameraFps">0 FPS</b></span><span>识别 <b id="localFps">0 FPS</b></span><span id="modelStatus">Full33</span><span id="delegateStatus">—</span><small id="modelError"></small></div>
+      <div class="runtime-camera-choice"><span class="control-label">镜头方向</span><div class="camera-buttons" role="group" aria-label="选择镜头"><button id="frontCameraButton" type="button" aria-pressed="false">前置</button><button id="backCameraButton" type="button" aria-pressed="false">后置</button></div><small id="cameraSwitchState" class="camera-switch-state"></small></div>
+      <div class="runtime-actions"><div class="runtime-voice" id="voiceControl"><label><input id="voiceToggle" type="checkbox"><span>语音控制</span></label><span id="voiceState">关闭</span></div><button id="hideStatus" class="status-hide" type="button">沉浸显示</button><button id="stopButton" class="stop">停止</button></div>
     </section>
     <button id="showStatus" class="status-show hidden" type="button">显示控制</button>
     <section class="handheld-card hidden" id="handheldCard">
-      <div class="handheld-top handheld-connection-row"><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><label>电脑服务器地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑地址:8765/ws/input"></label></div>
-      <div class="handheld-top"><label>绑定玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span><b id="sensorFps">0 FPS</b><small id="sensorState">等待传感器</small></span><button id="centerSensor">重新居中</button><button id="stopHandheld" class="stop">停止手柄</button></div>
+      <div class="handheld-top handheld-connection-row"><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><label>电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label></div>
+      <div class="profile-sync handheld-profile-sync" id="handheldProfileSync"><div class="profile-sync-head"><span>当前游戏</span><b id="handheldProfileGame">等待电脑同步</b><small id="handheldProfileState">未同步</small></div><div id="handheldProfileCoverage" class="profile-coverage">等待映射</div><div class="profile-sync-bindings" id="handheldProfileBindings"></div></div>
+      <div class="handheld-top"><label>玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span><b id="sensorFps">0 FPS</b><small id="sensorState">等待传感器</small></span><button id="centerSensor">重新居中</button><button id="stopHandheld" class="stop">停止</button></div>
       <div class="shoulders"><button data-pad="l">LB</button><button data-pad="zl">LT</button><button data-pad="zr">RT</button><button data-pad="r">RB</button></div><div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div></div>
     </section>
   </main>
@@ -80,6 +95,7 @@ const handheldCard = document.querySelector<HTMLElement>("#handheldCard")!;
 const badge = document.querySelector<HTMLElement>("#connectionBadge")!;
 const voiceControl = document.querySelector<HTMLElement>("#voiceControl")!;
 const voiceToggle = document.querySelector<HTMLInputElement>("#voiceToggle")!;
+voiceToggle.checked = localStorage.getItem("motionbridge-voice-auto") !== "0";
 const voiceStateLabel = document.querySelector<HTMLElement>("#voiceState")!;
 const hideStatus = document.querySelector<HTMLButtonElement>("#hideStatus")!;
 const showStatus = document.querySelector<HTMLButtonElement>("#showStatus")!;
@@ -95,7 +111,6 @@ let handheldSocket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let handheldTimer: number | null = null;
 let wakeLock: WakeLockSentinel | null = null;
-let nativeVoiceCommandListener: PluginListenerHandle | null = null;
 let nativeVoiceTextListener: PluginListenerHandle | null = null;
 let nativeVoiceStateListener: PluginListenerHandle | null = null;
 let nativeAudioErrorListener: PluginListenerHandle | null = null;
@@ -107,7 +122,6 @@ let modelChoice: ModelChoice = localStorage.getItem("motionbridge-model") === "l
 let cameraDevices: MediaDeviceInfo[] = [];
 let voiceEnabled = false;
 let voiceState: VoiceStatus = "off";
-let lastVoiceText = "";
 let sequence = 0;
 let lastVideoTime = -1;
 let lastInferenceAt = 0;
@@ -126,8 +140,90 @@ let handheldFrames = 0;
 let handheldFpsStarted = performance.now();
 let sensorPolling = false;
 let stickState = { x: 0, y: 0 };
-const TARGET_FPS = 35;
-const TARGET_FRAME_INTERVAL_MS = 1000 / TARGET_FPS;
+const CONTROL_CONFIG_STORAGE_KEY = "motionbridge-control-config-v1";
+let syncedControlConfig: ControlConfigV1 | null = loadCachedControlConfig();
+let controlConfigFresh = false;
+const ZONE_SYNC_ORDER = [
+  ["leftHandUpper", "左手上", "Y"],
+  ["leftHandLower", "左手下", "X"],
+  ["rightHandUpper", "右手上", "B"],
+  ["rightHandLower", "右手下", "A"],
+  ["leftFoot", "左脚", "LB"],
+  ["rightFoot", "右脚", "RB"],
+] as const;
+function loadCachedControlConfig(): ControlConfigV1 | null {
+  try {
+    const raw = localStorage.getItem(CONTROL_CONFIG_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ControlConfigV1;
+    return parsed?.type === "control_config_v1" ? parsed : null;
+  } catch { return null; }
+}
+function actionText(action: SyncedAction | undefined, fallback: string): string {
+  const type = String(action?.type || "");
+  const target = String(action?.target || "").toUpperCase();
+  if (!type || !target) return `默认 ${fallback}`;
+  if (type === "keyboard") return `键盘 ${target}`;
+  if (type === "mouse_button") return `鼠标 ${{ LEFT: "左键", RIGHT: "右键", MIDDLE: "中键", X1: "侧键1", X2: "侧键2" }[target as "LEFT" | "RIGHT" | "MIDDLE" | "X1" | "X2"] || target}`;
+  if (type === "mouse_wheel") return `滚轮 ${target.includes("UP") ? "↑" : target.includes("DOWN") ? "↓" : target}`;
+  if (type === "gamepad_axis") return `左摇杆 ${target.endsWith("UP") ? "↑" : target.endsWith("DOWN") ? "↓" : target.endsWith("LEFT") ? "←" : target.endsWith("RIGHT") ? "→" : target}`;
+  if (type === "gamepad_trigger") return `Xbox ${target}`;
+  if (type === "gamepad") return `Xbox ${target}`;
+  return `${type} ${target}`;
+}
+function renderControlConfig(): void {
+  const config = syncedControlConfig;
+  const gameName = config?.game?.name || config?.game?.id || "等待电脑同步";
+  const state = config ? (controlConfigFresh ? "已同步" : "缓存") : "未同步";
+  const zones = config?.bindings?.zones || {};
+  const motionCount = Object.keys(config?.bindings?.motions || {}).length;
+  const poseCount = Object.keys(config?.bindings?.poses || {}).length;
+  const voiceCount = Object.keys(config?.bindings?.voice || {}).length;
+  const zoneCount = Object.keys(zones).length;
+  const coverageText = config ? `${zoneCount} 区域 · ${motionCount + poseCount} 动作 · ${voiceCount} 语音` : "等待映射";
+  const bindingHtml = ZONE_SYNC_ORDER.map(([id, label, fallback]) => {
+    const binding = zones[id];
+    const text = binding?.disabled ? "关闭" : actionText(binding?.action, fallback);
+    return `<span><i>${label}</i><b>${text}</b></span>`;
+  }).join("");
+  for (const [gameId, stateId, bindingsId, coverageId] of [["cameraProfileGame", "cameraProfileState", "cameraProfileBindings", "cameraProfileCoverage"], ["handheldProfileGame", "handheldProfileState", "handheldProfileBindings", "handheldProfileCoverage"]] as const) {
+    const game = document.querySelector<HTMLElement>(`#${gameId}`);
+    const stateEl = document.querySelector<HTMLElement>(`#${stateId}`);
+    const bindings = document.querySelector<HTMLElement>(`#${bindingsId}`);
+    const coverage = document.querySelector<HTMLElement>(`#${coverageId}`);
+    if (game) game.textContent = gameName;
+    if (stateEl) { stateEl.textContent = state; stateEl.className = controlConfigFresh ? "fresh" : config ? "cached" : ""; }
+    if (coverage) coverage.textContent = coverageText;
+    if (bindings) bindings.innerHTML = bindingHtml;
+  }
+}
+function applyControlConfig(message: unknown): void {
+  if (!message || typeof message !== "object" || (message as { type?: string }).type !== "control_config_v1") return;
+  syncedControlConfig = message as ControlConfigV1;
+  controlConfigFresh = true;
+  try { localStorage.setItem(CONTROL_CONFIG_STORAGE_KEY, JSON.stringify(syncedControlConfig)); } catch { /* Cache is optional. */ }
+  renderControlConfig();
+}
+function markControlConfigCached(): void {
+  if (!syncedControlConfig) return;
+  controlConfigFresh = false;
+  renderControlConfig();
+}
+
+const CAMERA_TARGET_FPS = 30;
+const MAX_INFERENCE_FPS = 28;
+const MIN_INFERENCE_INTERVAL_MS = 1000 / MAX_INFERENCE_FPS;
+const OVERLAY_INTERVAL_MS = 100; // 10 FPS visual skeleton; control data stays high-rate.
+const MAX_SOCKET_BUFFERED_BYTES = 8 * 1024;
+const CONTROL_POINT_INDICES = [0,2,3,5,6,7,8,9,10,11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32] as const;
+let inferenceMaxSide = 512;
+let inferenceEwmaMs = 0;
+let lastInferenceResizeAt = 0;
+let lastOverlayAt = 0;
+let drawingUtils: DrawingUtils | null = null;
+let networkDroppedFrames = 0;
+let overlayRenderingEnabled = true;
+let lastSendStateText = "";
 const padState = new Set<string>();
 const motionDebug: MotionDebug = window.__motionDebug = {
   videoReady: false,
@@ -165,11 +261,11 @@ async function loadPoseModel(): Promise<void> { document.querySelector("#loading
 function updateCameraButtons(): void { const front = facingMode === "user"; frontCameraButton.classList.toggle("selected", front); backCameraButton.classList.toggle("selected", !front); frontCameraButton.setAttribute("aria-pressed", String(front)); backCameraButton.setAttribute("aria-pressed", String(!front)); }
 async function refreshCameraDevices(): Promise<void> { cameraDevices = (await navigator.mediaDevices.enumerateDevices()).filter((item) => item.kind === "videoinput"); const options = ["<option value=\"__auto__\">自动</option>", ...cameraDevices.map((item, index) => { const lower = item.label.toLowerCase(); const name = lower.includes("front") || lower.includes("user") || lower.includes("前") ? "前置" : lower.includes("back") || lower.includes("environment") || lower.includes("后") ? "后置" : item.label || `镜头 ${index + 1}`; return `<option value=\"${item.deviceId}\">${name}</option>`; })].join(""); cameraDeviceSelect.innerHTML = options; if (!cameraDevices.some((item) => item.deviceId === selectedCameraDeviceId)) selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = selectedCameraDeviceId; }
 type CameraRatioProfile = { width: number; height: number; ratio: number };
-function cameraRatioProfiles(): CameraRatioProfile[] { return [{ width: 540, height: 960, ratio: 9 / 16 }, { width: 480, height: 640, ratio: 3 / 4 }]; }
-async function startCamera(): Promise<void> { clearWebCamera(); await new Promise((resolve) => setTimeout(resolve, 100)); const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } }; stream = null; for (const profile of cameraRatioProfiles()) { try { stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height }, aspectRatio: { exact: profile.ratio }, frameRate: { ideal: TARGET_FPS, max: TARGET_FPS } } }); break; } catch { /* Try the 4:3 fallback, then the device default below. */ } } if (!stream) stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 540 }, height: { ideal: 960 }, frameRate: { ideal: TARGET_FPS, max: TARGET_FPS } } }); const track = stream.getVideoTracks()[0]; try { await track.applyConstraints({ frameRate: { ideal: TARGET_FPS, max: TARGET_FPS } }); } catch { /* Some WebView camera providers ignore frame-rate constraints; keep the real value. */ } const settings = track.getSettings(); if (settings.deviceId) selectedCameraDeviceId = settings.deviceId; if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode; motionDebug.facingMode = facingMode; updateCameraButtons(); video.style.display = "block"; video.srcObject = stream; await video.play(); if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效"); motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight; await refreshCameraDevices(); resizeCanvas(); applyMirror(); startCameraFrameCounter(); }
+function cameraRatioProfiles(): CameraRatioProfile[] { return [{ width: 480, height: 854, ratio: 9 / 16 }, { width: 480, height: 640, ratio: 3 / 4 }]; }
+async function startCamera(): Promise<void> { clearWebCamera(); await new Promise((resolve) => setTimeout(resolve, 100)); const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } }; stream = null; for (const profile of cameraRatioProfiles()) { try { stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height }, aspectRatio: { exact: profile.ratio }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); break; } catch { /* Try the 4:3 fallback, then the device default below. */ } } if (!stream) stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 480 }, height: { ideal: 854 }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); const track = stream.getVideoTracks()[0]; try { await track.applyConstraints({ frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } }); } catch { /* Some WebView camera providers ignore frame-rate constraints; keep the real value. */ } const settings = track.getSettings(); if (settings.deviceId) selectedCameraDeviceId = settings.deviceId; if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode; motionDebug.facingMode = facingMode; updateCameraButtons(); video.style.display = "block"; video.srcObject = stream; await video.play(); if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效"); motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight; await refreshCameraDevices(); resizeCanvas(); applyMirror(); startCameraFrameCounter(); }
 
-async function start(): Promise<void> { try { const socketUrl = normalizeSocketUrl(serverInput.value); serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); await loadPoseModel(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); connectSocket(socketUrl); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; if (!cameraFrameLoop) requestAnimationFrame(predict); } catch (error) { setConnection("error"); alert(error instanceof Error ? error.message : String(error)); await stop(); } }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); if (voiceEnabled) setVoiceStatus("listening", "正在听"); syncClock(); }); socket.addEventListener("close", () => { setConnection("offline"); if (voiceEnabled) void stopVoiceControl(); if (running) reconnectTimer = window.setTimeout(() => connectSocket(url), 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
+async function start(): Promise<void> { try { overlayRenderingEnabled = true; lastSendStateText = ""; const socketUrl = normalizeSocketUrl(serverInput.value); serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); await loadPoseModel(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); connectSocket(socketUrl); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; schedulePredict(); } catch (error) { setConnection("error"); alert(error instanceof Error ? error.message : String(error)); await stop(); } }
+function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { setConnection("offline"); markControlConfigCached(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => connectSocket(url), 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
 function syncClock(): void { if (socket?.readyState !== WebSocket.OPEN) return; lastClockSyncAt = performance.now(); socket.send(JSON.stringify({ type: "clock_sync", client_sent_ms: lastClockSyncAt })); }
 
 function jpegPayloadBytes(base64: string): number {
@@ -212,43 +308,141 @@ async function sendSceneSnapshot(request: any): Promise<void> {
   }));
 }
 
-function compactLandmarks(points: NormalizedLandmark[]): NormalizedLandmark[] { return points.map(({ x, y, z, visibility }) => ({ x, y, z, visibility: visibility ?? 1 })); }
-function resizeInferenceCanvas(): void { const sourceWidth = video.videoWidth; const sourceHeight = video.videoHeight; if (!sourceWidth || !sourceHeight) return; const scale = Math.min(1, 640 / Math.max(sourceWidth, sourceHeight)); const width = Math.max(1, Math.round(sourceWidth * scale)); const height = Math.max(1, Math.round(sourceHeight * scale)); if (inferenceCanvas.width !== width || inferenceCanvas.height !== height) { inferenceCanvas.width = width; inferenceCanvas.height = height; } inferenceContext.drawImage(video, 0, 0, width, height); }
-function predict(now: number): void { if (!running) return; if (!cameraFrameLoop) requestAnimationFrame(predict); if (inferenceBusy || !poseLandmarker || video.readyState < 2 || video.currentTime === lastVideoTime || now - lastInferenceAt < TARGET_FRAME_INTERVAL_MS) return; lastVideoTime = video.currentTime; lastInferenceAt = now; inferenceBusy = true; const started = performance.now(); motionDebug.detectCalls++; try { resizeInferenceCanvas(); const poseResult = poseLandmarker.detectForVideo(inferenceCanvas, now); const elapsed = performance.now() - started; motionDebug.lastInferenceMs = elapsed; motionDebug.lastPoseCount = poseResult.landmarks.length; motionDebug.lastDetectError = null; draw(poseResult.landmarks); if (socket?.readyState === WebSocket.OPEN && socket.bufferedAmount < 256000) socket.send(JSON.stringify({ type: "pose_frame_v2", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, sent_at_ms: Date.now() + serverClockOffsetMs, width: video.videoWidth, height: video.videoHeight, camera_facing: facingMode, camera_id: selectedCameraDeviceId === "__auto__" ? "logical" : selectedCameraDeviceId, orientation_degrees: 0, preview_mirrored: facingMode === "user", coordinates_mirrored: false, actual_model: modelChoice, voice_state: poseVoiceState(), poses: poseResult.landmarks.map((pose, index) => ({ detection_id: null, pose: compactLandmarks(pose), world_pose: poseResult.worldLandmarks[index] ? compactLandmarks(poseResult.worldLandmarks[index]) : null })), hands: [], inference_ms: elapsed })); document.querySelector("#sendState")!.textContent = poseResult.landmarks.length ? `已识别 ${poseResult.landmarks.length} 人` : "等待完整人体"; fpsCounter++; if (performance.now() - fpsStarted >= 1000) { const fps = Math.round(fpsCounter * 1000 / (performance.now() - fpsStarted)); document.querySelector("#localFps")!.textContent = `${fps} FPS`; fpsCounter = 0; fpsStarted = performance.now(); } if (performance.now() - lastClockSyncAt > 5000) syncClock(); } catch (error) { motionDebug.lastDetectError = error instanceof Error ? error.message : String(error); document.querySelector("#sendState")!.textContent = `模型错误：${motionDebug.lastDetectError}`; } finally { inferenceBusy = false; } }
+function roundPose(value: number): number { return Math.round(value * 10000) / 10000; }
+function packControlLandmarks(points: NormalizedLandmark[]): number[][] {
+  if (points.length < 33) return [];
+  return CONTROL_POINT_INDICES.map((index) => {
+    const p = points[index];
+    return [roundPose(p.x), roundPose(p.y), roundPose(p.z), roundPose(p.visibility ?? 1)];
+  });
+}
+function resizeInferenceCanvas(): void { const sourceWidth = video.videoWidth; const sourceHeight = video.videoHeight; if (!sourceWidth || !sourceHeight) return; const scale = Math.min(1, inferenceMaxSide / Math.max(sourceWidth, sourceHeight)); const width = Math.max(1, Math.round(sourceWidth * scale)); const height = Math.max(1, Math.round(sourceHeight * scale)); if (inferenceCanvas.width !== width || inferenceCanvas.height !== height) { inferenceCanvas.width = width; inferenceCanvas.height = height; } inferenceContext.drawImage(video, 0, 0, width, height); }
+function updateInferenceBudget(elapsed: number, now: number): void {
+  inferenceEwmaMs = inferenceEwmaMs ? inferenceEwmaMs * 0.86 + elapsed * 0.14 : elapsed;
+  if (now - lastInferenceResizeAt < 2500) return;
+  let next = inferenceMaxSide;
+  if (inferenceEwmaMs > 55) next = 384;
+  else if (inferenceEwmaMs > 42) next = Math.min(next, 448);
+  else if (inferenceEwmaMs < 27) next = Math.min(512, next + 64);
+  if (next !== inferenceMaxSide) { inferenceMaxSide = next; lastInferenceResizeAt = now; }
+}
+function currentInferenceIntervalMs(): number { return Math.max(MIN_INFERENCE_INTERVAL_MS, inferenceEwmaMs > 0 ? inferenceEwmaMs * 1.08 : 0); }
+function schedulePredict(): void {
+  if (!running) return;
+  // requestVideoFrameCallback is driven by the cameraFrame loop below.  Keep
+  // one callback per decoded frame instead of registering a second callback
+  // chain just for inference.  The rAF path also owns the camera counter when
+  // older WebViews do not expose requestVideoFrameCallback.
+  if (cameraFrameLoop) return;
+  requestAnimationFrame((now) => {
+    if (!running) return;
+    recordCameraFrame(now);
+    predict(now);
+  });
+}
+function predict(now: number): void {
+  if (!running) return;
+  schedulePredict();
+  if (inferenceBusy || !poseLandmarker || video.readyState < 2 || video.currentTime === lastVideoTime || now - lastInferenceAt < currentInferenceIntervalMs()) return;
+  lastVideoTime = video.currentTime;
+  lastInferenceAt = now;
+  inferenceBusy = true;
+  const started = performance.now();
+  motionDebug.detectCalls++;
+  try {
+    resizeInferenceCanvas();
+    const poseResult = poseLandmarker.detectForVideo(inferenceCanvas, now);
+    const elapsed = performance.now() - started;
+    updateInferenceBudget(elapsed, now);
+    motionDebug.lastInferenceMs = elapsed;
+    motionDebug.lastPoseCount = poseResult.landmarks.length;
+    motionDebug.lastDetectError = null;
+
+    // Drawing is presentation only.  Throttle it so canvas work cannot steal
+    // the frame budget from control inference.  When the user hides the mobile
+    // control overlay during gameplay, stop skeleton rendering entirely.
+    if (overlayRenderingEnabled && now - lastOverlayAt >= OVERLAY_INTERVAL_MS) {
+      draw(poseResult.landmarks);
+      lastOverlayAt = now;
+    }
+
+    const firstPose = poseResult.landmarks[0];
+    if (firstPose && socket?.readyState === WebSocket.OPEN) {
+      // Sequence is allocated before congestion handling so the PC can observe
+      // gaps as dropped real-time frames instead of mistaking them for a slower
+      // camera.
+      const frameSequence = sequence++;
+      if (socket.bufferedAmount <= MAX_SOCKET_BUFFERED_BYTES) {
+        socket.send(JSON.stringify({
+          type: "pose_features_v1", role: "camera", layout: "mc25-v1",
+          device_id: deviceId, sequence: frameSequence,
+          captured_at_ms: Date.now() + serverClockOffsetMs,
+          sent_at_ms: Date.now() + serverClockOffsetMs,
+          width: video.videoWidth, height: video.videoHeight,
+          camera_facing: facingMode,
+          camera_id: selectedCameraDeviceId === "__auto__" ? "logical" : selectedCameraDeviceId,
+          preview_mirrored: facingMode === "user", coordinates_mirrored: false,
+          actual_model: modelChoice, voice_state: poseVoiceState(),
+          points: packControlLandmarks(firstPose), inference_ms: Math.round(elapsed * 10) / 10,
+        }));
+      } else {
+        // Real-time control must prefer freshness over completeness. Never add
+        // another stale pose to a congested WebSocket queue.
+        networkDroppedFrames++;
+      }
+    }
+    const nextSendState = firstPose ? "人体已识别" : "等待完整人体";
+    if (nextSendState !== lastSendStateText) {
+      document.querySelector("#sendState")!.textContent = nextSendState;
+      lastSendStateText = nextSendState;
+    }
+    fpsCounter++;
+    if (performance.now() - fpsStarted >= 1000) {
+      const fps = Math.round(fpsCounter * 1000 / (performance.now() - fpsStarted));
+      document.querySelector("#localFps")!.textContent = `${fps} FPS`;
+      fpsCounter = 0; fpsStarted = performance.now();
+    }
+    if (performance.now() - lastClockSyncAt > 5000) syncClock();
+  } catch (error) {
+    motionDebug.lastDetectError = error instanceof Error ? error.message : String(error);
+    document.querySelector("#sendState")!.textContent = `模型错误：${motionDebug.lastDetectError}`;
+  } finally { inferenceBusy = false; }
+}
 function poseStatusText(playerLocked: boolean): string { if (lastServerPoseCount > 0) return playerLocked ? "已识别" : "人体已识别·动作模型准备中"; return "相机正常·未发现完整人体"; }
-function draw(poses: NormalizedLandmark[][]): void { resizeCanvas(); context.clearRect(0, 0, canvas.width, canvas.height); const drawing = new DrawingUtils(context); const colors = ["#c8ff38", "#ff8bd8"]; poses.forEach((pose, index) => { drawing.drawConnectors(pose, PoseLandmarker.POSE_CONNECTIONS, { color: colors[index] || colors[0], lineWidth: 3 }); drawing.drawLandmarks(pose, { color: "#fff", fillColor: "#0b1014", radius: 3 }); }); }
+function draw(poses: NormalizedLandmark[][]): void { resizeCanvas(); context.clearRect(0, 0, canvas.width, canvas.height); drawingUtils ||= new DrawingUtils(context); const pose = poses[0]; if (!pose) return; drawingUtils.drawConnectors(pose, PoseLandmarker.POSE_CONNECTIONS, { color: "#c8ff38", lineWidth: 2 }); drawingUtils.drawLandmarks(pose, { color: "#fff", fillColor: "#0b1014", radius: 2 }); }
 function resizeCanvas(): void { const width = video.videoWidth || 960; const height = video.videoHeight || 540; if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; } }
 function recordCameraFrame(now: number): void { cameraFrameCount++; if (now - cameraFpsStarted >= 1000) { document.querySelector("#cameraFps")!.textContent = `${Math.round(cameraFrameCount * 1000 / (now - cameraFpsStarted))} FPS`; cameraFrameCount = 0; cameraFpsStarted = now; } }
 function cameraFrame(now: number): void { if (!cameraFrameLoop || !stream) return; recordCameraFrame(now); if (cameraFrameLoop && stream) video.requestVideoFrameCallback(cameraFrame); if (running) predict(now); }
 function startCameraFrameCounter(): void { cameraFrameLoop = typeof video.requestVideoFrameCallback === "function"; cameraFrameCount = 0; cameraFpsStarted = performance.now(); if (cameraFrameLoop) video.requestVideoFrameCallback(cameraFrame); }
 function applyMirror(): void { document.querySelector<HTMLElement>("#cameraStage")?.classList.toggle("front-mirror", facingMode === "user"); }
 
-async function stopVoiceControl(showOff = true): Promise<void> { voiceEnabled = false; await nativeVoiceCommandListener?.remove().catch(() => {}); await nativeVoiceTextListener?.remove().catch(() => {}); await nativeVoiceStateListener?.remove().catch(() => {}); await nativeAudioErrorListener?.remove().catch(() => {}); nativeVoiceCommandListener = null; nativeVoiceTextListener = null; nativeVoiceStateListener = null; nativeAudioErrorListener = null; lastVoiceText = ""; await NativeAudio.stop().catch(() => {}); if (showOff) { voiceToggle.checked = false; setVoiceStatus("off"); } }
-async function startVoiceControl(): Promise<void> { if (activeRole !== "camera") { voiceToggle.checked = false; setVoiceStatus("error", "仅摄像头可用"); return; } if (voiceEnabled) return; if (socket?.readyState !== WebSocket.OPEN) { voiceToggle.checked = false; setVoiceStatus("error", "请先连接电脑"); return; } setVoiceStatus("connecting", "加载手机语音模型"); try { const ready = await NativeAudio.start(); if (!ready.recognizerReady) throw new Error("语音模型错误"); voiceEnabled = true; nativeVoiceCommandListener = await NativeAudio.addListener("voiceCommand", (event) => { const phrase = (event.phrase || "").trim(); const commandId = (event.commandId || "").trim(); if (!voiceEnabled || !phrase) return; setVoiceStatus("listening", `识别：${phrase}`); if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "电脑已断开"); return; } const frame: Record<string, unknown> = { type: "voice_command", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, command_id: commandId, phrase, source: "android_sherpa_command_kws_v094" }; socket.send(JSON.stringify(frame)); }); nativeVoiceStateListener = await NativeAudio.addListener("voiceState", (event) => { if (!voiceEnabled) return; const detail = event.message || (event.state === "command" ? "已识别命令" : event.state === "listening" ? "语音识别已就绪" : "等待语音"); setVoiceStatus(event.state === "connecting" ? "connecting" : "listening", detail); }); nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => { setVoiceStatus("error", event.message || "手机语音错误"); void stopVoiceControl(false); }); setVoiceStatus("listening", "语音识别已就绪"); } catch (error) { const message = error instanceof Error ? error.message : String(error); const denied = /未授权|permission|denied/i.test(message); await stopVoiceControl(false); voiceToggle.checked = false; setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : /模型|model|recognizer|vosk/i.test(message) ? "模型错误" : message || "错误"); } }
+async function stopVoiceControl(showOff = true): Promise<void> { voiceEnabled = false; await nativeVoiceTextListener?.remove().catch(() => {}); await nativeVoiceStateListener?.remove().catch(() => {}); await nativeAudioErrorListener?.remove().catch(() => {}); nativeVoiceTextListener = null; nativeVoiceStateListener = null; nativeAudioErrorListener = null; await NativeAudio.stop().catch(() => {}); if (showOff) { voiceToggle.checked = false; setVoiceStatus("off"); } }
+async function startVoiceControl(): Promise<void> { if (activeRole !== "camera") { voiceToggle.checked = false; setVoiceStatus("error", "仅摄像头可用"); return; } if (voiceEnabled) return; if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "请先连接电脑"); return; } setVoiceStatus("connecting", "加载手机语音模型"); try { const ready = await NativeAudio.start(); if (!ready.recognizerReady) throw new Error("语音模型错误"); voiceEnabled = true; nativeVoiceTextListener = await NativeAudio.addListener("voiceText", (event) => { const text = (event.text || "").trim(); if (!voiceEnabled || !event.final || !text) return; setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "电脑已断开"); return; } const frame: Record<string, unknown> = { type: "voice_text", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, text, confidence: event.confidence, final: true, source: "android_vosk_speech_service_v100" }; socket.send(JSON.stringify(frame)); }); nativeVoiceStateListener = await NativeAudio.addListener("voiceState", (event) => { if (!voiceEnabled) return; const detail = event.message || (event.state === "command" ? "已识别命令" : event.state === "listening" ? "语音识别已就绪" : "等待语音"); setVoiceStatus(event.state === "connecting" ? "connecting" : "listening", detail); }); nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => { setVoiceStatus("error", event.message || "手机语音错误"); void stopVoiceControl(false); }); setVoiceStatus("listening", "Vosk 受限语法已就绪"); } catch (error) { const message = error instanceof Error ? error.message : String(error); const denied = /未授权|permission|denied/i.test(message); await stopVoiceControl(false); voiceToggle.checked = false; setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : /模型|model|recognizer|vosk/i.test(message) ? "模型错误" : message || "错误"); } }
 
-async function stop(): Promise<void> { running = false; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline"); }
+async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline"); }
 async function chooseCamera(cameraId: string): Promise<void> { selectedCameraDeviceId = cameraId; cameraDeviceSelect.value = cameraId; if (running) await startCamera(); applyMirror(); }
 async function chooseFacing(target: "user" | "environment"): Promise<void> { if (!running || facingMode === target) { updateCameraButtons(); return; } const previousFacing = facingMode; const previousDevice = selectedCameraDeviceId; facingMode = target; selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = "__auto__"; cameraSwitchState.textContent = "切换中"; try { await startCamera(); cameraSwitchState.textContent = `当前${target === "user" ? "前置镜头" : "后置镜头"}`; } catch (error) { facingMode = previousFacing; selectedCameraDeviceId = previousDevice; cameraSwitchState.textContent = `切换失败：${error instanceof Error ? error.message : "无法打开镜头"}`; try { await startCamera(); } catch { cameraSwitchState.textContent += "；原镜头恢复失败"; } updateCameraButtons(); } }
-function showRole(role: "home" | "camera" | "handheld"): void { activeRole = role; roleCard.classList.toggle("hidden", role !== "home"); setupCard.classList.toggle("hidden", role !== "camera"); handheldCard.classList.toggle("hidden", role !== "handheld"); voiceControl.classList.toggle("hidden", role !== "camera"); document.querySelector("#pageTitle")!.textContent = role === "handheld" ? "手持手柄" : role === "camera" ? "摄像头" : "体感控制"; }
+function showRole(role: "home" | "camera" | "handheld"): void { activeRole = role; roleCard.classList.toggle("hidden", role !== "home"); setupCard.classList.toggle("hidden", role !== "camera"); handheldCard.classList.toggle("hidden", role !== "handheld"); voiceControl.classList.toggle("hidden", role !== "camera"); document.querySelector("#pageTitle")!.textContent = role === "handheld" ? "手持手柄" : role === "camera" ? "固定摄像头" : "手机控制端"; renderControlConfig(); }
 
 async function sendHandheldFrame(): Promise<void> { if (sensorPolling || handheldSocket?.readyState !== WebSocket.OPEN) return; sensorPolling = true; try { const sample = await SensorBridge.getLatest(); const touches: Record<string, unknown>[] = [...padState].map((control) => ({ control, pressed: true })); if (Math.abs(stickState.x) > 0.02 || Math.abs(stickState.y) > 0.02) touches.push({ control: "stick", x: stickState.x, y: stickState.y }); handheldSocket.send(JSON.stringify({ type: "sensor_frame", role: "sensor", device_id: deviceId, sequence: handheldSequence++, captured_at_ms: Date.now(), player_slot: Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value), quaternion: { x: sample.qx, y: sample.qy, z: sample.qz, w: sample.qw }, orientation: {}, rotation_rate: { x: sample.gx, y: sample.gy, z: sample.gz }, acceleration: { x: sample.ax, y: sample.ay, z: sample.az }, touches, recenter: handheldRecenter })); if (handheldRecenter) { handheldRecenter = false; document.querySelector("#sensorState")!.textContent = "已居中"; } handheldFrames++; const now = performance.now(); if (now - handheldFpsStarted >= 1000) { document.querySelector("#sensorFps")!.textContent = `${Math.round(handheldFrames * 1000 / (now - handheldFpsStarted))} FPS`; handheldFrames = 0; handheldFpsStarted = now; } } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器异常"; } finally { sensorPolling = false; } }
 function clearTouches(): void { padState.clear(); stickState = { x: 0, y: 0 }; document.querySelector<HTMLElement>("#stick i")!.style.transform = "translate(0,0)"; document.querySelectorAll("[data-pad]").forEach((element) => element.classList.remove("pressed")); void sendHandheldFrame(); }
-async function startHandheld(): Promise<void> { showRole("handheld"); try { await SensorBridge.start(); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; const address = handheldServerInput.value.trim() || serverInput.value.trim(); if (!address) throw new Error("请填写电脑服务器地址"); serverInput.value = address; localStorage.setItem("motionbridge-server", address); handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开"; }); handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器不可用"; } }
+async function startHandheld(): Promise<void> { showRole("handheld"); try { await SensorBridge.start(); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; const address = handheldServerInput.value.trim() || serverInput.value.trim(); if (!address) throw new Error("请填写电脑服务器地址"); serverInput.value = address; localStorage.setItem("motionbridge-server", address); handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { markControlConfigCached(); clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开"; }); handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器不可用"; } }
 async function stopHandheld(): Promise<void> { clearTouches(); if (handheldTimer != null) window.clearInterval(handheldTimer); handheldTimer = null; await new Promise((resolve) => setTimeout(resolve, 35)); handheldSocket?.close(); handheldSocket = null; await SensorBridge.stop().catch(() => {}); await wakeLock?.release().catch(() => {}); wakeLock = null; showRole("home"); setConnection("offline"); }
 async function suspendHandheld(): Promise<void> { clearTouches(); if (handheldTimer != null) window.clearInterval(handheldTimer); handheldTimer = null; await new Promise((resolve) => setTimeout(resolve, 35)); handheldSocket?.close(); handheldSocket = null; await SensorBridge.stop().catch(() => {}); document.querySelector("#sensorState")!.textContent = "已暂停"; }
 async function handleBackButton(): Promise<void> { if (activeRole === "home") { await App.exitApp(); return; } if (activeRole === "camera") { await stop(); showRole("home"); return; } await stopHandheld(); }
 function updateStick(event: PointerEvent): void { const stick = document.querySelector<HTMLElement>("#stick")!; const rect = stick.getBoundingClientRect(); const x = Math.max(-1, Math.min(1, (event.clientX - (rect.left + rect.width / 2)) / (rect.width * 0.38))); const y = Math.max(-1, Math.min(1, (event.clientY - (rect.top + rect.height / 2)) / (rect.height * 0.38))); stickState = { x, y }; stick.querySelector<HTMLElement>("i")!.style.transform = `translate(${x * 34}px,${y * 34}px)`; }
 
+renderControlConfig();
 document.querySelector("#cameraRole")!.addEventListener("click", () => { void (running ? stop() : Promise.resolve()).then(() => { showRole("camera"); return refreshCameraDevices(); }).catch((error) => { document.querySelector("#securityWarning")!.textContent = error instanceof Error ? error.message : String(error); }); });
 document.querySelector("#handheldRole")!.addEventListener("click", () => { void (running || voiceEnabled ? stop() : Promise.resolve()).then(() => startHandheld()); });
 document.querySelector("#cameraHome")!.addEventListener("click", () => { void stop().then(() => showRole("home")); });
 document.querySelector("#startButton")!.addEventListener("click", () => void start()); document.querySelector("#stopButton")!.addEventListener("click", () => void stop());
-hideStatus.addEventListener("click", () => { runtimeCard.classList.add("hidden"); showStatus.classList.remove("hidden"); });
-showStatus.addEventListener("click", () => { if (!running) return; runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); });
+hideStatus.addEventListener("click", () => { runtimeCard.classList.add("hidden"); showStatus.classList.remove("hidden"); overlayRenderingEnabled = false; context.clearRect(0, 0, canvas.width, canvas.height); });
+showStatus.addEventListener("click", () => { if (!running) return; runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); overlayRenderingEnabled = true; lastOverlayAt = 0; });
 modelSelect.value = modelChoice;
 modelSelect.addEventListener("change", () => { modelChoice = modelSelect.value === "lite" ? "lite" : "full"; localStorage.setItem("motionbridge-model", modelChoice); updateModelLabel(); });
 cameraDeviceSelect.addEventListener("change", () => void chooseCamera(cameraDeviceSelect.value));
-frontCameraButton.addEventListener("click", () => void chooseFacing("user")); backCameraButton.addEventListener("click", () => void chooseFacing("environment")); voiceToggle.addEventListener("change", () => void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()));
+frontCameraButton.addEventListener("click", () => void chooseFacing("user")); backCameraButton.addEventListener("click", () => void chooseFacing("environment")); voiceToggle.addEventListener("change", () => { localStorage.setItem("motionbridge-voice-auto", voiceToggle.checked ? "1" : "0"); void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()); });
 document.querySelector("#centerSensor")!.addEventListener("click", () => { handheldRecenter = true; document.querySelector("#sensorState")!.textContent = "正在居中"; }); document.querySelector("#stopHandheld")!.addEventListener("click", () => void stopHandheld());
 document.querySelectorAll<HTMLElement>("[data-pad]").forEach((button) => { button.addEventListener("pointerdown", (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); padState.add(button.dataset.pad!); button.classList.add("pressed"); }); const release = () => { padState.delete(button.dataset.pad!); button.classList.remove("pressed"); }; button.addEventListener("pointerup", release); button.addEventListener("pointercancel", release); button.addEventListener("lostpointercapture", release); });
 const stick = document.querySelector<HTMLElement>("#stick")!; stick.addEventListener("pointerdown", (event) => { stick.setPointerCapture(event.pointerId); updateStick(event); }); stick.addEventListener("pointermove", (event) => { if (stick.hasPointerCapture(event.pointerId)) updateStick(event); }); const releaseStick = () => { stickState = { x: 0, y: 0 }; stick.querySelector<HTMLElement>("i")!.style.transform = "translate(0,0)"; }; stick.addEventListener("pointerup", releaseStick); stick.addEventListener("pointercancel", releaseStick);

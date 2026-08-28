@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "product_version": "0.9.5",
-  "model": "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20",
-  "interaction": "single_stage_full_phrase_kws",
+  "product_version": "1.00",
+  "model": "vosk-model-small-cn-0.22",
+  "interaction": "vosk_constrained_grammar",
   "prefix": "体感",
   "profiles": {
     "emergency": {

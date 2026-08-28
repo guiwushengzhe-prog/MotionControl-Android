@@ -7,6 +7,10 @@
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+.tools/
+.voice-model-cache/
+backup/
+mobile-backup-*/
 
 # ==============================
 # Node / Web

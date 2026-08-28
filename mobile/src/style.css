@@ -21,12 +21,12 @@ html.native-preview body #camera { visibility: hidden; background: transparent; 
 header { position: fixed; z-index: 4; left: max(20px, env(safe-area-inset-left)); right: max(20px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); display: flex; justify-content: space-between; align-items: flex-start; }
 header p { color: #c8ff38; letter-spacing: .16em; font-size: 9px; font-weight: 900; margin: 0 0 3px; }
 h1 { margin: 0; font-size: clamp(20px, 4vw, 32px); letter-spacing: -.04em; }
-.badge { display: flex; align-items: center; gap: 7px; border: 1px solid rgba(255,255,255,.2); background: rgba(8,11,15,.65); padding: 8px 10px; border-radius: 99px; font-size: 11px; backdrop-filter: blur(10px); }
+.badge { display: flex; align-items: center; gap: 7px; border: 1px solid rgba(255,255,255,.2); background: rgba(8,11,15,.88); padding: 8px 10px; border-radius: 99px; font-size: 11px; }
 .badge i { width: 8px; height: 8px; border-radius: 50%; background: #78818b; }
 .badge.connecting i { background: #ffd84c; }
 .badge.online i { background: #c8ff38; box-shadow: 0 0 12px #c8ff38; }
 .badge.error i { background: #ff6b45; }
-.voice-control { pointer-events: auto; position: fixed; z-index: 5; top: max(62px, env(safe-area-inset-top)); right: max(20px, env(safe-area-inset-right)); display: flex; align-items: center; gap: 10px; padding: 8px 11px; border: 1px solid rgba(255,255,255,.2); border-radius: 10px; background: rgba(8,11,15,.82); backdrop-filter: blur(12px); font-size: 11px; }
+.voice-control { pointer-events: auto; position: fixed; z-index: 5; top: max(62px, env(safe-area-inset-top)); right: max(20px, env(safe-area-inset-right)); display: flex; align-items: center; gap: 10px; padding: 8px 11px; border: 1px solid rgba(255,255,255,.2); border-radius: 10px; background: rgba(8,11,15,.94); font-size: 11px; }
 .voice-control label { display: flex; align-items: center; gap: 7px; color: #f5f7f8; }
 .voice-control input { width: 16px; height: 16px; margin: 0; accent-color: #c8ff38; }
 .voice-state { color: #9aa6b0; min-width: 42px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
@@ -41,12 +41,24 @@ input, select { width: 100%; color: #f5f7f8; background: #080c10; border: 1px so
 button { border: 0; border-radius: 9px; padding: 11px 15px; background: #c8ff38; color: #111704; font: inherit; font-weight: 900; }
 button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; background: transparent; }
 .warning { color: #ffb29d !important; margin-bottom: 0; }
-.runtime-card { pointer-events: auto; position: fixed; z-index: 4; left: 50%; bottom: max(12px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(720px, calc(100vw - 24px)); padding: 12px; border: 1px solid rgba(255,255,255,.2); border-radius: 16px; background: rgba(8,12,16,.86); backdrop-filter: blur(16px); box-shadow: 0 16px 48px rgba(0,0,0,.34); }
+.runtime-card { pointer-events: auto; position: fixed; z-index: 4; left: 50%; bottom: max(12px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(720px, calc(100vw - 24px)); padding: 12px; border: 1px solid rgba(255,255,255,.2); border-radius: 16px; background: rgba(8,12,16,.95); box-shadow: 0 12px 36px rgba(0,0,0,.28); }
 .status-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 14px; min-height: 38px; color: #f5f7f8; font-size: 11px; }
 .status-summary strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-summary span { flex: 0 0 auto; color: #aab5be; white-space: nowrap; }
 .status-summary span b { color: #f5f7f8; font-weight: 800; }
 .status-summary small { max-width: 32vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ffb29d; font-size: 10px; }
+
+.profile-sync { display: grid; gap: 7px; padding: 9px 10px; border: 1px solid rgba(255,255,255,.1); border-radius: 11px; background: rgba(255,255,255,.035); }
+.profile-sync-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 10px; color: #8f9ba5; }
+.profile-sync-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #f5f7f8; font-size: 11px; }
+.profile-sync-head small { margin-left: auto; flex: 0 0 auto; color: #7d8993; }
+.profile-sync-head small.fresh { color: #c8ff38; }
+.profile-sync-head small.cached { color: #ffd84c; }
+.profile-sync-bindings { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; }
+.profile-sync-bindings span { min-width: 0; display: grid; gap: 2px; padding: 5px 6px; border-radius: 7px; background: rgba(0,0,0,.24); }
+.profile-sync-bindings i { font-style: normal; color: #788793; font-size: 9px; }
+.profile-sync-bindings b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef3f5; font-size: 9px; font-weight: 700; }
+.handheld-profile-sync { align-self: start; }
 .runtime-camera-choice { display: grid; gap: 7px; margin-top: 10px; }
 .control-label { color: #aab5be; font-size: 11px; }
 .camera-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -58,7 +70,7 @@ button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; backg
 .runtime-voice label { display: flex; align-items: center; gap: 6px; }
 .runtime-voice input { width: 16px; height: 16px; margin: 0; accent-color: #c8ff38; }
 .runtime-voice span { color: #aab5be; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-hide, .status-show { color: #d7e0e6; border: 1px solid rgba(255,255,255,.2); background: rgba(8,12,16,.78); backdrop-filter: blur(14px); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.status-hide, .status-show { color: #d7e0e6; border: 1px solid rgba(255,255,255,.2); background: rgba(8,12,16,.94); font-size: 10px; font-weight: 700; white-space: nowrap; }
 .status-hide { padding: 9px 11px; }
 .status-show { pointer-events: auto; position: fixed; z-index: 6; right: max(12px, env(safe-area-inset-right)); bottom: calc(max(12px, env(safe-area-inset-bottom)) + 8px); min-width: 76px; min-height: 34px; padding: 7px 10px; border-radius: 9px; touch-action: manipulation; }
 .status-show.hidden { display: none; }
@@ -76,7 +88,7 @@ button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; backg
 .role-grid button { min-height: 96px; font-size: 19px; }
 .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
 .text-button { color: #b9c4cc; background: transparent; padding: 5px; }
-.handheld-card { pointer-events: auto; position: fixed; inset: max(60px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom)); display: grid; grid-template-rows: auto auto 1fr; gap: 10px; }
+.handheld-card { pointer-events: auto; position: fixed; inset: max(60px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom)); display: grid; grid-template-rows: auto auto auto 1fr; gap: 10px; }
 .handheld-top { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.15); border-radius: 12px; background: rgba(8,12,16,.9); }
 .handheld-connection-row label { flex: 1; min-width: 0; }
 .handheld-top label { grid-template-columns: auto 110px; align-items: center; }
@@ -98,6 +110,7 @@ button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; backg
   .status-summary { gap: 7px; padding: 8px 9px; font-size: 10px; }
   .status-hide { padding: 7px 8px; }
   .status-summary span { max-width: 20vw; overflow: hidden; text-overflow: ellipsis; }
+  .profile-sync-bindings { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .runtime-actions { align-items: stretch; }
   .runtime-voice { width: 100%; margin-right: 0; }
   .runtime-actions > button { flex: 1; min-width: 0; padding: 9px 8px; }
@@ -106,3 +119,15 @@ button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; backg
   .middle-buttons { grid-column: 1/-1; grid-row: 2; grid-template-columns: 1fr 1fr; }
   .stick,.face-buttons { width:min(40vw,210px); }
 }
+
+/* MotionControl 1.00 product UI */
+:root{--mc-bg:#080c11;--mc-surface:#101720;--mc-surface2:#17212c;--mc-line:#2b3744;--mc-text:#eef4f8;--mc-muted:#8d9ba7;--mc-accent:#6ba8ff;--mc-success:#58d18b;--mc-danger:#eb6a73;--mc-warning:#ddb25c}
+body{background:var(--mc-bg);color:var(--mc-text)}
+.app-header{padding:max(14px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) 12px max(16px,env(safe-area-inset-left));background:linear-gradient(180deg,rgba(7,11,15,.9),rgba(7,11,15,.28));pointer-events:none}.app-header>*{pointer-events:auto}.mobile-brand p{color:#8bb9f5;letter-spacing:.12em;font-size:9px}.mobile-brand h1{font-size:clamp(20px,5vw,28px)}.mobile-brand small{display:block;margin-top:4px;color:#8998a5;font-size:10px}
+.badge{border-color:rgba(255,255,255,.13);background:rgba(11,17,23,.9);color:#b9c4cd}.badge.online i{background:var(--mc-success);box-shadow:none}.badge.connecting i{background:var(--mc-warning)}.badge.error i{background:var(--mc-danger)}
+.setup-card{width:min(500px,calc(100vw - 28px));padding:20px;border:1px solid var(--mc-line);border-radius:20px;background:rgba(14,20,27,.95);box-shadow:0 20px 70px rgba(0,0,0,.4);backdrop-filter:blur(18px)}.setup-card h2{font-size:23px;letter-spacing:-.02em}.eyebrow{display:block;color:#7faef0;font-size:9px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}.role-lead,.setup-help{margin:8px 0 16px;color:var(--mc-muted);font-size:12px;line-height:1.55}.role-grid{gap:9px}.role-option{min-height:116px!important;display:grid;align-content:center;justify-items:start;gap:5px;padding:16px!important;border:1px solid var(--mc-line)!important;border-radius:14px!important;background:#131c25!important;color:var(--mc-text)!important;text-align:left}.role-option.recommended{border-color:#365d88!important;background:#142236!important}.role-option strong{font-size:17px}.role-option small{color:#8f9eaa;font-size:10px}.role-symbol{font-size:18px;color:#77aef7}.role-option.recommended .role-symbol{color:var(--mc-success)}
+label{color:#9ca9b5;font-size:11px}.setup-card input,.setup-card select,.handheld-card input,.handheld-card select{min-height:44px;border-color:var(--mc-line);border-radius:10px;background:#0a1016;color:var(--mc-text)}.actions{grid-template-columns:1fr}.start-primary{min-height:52px;border-radius:11px;background:#3f84e8;color:white;font-size:15px}.text-button{color:#aebbc6}.warning{color:#f0a79d!important}
+.runtime-card{width:min(760px,calc(100vw - 18px));padding:11px;border-color:var(--mc-line);border-radius:17px;background:rgba(10,15,21,.96)}.runtime-primary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:3px 3px 10px}.runtime-primary>div{min-width:0}.runtime-primary strong{display:block;margin-top:3px;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.runtime-link{flex:0 0 auto;color:#8e9ca8;font-size:10px}.runtime-link b{display:block;margin-top:2px;color:#dfe7ed}.profile-sync{border-color:var(--mc-line);background:#111922;padding:9px}.profile-sync-head b{font-size:12px}.profile-coverage{color:#8fa0ad;font-size:9px}.profile-sync-bindings{gap:4px}.profile-sync-bindings span{background:#0b1117;border:1px solid #1f2a35}.runtime-camera-choice{grid-template-columns:auto 1fr;align-items:center;gap:8px;margin-top:9px}.runtime-camera-choice .control-label{font-size:10px}.camera-buttons{grid-template-columns:1fr 1fr;gap:5px}.camera-buttons button{min-height:38px;padding:8px;border-color:var(--mc-line);background:#151f29}.camera-buttons button.selected{border-color:#4785ce;background:#244b78;color:#eaf4ff}.camera-switch-state{grid-column:1/-1}.runtime-actions{margin-top:8px}.runtime-voice{padding:0 4px}.runtime-voice input{accent-color:var(--mc-success)}.runtime-actions button{min-height:40px}.runtime-actions .stop{border-color:#653740;color:#ffd9dd;background:#2a171c}.status-hide,.status-show{border-color:var(--mc-line);background:#111922}.guide{border-color:rgba(107,168,255,.38)}
+.handheld-card{gap:8px}.handheld-top,.handheld-profile-sync{border-color:var(--mc-line);background:rgba(12,18,24,.94)}.shoulders button,.face-buttons button,.middle-buttons button{border-color:#34414e;background:#131c25}.handheld-card button.pressed{background:#3f84e8;color:white}.stick{border-color:#40505f;background:radial-gradient(circle,#24313d 0 26%,#111820 27% 100%)}.stick i{background:#6ba8ff}
+button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #78b2ff;outline-offset:2px}
+@media(max-width:600px){.app-header{padding-left:12px;padding-right:12px}.mobile-brand small{display:none}.setup-card{padding:16px}.role-grid{grid-template-columns:1fr}.role-option{min-height:86px!important}.runtime-card{bottom:max(7px,env(safe-area-inset-bottom));padding:9px}.profile-sync-bindings{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime-camera-choice{grid-template-columns:1fr}.runtime-actions{gap:6px}.runtime-actions .runtime-voice{width:auto;flex:1}.status-hide,.runtime-actions .stop{padding:8px 10px}}

@@ -1,5 +1,5 @@
-import { copyFile, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { copyFile, mkdir, readFile, stat, unlink } from "node:fs/promises";
+import { resolve } from "node:path";
 
 const publicRoot = resolve("public");
 const wasmSource = resolve("node_modules/@mediapipe/tasks-vision/wasm");
@@ -43,40 +43,31 @@ for (const filename of [
   }
 }
 
-const models = [
-  {
-    url: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-    filename: "pose_landmarker_lite.task",
-  },
-  {
-    url: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
-    filename: "pose_landmarker_full.task",
-  },
-  {
-    url: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task",
-    filename: "pose_landmarker_heavy.task",
-  },
-  {
-    url: "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
-    filename: "gesture_recognizer.task",
-  },
+const modelFiles = [
+  "pose_landmarker_lite.task",
+  "pose_landmarker_full.task",
 ];
 
-for (const model of models) {
-  const destination = resolve(modelTarget, model.filename);
+// MotionControl 1.00 is local-first/offline. Never download models during a build.
+// Keep the already-provisioned public/models files; if a previous Android
+// sync contains them, it can restore a missing public copy.
+const androidModelFallback = resolve("android/app/src/main/assets/public/models");
+for (const filename of modelFiles) {
+  const destination = resolve(modelTarget, filename);
+  let valid = false;
+  try { valid = (await stat(destination)).size > 1_000_000; } catch { valid = false; }
+  if (valid) continue;
+
+  const fallback = resolve(androidModelFallback, filename);
   try {
-    const info = await stat(destination);
-    if (info.size > 1_000_000) continue;
-  } catch {
-    // Download below.
-  }
-  const temporary = `${destination}.download`;
-  const response = await fetch(model.url);
-  if (!response.ok) throw new Error(`Failed to download ${basename(destination)}: HTTP ${response.status}`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength < 1_000_000) throw new Error(`Downloaded model is unexpectedly small: ${basename(destination)}`);
-  await unlink(temporary).catch(() => {});
-  await writeFile(temporary, bytes);
-  await rename(temporary, destination);
-  process.stdout.write(`Downloaded ${model.filename} (${bytes.byteLength} bytes)\n`);
+    if ((await stat(fallback)).size > 1_000_000) {
+      await copyFile(fallback, destination);
+      process.stdout.write(`Restored local ${filename} from Android assets\n`);
+      continue;
+    }
+  } catch { /* handled below */ }
+
+  throw new Error(
+    `Missing local model ${filename}. Put the verified model in public/models before building; 1.00 does not download models automatically.`
+  );
 }
