@@ -196,3 +196,7 @@ CameraX/Camera2 原生识别在当前样机上未能证明人体关键点稳定�
 ## 2026-08-21：Android 构建基线固定为 JDK 21
 
 Android 工程现在以 JDK 21 LTS（长期支持版）作为统一构建基线，`@capacitor/app`（Capacitor 官方应用生命周期插件）的 backButton（系统返回键）实现随 `npx cap sync android` 正常纳入 APK。同步后的 Java source/target compatibility（源码/目标兼容级别）必须保持 21；不要再用旧的 Java 17 修复脚本覆盖生成的 Gradle 配置。
+
+## 2026-09-02：紧凑姿态协议补齐 Frozen22 内眼点
+
+`mc25-v1` 的 25 点控制集合省略了 MediaPipe 索引 1/4（左右眼内侧），导致电脑端 Frozen22 的固定 11 点签名无法校准。手机协议升级为 `mc27-v2`，只增加这两个点，不恢复完整 33 点或 world_pose；电脑端同时保留 `mc25-v1` 兼容。协议点表与布局名必须一起更新，不能只改数组长度。

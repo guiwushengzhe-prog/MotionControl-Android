@@ -215,7 +215,9 @@ const MAX_INFERENCE_FPS = 28;
 const MIN_INFERENCE_INTERVAL_MS = 1000 / MAX_INFERENCE_FPS;
 const OVERLAY_INTERVAL_MS = 100; // 10 FPS visual skeleton; control data stays high-rate.
 const MAX_SOCKET_BUFFERED_BYTES = 8 * 1024;
-const CONTROL_POINT_INDICES = [0,2,3,5,6,7,8,9,10,11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32] as const;
+// mc27-v2 keeps the original compact body set and adds MediaPipe indices 1/4
+// (inner eyes), which the PC frozen22 11-point face signature requires.
+const CONTROL_POINT_INDICES = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32] as const;
 let inferenceMaxSide = 512;
 let inferenceEwmaMs = 0;
 let lastInferenceResizeAt = 0;
@@ -374,7 +376,7 @@ function predict(now: number): void {
       const frameSequence = sequence++;
       if (socket.bufferedAmount <= MAX_SOCKET_BUFFERED_BYTES) {
         socket.send(JSON.stringify({
-          type: "pose_features_v1", role: "camera", layout: "mc25-v1",
+          type: "pose_features_v1", role: "camera", layout: "mc27-v2",
           device_id: deviceId, sequence: frameSequence,
           captured_at_ms: Date.now() + serverClockOffsetMs,
           sent_at_ms: Date.now() + serverClockOffsetMs,
