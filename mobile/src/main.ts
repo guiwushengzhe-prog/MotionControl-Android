@@ -318,6 +318,16 @@ function packControlLandmarks(points: NormalizedLandmark[]): number[][] {
     return [roundPose(p.x), roundPose(p.y), roundPose(p.z), roundPose(p.visibility ?? 1)];
   });
 }
+type WorldPoseLandmark = { x: number; y: number; z: number; visibility?: number };
+function packWorldPoints(points: readonly WorldPoseLandmark[] | undefined): number[][] {
+  if (!points || points.length < 33) return [];
+  return points.slice(0, 33).map((point) => [
+    roundPose(point.x),
+    roundPose(point.y),
+    roundPose(point.z),
+    roundPose(point.visibility ?? 1),
+  ]);
+}
 function resizeInferenceCanvas(): void { const sourceWidth = video.videoWidth; const sourceHeight = video.videoHeight; if (!sourceWidth || !sourceHeight) return; const scale = Math.min(1, inferenceMaxSide / Math.max(sourceWidth, sourceHeight)); const width = Math.max(1, Math.round(sourceWidth * scale)); const height = Math.max(1, Math.round(sourceHeight * scale)); if (inferenceCanvas.width !== width || inferenceCanvas.height !== height) { inferenceCanvas.width = width; inferenceCanvas.height = height; } inferenceContext.drawImage(video, 0, 0, width, height); }
 function updateInferenceBudget(elapsed: number, now: number): void {
   inferenceEwmaMs = inferenceEwmaMs ? inferenceEwmaMs * 0.86 + elapsed * 0.14 : elapsed;
@@ -375,7 +385,8 @@ function predict(now: number): void {
       // camera.
       const frameSequence = sequence++;
       if (socket.bufferedAmount <= MAX_SOCKET_BUFFERED_BYTES) {
-        socket.send(JSON.stringify({
+        const worldPoints = packWorldPoints(poseResult.worldLandmarks?.[0]);
+        const frame: Record<string, unknown> = {
           type: "pose_features_v1", role: "camera", layout: "mc27-v2",
           device_id: deviceId, sequence: frameSequence,
           captured_at_ms: Date.now() + serverClockOffsetMs,
@@ -386,7 +397,10 @@ function predict(now: number): void {
           preview_mirrored: facingMode === "user", coordinates_mirrored: false,
           actual_model: modelChoice, voice_state: poseVoiceState(),
           points: packControlLandmarks(firstPose), inference_ms: Math.round(elapsed * 10) / 10,
-        }));
+        };
+        // 保持紧凑控制载荷不变，同时为新版电脑携带可选的米制世界坐标。
+        if (worldPoints.length === 33) frame.world_points = worldPoints;
+        socket.send(JSON.stringify(frame));
       } else {
         // Real-time control must prefer freshness over completeness. Never add
         // another stale pose to a congested WebSocket queue.
