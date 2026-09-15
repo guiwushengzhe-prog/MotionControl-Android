@@ -13,6 +13,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
+import com.getcapacitor.JSArray;
+
 import org.json.JSONObject;
 import org.vosk.Model;
 import org.vosk.Recognizer;
@@ -23,6 +25,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -95,7 +99,7 @@ public class NativeAudioPlugin extends Plugin {
             try {
                 File modelDirectory = prepareModel();
                 model = new Model(modelDirectory.getAbsolutePath());
-                recognizer = new Recognizer(model, SAMPLE_RATE, COMMAND_GRAMMAR);
+                recognizer = new Recognizer(model, SAMPLE_RATE, grammarFrom(call.getArray("phrases", null)));
                 speechService = new SpeechService(recognizer, SAMPLE_RATE);
                 running = true;
                 if (!speechService.startListening(new VoiceListener())) {
@@ -114,6 +118,45 @@ public class NativeAudioPlugin extends Plugin {
     public void stop(PluginCall call) {
         stopRecognizer();
         call.resolve();
+    }
+
+    /**
+     * Build the constrained grammar from the phrase list the desktop sent.
+     *
+     * The desktop owns the list, so a phrase added there is heard here without
+     * a new build; COMMAND_GRAMMAR stays as the fallback for the first run and
+     * for a phone that connects before any config arrives.  Tokens are single
+     * characters joined by spaces, matching what the small Chinese model wants
+     * and what the desktop recognizer does with the very same list.
+     */
+    private static String grammarFrom(JSArray phrases) {
+        if (phrases == null) {
+            return COMMAND_GRAMMAR;
+        }
+        List<String> entries = new ArrayList<>();
+        try {
+            for (Object item : phrases.toList()) {
+                String phrase = String.valueOf(item).replaceAll("\\s+", "");
+                if (phrase.isEmpty()) {
+                    continue;
+                }
+                StringBuilder spaced = new StringBuilder(phrase.length() * 2);
+                for (int index = 0; index < phrase.length(); index++) {
+                    if (spaced.length() > 0) {
+                        spaced.append(' ');
+                    }
+                    spaced.append(phrase.charAt(index));
+                }
+                entries.add(JSONObject.quote(spaced.toString()));
+            }
+        } catch (org.json.JSONException error) {
+            return COMMAND_GRAMMAR;
+        }
+        if (entries.isEmpty()) {
+            return COMMAND_GRAMMAR;
+        }
+        entries.add(JSONObject.quote("[unk]"));
+        return "[" + android.text.TextUtils.join(",", entries) + "]";
     }
 
     private JSObject formatResult() {
