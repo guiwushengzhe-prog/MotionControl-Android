@@ -61,7 +61,7 @@ app.innerHTML = `
       <p class="setup-help">电脑端保持 MotionControl 打开，填写它显示的局域网地址即可。以后会自动记住。</p>
       <label>电脑地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label>
       <label>使用镜头<select id="cameraDeviceSelect"><option value="__auto__">自动选择</option></select></label>
-      <label class="technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option><option value="lite">Lite（流畅）</option></select></label>
+      <label class="technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option></select></label>
       <div class="actions"><button id="startButton" class="start-primary">连接并开始</button></div><p class="warning" id="securityWarning"></p>
     </section>
     <section class="runtime-card hidden" id="runtimeCard">
@@ -121,7 +121,9 @@ let running = false;
 let activeRole: "home" | "camera" | "handheld" = "home";
 let facingMode: "user" | "environment" = "environment";
 let selectedCameraDeviceId = "__auto__";
-let modelChoice: ModelChoice = localStorage.getItem("motionbridge-model") === "lite" ? "lite" : "full";
+// Only the Full model ships: Lite saved 5.5 MB of build but nothing chose it,
+// and a stale "lite" in storage would ask for a file that is no longer there.
+let modelChoice: ModelChoice = "full";
 let cameraDevices: MediaDeviceInfo[] = [];
 let voiceEnabled = false;
 let voiceState: VoiceStatus = "off";

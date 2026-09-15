@@ -9,11 +9,12 @@ const modelTarget = resolve(publicRoot, "models");
 await mkdir(wasmTarget, { recursive: true });
 await mkdir(modelTarget, { recursive: true });
 
+// The non-SIMD pair is a fallback for WebViews older than Chrome 91.  It is
+// deliberately not shipped: it costs 9 MB and every device this runs on has
+// had WASM SIMD for years.
 for (const filename of [
   "vision_wasm_internal.js",
   "vision_wasm_internal.wasm",
-  "vision_wasm_nosimd_internal.js",
-  "vision_wasm_nosimd_internal.wasm",
 ]) {
   await copyFile(resolve(wasmSource, filename), resolve(wasmTarget, filename));
 }
@@ -23,13 +24,14 @@ for (const filename of [
 for (const obsolete of [
   "vision_wasm_module_internal.js",
   "vision_wasm_module_internal.wasm",
+  "vision_wasm_nosimd_internal.js",
+  "vision_wasm_nosimd_internal.wasm",
 ]) {
   await unlink(resolve(wasmTarget, obsolete)).catch(() => {});
 }
 
 for (const filename of [
   "vision_wasm_internal.wasm",
-  "vision_wasm_nosimd_internal.wasm",
 ]) {
   const path = resolve(wasmTarget, filename);
   const bytes = await readFile(path);
@@ -44,7 +46,6 @@ for (const filename of [
 }
 
 const modelFiles = [
-  "pose_landmarker_lite.task",
   "pose_landmarker_full.task",
 ];
 
