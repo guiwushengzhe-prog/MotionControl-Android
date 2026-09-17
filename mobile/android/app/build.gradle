@@ -15,7 +15,9 @@ android {
         // x86 builds exist only for emulators; every real device here is ARM,
         // and the two Vosk libraries cost 18 MB.
         ndk {
-            abiFilters 'arm64-v8a', 'armeabi-v7a'
+            // 只发 64 位。armeabi-v7a 里最大的一块是 libvosk.so 的 7.9 MB，而
+            // 32 位的安卓机 2015 年以后就没有了，谷歌从 2019 年起也强制要求 64 位。
+            abiFilters 'arm64-v8a'
         }
         applicationId "cn.motioncontrol.app"
         minSdkVersion rootProject.ext.minSdkVersion
