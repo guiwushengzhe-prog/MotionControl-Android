@@ -135,7 +135,8 @@ let nativeVoiceStateListener: PluginListenerHandle | null = null;
 let nativeAudioErrorListener: PluginListenerHandle | null = null;
 let running = false;
 let activeRole: "home" | "camera" | "handheld" = "home";
-let facingMode: "user" | "environment" = "environment";
+let facingMode: "user" | "environment" =
+  localStorage.getItem("motionbridge-facing") === "user" ? "user" : "environment";
 let selectedCameraDeviceId = "__auto__";
 // Only the Full model ships: Lite saved 5.5 MB of build but nothing chose it,
 // and a stale "lite" in storage would ask for a file that is no longer there.
@@ -248,7 +249,15 @@ function markControlConfigCached(): void {
 }
 
 const CAMERA_TARGET_FPS = 30;
-const MAX_INFERENCE_FPS = 28;
+// 这个上限必须比摄像头帧率高，不能"留点余量"设得比它低。
+//
+// 摄像头 30 帧 = 每 33.3ms 一帧，而推理只在有新一帧时才跑。上限设 28 时最短间隔
+// 是 35.7ms，比帧距还长：下一帧到的时候只过了 33.3ms，不够；再下一帧 66.7ms 才
+// 够。于是每两帧只算一帧，永远卡在摄像头的一半。实测正是 15.7 帧/秒。
+//
+// 真正的节流是下面 currentInferenceIntervalMs 里的 ewma × 1.08——机器慢下来它
+// 自己会拉长间隔。这个常数只该拦住"比摄像头还快地空转"，所以取在帧距之上。
+const MAX_INFERENCE_FPS = 32;
 const MIN_INFERENCE_INTERVAL_MS = 1000 / MAX_INFERENCE_FPS;
 const OVERLAY_INTERVAL_MS = 100; // 10 FPS visual skeleton; control data stays high-rate.
 const MAX_SOCKET_BUFFERED_BYTES = 8 * 1024;
@@ -473,6 +482,18 @@ function setVoiceStatus(status: VoiceStatus, detail?: string): void { voiceState
 function poseVoiceState(): "not_connected" | "connected" | "enabled" | "unauthorized" | "failed" { return voiceState === "off" ? "not_connected" : voiceState === "connecting" ? "connected" : voiceState === "listening" ? "enabled" : voiceState === "unauthorized" ? "unauthorized" : "failed"; }
 function clearWebCamera(): void { cameraFrameLoop = false; stream?.getTracks().forEach((track) => track.stop()); stream = null; video.pause(); video.srcObject = null; video.removeAttribute("src"); video.load(); video.style.display = "none"; }
 async function openWebStream(constraints: MediaStreamConstraints): Promise<MediaStream> { return await new Promise<MediaStream>((resolve, reject) => { let finished = false; const timer = window.setTimeout(() => { if (!finished) { finished = true; reject(new Error("摄像头打开超时")); } }, 5000); navigator.mediaDevices.getUserMedia(constraints).then((value) => { if (finished) { value.getTracks().forEach((track) => track.stop()); return; } finished = true; window.clearTimeout(timer); resolve(value); }, (error) => { if (finished) return; finished = true; window.clearTimeout(timer); reject(error); }); }); }
+// 重开摄像头时，上一次的 play() 还没落定就被 clearWebCamera 的 pause() 打断，
+// 浏览器把这个 promise reject 成 AbortError。画面本身没问题——下面那句
+// videoWidth 检查才是真正判断能不能用的地方。原来这个 reject 一路冒到 start()
+// 的 catch，弹出一句英文原文加一个谷歌短链，然后把整个启动流程停掉。
+async function playVideo(): Promise<void> {
+  try {
+    await video.play();
+  } catch (error) {
+    if ((error as DOMException)?.name !== "AbortError") throw error;
+  }
+}
+
 async function getVision() { vision ||= await FilesetResolver.forVisionTasks(new URL("./wasm", location.href).href); return vision; }
 async function createPose(): Promise<PoseLandmarker> { const files = await getVision(); const options = (delegate: "GPU" | "CPU") => PoseLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: motionDebug.modelUrl, delegate }, runningMode: "VIDEO", numPoses: 1, minPoseDetectionConfidence: .55, minPosePresenceConfidence: .55, minTrackingConfidence: .55 }); try { motionDebug.delegate = "GPU"; return await options("GPU"); } catch (error) { motionDebug.fallbackError = error instanceof Error ? error.message : String(error); motionDebug.delegate = "CPU"; return await options("CPU"); } }
 function updateModelLabel(): void { modelStatus.textContent = modelChoice === "lite" ? "Lite33" : "Full33"; modelSelect.value = modelChoice; }
@@ -482,9 +503,28 @@ function updateCameraButtons(): void { const front = facingMode === "user"; fron
 async function refreshCameraDevices(): Promise<void> { cameraDevices = (await navigator.mediaDevices.enumerateDevices()).filter((item) => item.kind === "videoinput"); const options = ["<option value=\"__auto__\">自动</option>", ...cameraDevices.map((item, index) => { const lower = item.label.toLowerCase(); const name = lower.includes("front") || lower.includes("user") || lower.includes("前") ? "前置" : lower.includes("back") || lower.includes("environment") || lower.includes("后") ? "后置" : item.label || `镜头 ${index + 1}`; return `<option value=\"${item.deviceId}\">${name}</option>`; })].join(""); cameraDeviceSelect.innerHTML = options; if (!cameraDevices.some((item) => item.deviceId === selectedCameraDeviceId)) selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = selectedCameraDeviceId; }
 type CameraRatioProfile = { width: number; height: number; ratio: number };
 function cameraRatioProfiles(): CameraRatioProfile[] { return [{ width: 480, height: 854, ratio: 9 / 16 }, { width: 480, height: 640, ratio: 3 / 4 }]; }
-async function startCamera(): Promise<void> { clearWebCamera(); await new Promise((resolve) => setTimeout(resolve, 100)); const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } }; stream = null; for (const profile of cameraRatioProfiles()) { try { stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height }, aspectRatio: { exact: profile.ratio }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); break; } catch { /* Try the 4:3 fallback, then the device default below. */ } } if (!stream) stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 480 }, height: { ideal: 854 }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); const track = stream.getVideoTracks()[0]; try { await track.applyConstraints({ frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } }); } catch { /* Some WebView camera providers ignore frame-rate constraints; keep the real value. */ } const settings = track.getSettings(); if (settings.deviceId) selectedCameraDeviceId = settings.deviceId; if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode; motionDebug.facingMode = facingMode; updateCameraButtons(); video.style.display = "block"; video.srcObject = stream; await video.play(); if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效"); motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight; await refreshCameraDevices(); resizeCanvas(); applyMirror(); startCameraFrameCounter(); }
+async function startCamera(): Promise<void> { clearWebCamera(); await new Promise((resolve) => setTimeout(resolve, 100)); const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } }; stream = null; for (const profile of cameraRatioProfiles()) { try { stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height }, aspectRatio: { exact: profile.ratio }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); break; } catch { /* Try the 4:3 fallback, then the device default below. */ } } if (!stream) stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 480 }, height: { ideal: 854 }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); const track = stream.getVideoTracks()[0]; try { await track.applyConstraints({ frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } }); } catch { /* Some WebView camera providers ignore frame-rate constraints; keep the real value. */ } const settings = track.getSettings(); if (settings.deviceId) selectedCameraDeviceId = settings.deviceId; if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode; motionDebug.facingMode = facingMode; updateCameraButtons(); video.style.display = "block"; video.srcObject = stream; await playVideo(); if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效"); motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight; await refreshCameraDevices(); resizeCanvas(); applyMirror(); startCameraFrameCounter(); }
 
-async function start(): Promise<void> { try { overlayRenderingEnabled = true; lastSendStateText = ""; const socketUrl = await pickServer(serverInput.value); serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); await loadPoseModel(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); connectSocket(socketUrl); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; schedulePredict(); } catch (error) { setConnection("error"); alert(error instanceof Error ? error.message : String(error)); await stop(); } }
+async function start(): Promise<void> { try { overlayRenderingEnabled = true; lastSendStateText = ""; const socketUrl = await pickServer(serverInput.value); serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden");
+    // 先握手，再加载模型。模型要好几秒，那几秒原来是干等；现在连接和加载并行，
+    // 等模型就绪时链路通常已经通了，控制配置（要不要跑手部模型）也到了。
+    connectSocket(socketUrl);
+    await loadPoseModel();
+    wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; schedulePredict(); } catch (error) { setConnection("error"); showStartError(error); await stop(); } }
+
+function showStartError(error: unknown): void {
+  const raw = error instanceof Error ? error.message : String(error);
+  // 浏览器抛出来的话是英文的，而且常常带一条谷歌短链。原样弹给玩家等于没说。
+  const hint = /permission|NotAllowed/i.test(raw) ? "摄像头没有授权，去系统设置里允许"
+    : /NotFound|NotReadable|device/i.test(raw) ? "摄像头打不开，可能被别的应用占着"
+    : /超时/.test(raw) ? "摄像头打开超时，重试一次"
+    : /模型/.test(raw) ? raw
+    : "启动失败，重试一次";
+  showStatus.textContent = hint;
+  showStatus.classList.remove("hidden");
+  setupCard.classList.remove("hidden");
+  runtimeCard.classList.add("hidden");
+}
 function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { setConnection("offline"); markControlConfigCached(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
 // 重连时重新挑一次，而不是死守断掉的那个地址：拔掉数据线就该自动落回 WiFi，
 // 换了网段也该自己找回来。
@@ -568,16 +608,45 @@ function packWorldPoints(points: readonly WorldPoseLandmark[] | undefined): numb
   ]);
 }
 function resizeInferenceCanvas(): void { const sourceWidth = video.videoWidth; const sourceHeight = video.videoHeight; if (!sourceWidth || !sourceHeight) return; const scale = Math.min(1, inferenceMaxSide / Math.max(sourceWidth, sourceHeight)); const width = Math.max(1, Math.round(sourceWidth * scale)); const height = Math.max(1, Math.round(sourceHeight * scale)); if (inferenceCanvas.width !== width || inferenceCanvas.height !== height) { inferenceCanvas.width = width; inferenceCanvas.height = height; } inferenceContext.drawImage(video, 0, 0, width, height); }
+// 档位要瞄准的是"整帧塞进摄像头的帧距"，不是某个绝对毫秒数。
+//
+// 摄像头 30 帧 = 每 33.3ms 一帧，推理只在有新一帧时才跑：一旦整帧超过 33.3ms，
+// 下一帧就赶不上，只能等再下一帧——帧率直接砍半，没有中间状态。所以慢一点点和
+// 慢一半的后果是一样的。
+//
+// 原来的门槛是 55 / 42 / 27，瞄的不是这条线：实测 46ms 卡在 448 这档，降不到
+// 384，而 384 那档只要 28.7ms——正好是塞得进和塞不进的分界。
+// 实测：边长 320（62 个采样，中位 46.3ms）和 448 基本一样快。MediaPipe 内部会
+// 把输入缩到它自己的尺寸，喂多大对推理耗时没影响——降档只是白白丢骨骼点精度。
+// 所以下限留在 384，不再往下降；档位存在的意义只剩"别喂得比必要更大"。
+const INFERENCE_SIDES = [384, 448, 512];
+const INFERENCE_SLOW_MS = 30;
+const INFERENCE_FAST_MS = 20;
 function updateInferenceBudget(elapsed: number, now: number): void {
   inferenceEwmaMs = inferenceEwmaMs ? inferenceEwmaMs * 0.86 + elapsed * 0.14 : elapsed;
   if (now - lastInferenceResizeAt < 2500) return;
-  let next = inferenceMaxSide;
-  if (inferenceEwmaMs > 55) next = 384;
-  else if (inferenceEwmaMs > 42) next = Math.min(next, 448);
-  else if (inferenceEwmaMs < 27) next = Math.min(512, next + 64);
-  if (next !== inferenceMaxSide) { inferenceMaxSide = next; lastInferenceResizeAt = now; }
+  const step = INFERENCE_SIDES.indexOf(inferenceMaxSide);
+  const at = step < 0 ? INFERENCE_SIDES.length - 1 : step;
+  let next = at;
+  if (inferenceEwmaMs > INFERENCE_SLOW_MS) next = Math.max(0, at - 1);
+  else if (inferenceEwmaMs < INFERENCE_FAST_MS) next = Math.min(INFERENCE_SIDES.length - 1, at + 1);
+  if (INFERENCE_SIDES[next] !== inferenceMaxSide) {
+    inferenceMaxSide = INFERENCE_SIDES[next];
+    lastInferenceResizeAt = now;
+  }
 }
-function currentInferenceIntervalMs(): number { return Math.max(MIN_INFERENCE_INTERVAL_MS, inferenceEwmaMs > 0 ? inferenceEwmaMs * 1.08 : 0); }
+// 没连上电脑时推理结果没有地方去。还是跑一点，好让人看见骨架、确认自己在画面
+// 里；但不必按满帧烧电——断线重连的那几秒里满帧空跑，正是手机发烫变卡的来源。
+const IDLE_INFERENCE_INTERVAL_MS = 500;
+function currentInferenceIntervalMs(): number {
+  if (socket?.readyState !== WebSocket.OPEN) return IDLE_INFERENCE_INTERVAL_MS;
+  // 这里不再按 ewma 拉长间隔。一帧只可能被算一次——inferenceBusy 和"这一帧处理
+  // 过没有"那两道检查已经保证了，速率天然封顶在摄像头的 30 帧。再叠一道按耗时
+  // 拉长的闸，效果只是把等待向上取整到下一个摄像头帧：推理 33.7ms 时 ewma×1.08
+  // 是 36.4ms，比帧距 33.3ms 多一点点，于是每两帧丢一帧，帧率直接砍半。
+  // 实测就是这样：Lite 把推理从 45ms 降到 33.7ms，帧率却纹丝不动，仍是 15.2。
+  return MIN_INFERENCE_INTERVAL_MS;
+}
 // ==== 手部关节 =============================================================
 // 姿态模型每只手只给手腕和三个指尖，判断握没握拳只能拿指尖到手腕的距离去猜，
 // 真实环境下认不出来。专用手部模型给 21 个点，看得见每根手指的关节。
@@ -747,6 +816,9 @@ function predict(now: number): void {
           camera_id: selectedCameraDeviceId === "__auto__" ? "logical" : selectedCameraDeviceId,
           preview_mirrored: facingMode === "user", coordinates_mirrored: false,
           actual_model: modelChoice, voice_state: poseVoiceState(),
+          delegate: motionDebug.delegate,
+          // 自适应档位走到了哪一档。降档到底有没有让推理变快，不报出来只能猜。
+          inference_side: inferenceMaxSide,
           points: packControlLandmarks(firstPose), inference_ms: Math.round(elapsed * 10) / 10,
         };
         // 保持紧凑控制载荷不变，同时为新版电脑携带可选的米制世界坐标。
@@ -795,7 +867,8 @@ async function startVoiceControl(): Promise<void> { if (activeRole !== "camera")
 
 async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; releaseHandModel(); handTrackingSide = null; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline"); }
 async function chooseCamera(cameraId: string): Promise<void> { selectedCameraDeviceId = cameraId; cameraDeviceSelect.value = cameraId; if (running) await startCamera(); applyMirror(); }
-async function chooseFacing(target: "user" | "environment"): Promise<void> { if (!running || facingMode === target) { updateCameraButtons(); return; } const previousFacing = facingMode; const previousDevice = selectedCameraDeviceId; facingMode = target; selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = "__auto__"; cameraSwitchState.textContent = "切换中"; try { await startCamera(); cameraSwitchState.textContent = `当前${target === "user" ? "前置镜头" : "后置镜头"}`; } catch (error) { facingMode = previousFacing; selectedCameraDeviceId = previousDevice; cameraSwitchState.textContent = `切换失败：${error instanceof Error ? error.message : "无法打开镜头"}`; try { await startCamera(); } catch { cameraSwitchState.textContent += "；原镜头恢复失败"; } updateCameraButtons(); } }
+async function chooseFacing(target: "user" | "environment"): Promise<void> { if (!running || facingMode === target) { updateCameraButtons(); return; } const previousFacing = facingMode; const previousDevice = selectedCameraDeviceId; facingMode = target;
+  try { localStorage.setItem("motionbridge-facing", target); } catch { /* 存不下不影响这次切换 */ } selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = "__auto__"; cameraSwitchState.textContent = "切换中"; try { await startCamera(); cameraSwitchState.textContent = `当前${target === "user" ? "前置镜头" : "后置镜头"}`; } catch (error) { facingMode = previousFacing; selectedCameraDeviceId = previousDevice; cameraSwitchState.textContent = `切换失败：${error instanceof Error ? error.message : "无法打开镜头"}`; try { await startCamera(); } catch { cameraSwitchState.textContent += "；原镜头恢复失败"; } updateCameraButtons(); } }
 function showRole(role: "home" | "camera" | "handheld"): void { activeRole = role; roleCard.classList.toggle("hidden", role !== "home"); setupCard.classList.toggle("hidden", role !== "camera"); handheldCard.classList.toggle("hidden", role !== "handheld"); voiceControl.classList.toggle("hidden", role !== "camera"); document.querySelector("#pageTitle")!.textContent = role === "handheld" ? "手持手柄" : role === "camera" ? "固定摄像头" : "手机控制端"; renderControlConfig(); }
 
 async function sendHandheldFrame(): Promise<void> { if (sensorPolling || handheldSocket?.readyState !== WebSocket.OPEN) return; sensorPolling = true; try { const sample = await SensorBridge.getLatest(); const touches: Record<string, unknown>[] = [...padState].map((control) => ({ control, pressed: true })); if (Math.abs(stickState.x) > 0.02 || Math.abs(stickState.y) > 0.02) touches.push({ control: "stick", x: stickState.x, y: stickState.y }); handheldSocket.send(JSON.stringify({ type: "sensor_frame", role: "sensor", device_id: deviceId, sequence: handheldSequence++, captured_at_ms: Date.now(), player_slot: Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value), quaternion: { x: sample.qx, y: sample.qy, z: sample.qz, w: sample.qw }, orientation: {}, rotation_rate: { x: sample.gx, y: sample.gy, z: sample.gz }, acceleration: { x: sample.ax, y: sample.ay, z: sample.az }, touches, recenter: handheldRecenter })); if (handheldRecenter) { handheldRecenter = false; document.querySelector("#sensorState")!.textContent = "已居中"; } handheldFrames++; const now = performance.now(); if (now - handheldFpsStarted >= 1000) { document.querySelector("#sensorFps")!.textContent = `${Math.round(handheldFrames * 1000 / (now - handheldFpsStarted))} FPS`; handheldFrames = 0; handheldFpsStarted = now; } } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器异常"; } finally { sensorPolling = false; } }
