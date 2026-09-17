@@ -1,8 +1,15 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 
+// Signing material never lives in the repo.  See keystore.properties.example.
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
 android {
-    namespace "cn.motionbridge.camera"
+    namespace "cn.motioncontrol.app"
     compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {
         // x86 builds exist only for emulators; every real device here is ARM,
@@ -10,11 +17,14 @@ android {
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
         }
-        applicationId "cn.motionbridge.camera"
+        applicationId "cn.motioncontrol.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 100
-        versionName "1.00"
+        // Frozen for the first signed public release.  versionCode only ever
+        // increases and is never reused; the encoding is MAJOR*10000 +
+        // MINOR*100 + PATCH so the integer stays readable.
+        versionCode 20000
+        versionName "2.0.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -23,8 +33,22 @@ android {
             noCompress 'onnx'
         }
     }
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
+            signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : null
+            // R8 is left off for now: Capacitor, JNA and Vosk all need hand-written
+            // keep rules, and getting that wrong fails at runtime rather than at
+            // build time.  Not a release blocker; revisit in a 2.0.x.
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -57,6 +81,9 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // Keystore-backed storage for the pairing secret.  Not localStorage:
+    // that is plain app storage and the secret is a credential.
+    implementation "androidx.security:security-crypto:1.1.0-alpha06"
     implementation "com.alphacephei:vosk-android:0.3.47@aar"
     implementation "net.java.dev.jna:jna:5.13.0@aar"
     testImplementation "junit:junit:$junitVersion"
@@ -74,4 +101,18 @@ try {
     }
 } catch(Exception e) {
     logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
+
+// An unsigned release APK installs nowhere useful and is easy to ship by
+// accident -- that is exactly how the 2.0 candidate ended up carrying the
+// Android debug key.  Fail before anything is built rather than after:
+// taskGraph.whenReady runs once configuration is done and before the first
+// task executes, so this costs seconds instead of a full compile.
+gradle.taskGraph.whenReady { graph ->
+    def wantsRelease = graph.allTasks.any { it.name in ["assembleRelease", "bundleRelease"] }
+    if (wantsRelease && !keystorePropertiesFile.exists()) {
+        throw new GradleException(
+            "缺少 android/keystore.properties：Release 构建必须使用正式签名密钥。" +
+            " 请参考 android/keystore.properties.example 生成并配置密钥库。")
+    }
 }

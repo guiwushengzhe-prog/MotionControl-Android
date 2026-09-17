@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">MotionControl 手机端</string>
     <string name="title_activity_main">MotionControl 手机端</string>
-    <string name="package_name">cn.motionbridge.camera</string>
-    <string name="custom_url_scheme">cn.motionbridge.camera</string>
+    <string name="package_name">cn.motioncontrol.app</string>
+    <string name="custom_url_scheme">cn.motioncontrol.app</string>
 </resources>

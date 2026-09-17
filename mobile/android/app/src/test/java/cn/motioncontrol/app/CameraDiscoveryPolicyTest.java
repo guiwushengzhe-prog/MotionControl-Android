@@ -1,4 +1,4 @@
-package cn.motionbridge.camera;
+package cn.motioncontrol.app;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;

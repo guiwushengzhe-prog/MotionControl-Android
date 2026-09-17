@@ -53,3 +53,17 @@ data/vgamepad-extract/
 # 注意：
 # data/mappings/ 必须进入 Git
 # data/profiles/ 也暂时进入 Gitdata/profiles/
+
+# ==============================
+# 审阅截图 / 临时快照 / 测试产物
+# ==============================
+# 都是根目录下的一次性文件：核对用的截图、批处理中转目录、按日期留的快照。
+# _batch_c_tmp 一个就 183 MB，进了库就再也拿不出来了。
+/_batch_c_tmp/
+/_incoming_action_r3_*/
+/_r3_head_snapshot_*/
+/test_results/
+/*_checks*.png
+/*_strip.png
+/*_keyframes.png
+/*_transition_*.png

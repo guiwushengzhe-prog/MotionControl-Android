@@ -1,4 +1,4 @@
-package cn.motionbridge.camera;
+package cn.motioncontrol.app;
 
 import android.content.Context;
 import android.content.pm.ActivityInfo;

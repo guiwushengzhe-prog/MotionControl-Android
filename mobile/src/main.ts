@@ -1,6 +1,8 @@
-import { DrawingUtils, FilesetResolver, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
+import { DrawingUtils, FilesetResolver, HandLandmarker, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import { App } from "@capacitor/app";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+import { PairingSession, isPairingMessage } from "./pairing-session";
+import type { PairRole } from "./pairing-crypto";
 import "./style.css";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
@@ -18,6 +20,9 @@ type ControlConfigV1 = {
   // Every phrase the desktop can act on.  The recognizer here is built from
   // this list, so the two sides cannot drift apart.
   voice_phrases?: string[];
+  // Whether to run the hand model, and on which hand.  The desktop asks only
+  // while it is actually steering with a hand -- see the hand joint section.
+  hand_tracking?: { enabled?: boolean; hand?: string };
 };
 type SensorSample = { qx: number; qy: number; qz: number; qw: number; gx: number; gy: number; gz: number; ax: number; ay: number; az: number; timestamp: number; running: boolean };
 type MotionDebug = {
@@ -50,7 +55,7 @@ const SensorBridge = registerPlugin<{ start(): Promise<void>; getLatest(): Promi
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <div id="cameraStage"><video id="camera" autoplay playsinline muted></video><canvas id="overlay"></canvas><div class="shade"></div><canvas id="inferenceCanvas" aria-hidden="true"></canvas></div>
-  <header class="app-header"><div class="mobile-brand"><p>MOTIONCONTROL 1.00</p><h1 id="pageTitle">手机控制端</h1><small>固定摄像头 · 手持控制器</small></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
+  <header class="app-header"><div class="mobile-brand"><p>MOTIONCONTROL 2.0.0</p><h1 id="pageTitle">手机控制端</h1><small>固定摄像头 · 手持控制器</small></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
   <main>
     <section class="setup-card role-card" id="roleCard">
       <span class="eyebrow">开始</span><h2>这台手机要做什么？</h2><p class="role-lead">固定在玩家前方时选“摄像头”；拿在手里时选“手持手柄”。</p>
@@ -79,6 +84,15 @@ app.innerHTML = `
       <div class="shoulders"><button data-pad="l">LB</button><button data-pad="zl">LT</button><button data-pad="zr">RT</button><button data-pad="r">RB</button></div><div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div></div>
     </section>
   </main>
+  <div class="pairing hidden" id="pairingDialog">
+      <div class="pairing-box">
+        <h2>首次配对</h2>
+        <p class="pairing-help">在电脑的 MotionControl 里点“配对新设备”，把屏幕上的 8 位数字填在这里。配对码 2 分钟内有效。</p>
+        <input id="pairingCode" inputmode="numeric" maxlength="8" placeholder="8 位配对码" autocomplete="off">
+        <p class="pairing-status" id="pairingStatus"></p>
+        <div class="actions"><button id="pairingSubmit" class="start-primary">完成配对</button><button id="pairingCancel" class="text-button">稍后</button></div>
+      </div>
+    </div>
   <div class="guide hidden" id="guide"></div><div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头</b></div>`;
 
 const video = document.querySelector<HTMLVideoElement>("#camera")!;
@@ -211,6 +225,9 @@ function applyControlConfig(message: unknown): void {
   if (!message || typeof message !== "object" || (message as { type?: string }).type !== "control_config_v1") return;
   syncedControlConfig = message as ControlConfigV1;
   controlConfigFresh = true;
+  // 只在电脑真的发来配置时才动手部模型。缓存下来的那份不算数：刚启动、还没连
+  // 上电脑就先加载 7.8 MB 的模型，是白占内存。
+  syncHandTracking();
   try { localStorage.setItem(CONTROL_CONFIG_STORAGE_KEY, JSON.stringify(syncedControlConfig)); } catch { /* Cache is optional. */ }
   renderControlConfig();
   // The grammar is fixed when the recognizer is built, so a phrase edited on
@@ -232,9 +249,14 @@ const MAX_INFERENCE_FPS = 28;
 const MIN_INFERENCE_INTERVAL_MS = 1000 / MAX_INFERENCE_FPS;
 const OVERLAY_INTERVAL_MS = 100; // 10 FPS visual skeleton; control data stays high-rate.
 const MAX_SOCKET_BUFFERED_BYTES = 8 * 1024;
-// mc27-v2 keeps the original compact body set and adds MediaPipe indices 1/4
-// (inner eyes), which the PC frozen22 11-point face signature requires.
-const CONTROL_POINT_INDICES = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,23,24,25,26,27,28,29,30,31,32] as const;
+// mc33-v3 sends the whole skeleton. The earlier compact sets skipped indices
+// 17-22 -- pinky, index and thumb on both hands -- to save bandwidth. Those six
+// points are exactly what a fist looks like: the pose model has no finger
+// joints, so the PC reads "closed" from how far those tips sit from the wrist.
+// Hand-steered mouse control is impossible without them, and six extra points
+// per frame is a small price next to the 27 already being sent.
+const POSE_LAYOUT = "mc33-v3";
+const CONTROL_POINT_INDICES = Array.from({ length: 33 }, (_, index) => index);
 let inferenceMaxSide = 512;
 let inferenceEwmaMs = 0;
 let lastInferenceResizeAt = 0;
@@ -260,6 +282,49 @@ const motionDebug: MotionDebug = window.__motionDebug = {
   lastInferenceMs: 0,
 };
 
+// --- device pairing -------------------------------------------------------
+// One session per socket: the PC binds an identity to the connection, not to
+// the device, so the camera and handheld sockets authenticate independently.
+const pairingDialog = document.querySelector<HTMLDivElement>("#pairingDialog")!;
+const pairingCodeInput = document.querySelector<HTMLInputElement>("#pairingCode")!;
+const pairingStatus = document.querySelector<HTMLParagraphElement>("#pairingStatus")!;
+let activePairingSession: PairingSession | null = null;
+let cameraPairing: PairingSession | null = null;
+let handheldPairing: PairingSession | null = null;
+
+function setPairingStatus(text: string, kind: "info" | "error" = "info"): void {
+  pairingStatus.textContent = text;
+  pairingStatus.className = kind === "error" ? "pairing-status error" : "pairing-status";
+}
+
+function openPairingDialog(session: PairingSession): void {
+  activePairingSession = session;
+  pairingCodeInput.value = "";
+  setPairingStatus("");
+  pairingDialog.classList.remove("hidden");
+  pairingCodeInput.focus();
+}
+
+function closePairingDialog(): void {
+  pairingDialog.classList.add("hidden");
+}
+
+document.querySelector("#pairingSubmit")!.addEventListener("click", () => {
+  void activePairingSession?.submitCode(pairingCodeInput.value);
+});
+document.querySelector("#pairingCancel")!.addEventListener("click", closePairingDialog);
+
+function makePairingSession(role: PairRole, send: (message: unknown) => void): PairingSession {
+  // Declared first so the callbacks can close over the same object the caller
+  // gets back; they only ever run after construction has finished.
+  const session: PairingSession = new PairingSession(getDeviceId(), role, send, {
+    onNeedCode: () => openPairingDialog(session),
+    onStatus: (text, kind) => setPairingStatus(text, kind ?? "info"),
+    onReady: closePairingDialog,
+  });
+  return session;
+}
+
 function getDeviceId(): string { let value = localStorage.getItem("motionbridge-device-id"); if (!value) { value = `camera-${crypto.randomUUID()}`; localStorage.setItem("motionbridge-device-id", value); } return value; }
 const deviceId = getDeviceId();
 function normalizeSocketUrl(value: string, path = "/ws/input"): string { const trimmed = value.trim().replace(/\/$/, ""); const parsed = new URL(/^[a-z]+:\/\//i.test(trimmed) ? trimmed : `ws://${trimmed}`); parsed.protocol = ["https:", "wss:"].includes(parsed.protocol) ? "wss:" : "ws:"; parsed.pathname = path; parsed.search = ""; parsed.hash = ""; return parsed.href; }
@@ -284,7 +349,7 @@ function cameraRatioProfiles(): CameraRatioProfile[] { return [{ width: 480, hei
 async function startCamera(): Promise<void> { clearWebCamera(); await new Promise((resolve) => setTimeout(resolve, 100)); const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } }; stream = null; for (const profile of cameraRatioProfiles()) { try { stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height }, aspectRatio: { exact: profile.ratio }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); break; } catch { /* Try the 4:3 fallback, then the device default below. */ } } if (!stream) stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 480 }, height: { ideal: 854 }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); const track = stream.getVideoTracks()[0]; try { await track.applyConstraints({ frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } }); } catch { /* Some WebView camera providers ignore frame-rate constraints; keep the real value. */ } const settings = track.getSettings(); if (settings.deviceId) selectedCameraDeviceId = settings.deviceId; if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode; motionDebug.facingMode = facingMode; updateCameraButtons(); video.style.display = "block"; video.srcObject = stream; await video.play(); if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效"); motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight; await refreshCameraDevices(); resizeCanvas(); applyMirror(); startCameraFrameCounter(); }
 
 async function start(): Promise<void> { try { overlayRenderingEnabled = true; lastSendStateText = ""; const socketUrl = normalizeSocketUrl(serverInput.value); serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); await loadPoseModel(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); connectSocket(socketUrl); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; schedulePredict(); } catch (error) { setConnection("error"); alert(error instanceof Error ? error.message : String(error)); await stop(); } }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { setConnection("offline"); markControlConfigCached(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => connectSocket(url), 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
+function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { setConnection("offline"); markControlConfigCached(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => connectSocket(url), 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
 function syncClock(): void { if (socket?.readyState !== WebSocket.OPEN) return; lastClockSyncAt = performance.now(); socket.send(JSON.stringify({ type: "clock_sync", client_sent_ms: lastClockSyncAt })); }
 
 function jpegPayloadBytes(base64: string): number {
@@ -356,6 +421,108 @@ function updateInferenceBudget(elapsed: number, now: number): void {
   if (next !== inferenceMaxSide) { inferenceMaxSide = next; lastInferenceResizeAt = now; }
 }
 function currentInferenceIntervalMs(): number { return Math.max(MIN_INFERENCE_INTERVAL_MS, inferenceEwmaMs > 0 ? inferenceEwmaMs * 1.08 : 0); }
+// ==== 手部关节 =============================================================
+// 姿态模型每只手只给手腕和三个指尖，判断握没握拳只能拿指尖到手腕的距离去猜，
+// 真实环境下认不出来。专用手部模型给 21 个点，看得见每根手指的关节。
+//
+// 代价在这台手机上量过：手部模型每帧 23 毫秒，帧率 15.3 掉到 13.9。所以只有
+// 电脑说"正在用手控鼠标"的时候才加载和运行它，平时一分钱不花。
+//
+// 喂给它的不是整幅画面，而是按电脑指定的那只手腕裁出来的一小块。裁不裁中位
+// 耗时一样（那两个网络内部本来就把输入缩到固定大小），但最慢的一帧从 70 毫秒
+// 降到 36——整幅画面偶尔要满图重新找手，裁过之后搜索范围只有巴掌大。另外裁
+// 哪里是电脑说了算的，所以不存在把左右手认反。
+type HandSide = "left" | "right";
+const POSE_WRIST: Record<HandSide, number> = { left: 15, right: 16 };
+const POSE_ELBOW: Record<HandSide, number> = { left: 13, right: 14 };
+const HAND_CROP_SIDE = 256;
+type PackedHand = { handedness: "Left" | "Right"; points: number[][] };
+let handTrackingSide: HandSide | null = null;
+let handLandmarker: HandLandmarker | null = null;
+let handModelLoading = false;
+const handCropCanvas = document.createElement("canvas");
+handCropCanvas.width = HAND_CROP_SIDE;
+handCropCanvas.height = HAND_CROP_SIDE;
+const handCropContext = handCropCanvas.getContext("2d")!;
+
+function syncHandTracking(): void {
+  const request = syncedControlConfig?.hand_tracking;
+  const hand = request?.hand;
+  handTrackingSide = request?.enabled && (hand === "left" || hand === "right") ? hand : null;
+  if (!handTrackingSide) { releaseHandModel(); return; }
+  if (handLandmarker || handModelLoading) return;
+  handModelLoading = true;
+  void loadHandModel().finally(() => { handModelLoading = false; });
+}
+
+function releaseHandModel(): void {
+  handLandmarker?.close();
+  handLandmarker = null;
+}
+
+async function loadHandModel(): Promise<void> {
+  const files = await getVision();
+  const options = (delegate: "GPU" | "CPU") => HandLandmarker.createFromOptions(files, {
+    baseOptions: { modelAssetPath: new URL("./models/hand_landmarker.task", location.href).href, delegate },
+    runningMode: "VIDEO", numHands: 1,
+  });
+  try {
+    handLandmarker = await options("GPU");
+  } catch {
+    // 和姿态模型同一条回退路线：这台机器的 GPU 代理不可用就退到 CPU，而不是
+    // 让手控鼠标整个失效。
+    try { handLandmarker = await options("CPU"); } catch { handLandmarker = null; }
+  }
+  // 加载期间电脑可能已经把手控鼠标关掉了。
+  if (!handTrackingSide) releaseHandModel();
+}
+
+// 手掌在手腕之外，所以框心要沿着"手肘指向手腕"这个方向再往外推一点；框的大小
+// 跟着前臂长度走，人离摄像头远近就不影响它。
+function handCropBox(points: NormalizedLandmark[], side: HandSide, width: number, height: number):
+    { sx: number; sy: number; side: number } | null {
+  const elbow = points[POSE_ELBOW[side]];
+  const wrist = points[POSE_WRIST[side]];
+  if (!elbow || !wrist) return null;
+  const dx = (wrist.x - elbow.x) * width;
+  const dy = (wrist.y - elbow.y) * height;
+  const forearm = Math.hypot(dx, dy);
+  if (forearm < 8) return null;
+  const box = Math.min(Math.max(forearm * 1.5, 48), Math.min(width, height));
+  const centerX = wrist.x * width + dx * 0.35;
+  const centerY = wrist.y * height + dy * 0.35;
+  return {
+    sx: Math.min(Math.max(centerX - box / 2, 0), width - box),
+    sy: Math.min(Math.max(centerY - box / 2, 0), height - box),
+    side: box,
+  };
+}
+
+function detectHand(points: NormalizedLandmark[], now: number): PackedHand | null {
+  const side = handTrackingSide;
+  if (!side || !handLandmarker) return null;
+  const box = handCropBox(points, side, inferenceCanvas.width, inferenceCanvas.height);
+  if (!box) return null;
+  handCropContext.drawImage(inferenceCanvas, box.sx, box.sy, box.side, box.side,
+                            0, 0, HAND_CROP_SIDE, HAND_CROP_SIDE);
+  const landmarks = handLandmarker.detectForVideo(handCropCanvas, now).landmarks[0];
+  if (!landmarks || landmarks.length !== 21) return null;
+  return {
+    handedness: side === "left" ? "Left" : "Right",
+    // 坐标换算回整幅画面，电脑那边只认整幅画面的归一化坐标。
+    // 第四个数是置信度：手部模型不给每个点单独的置信度，一只手要通过检测和跟踪
+    // 两道门槛才会出现在结果里，所以它返回的点是同一个置信度。电脑靠"点得在画
+    // 面里"这条硬规矩过滤，不靠这个数。
+    points: landmarks.map((point) => [
+      roundPose((box.sx + point.x * box.side) / inferenceCanvas.width),
+      roundPose((box.sy + point.y * box.side) / inferenceCanvas.height),
+      roundPose(point.z * box.side / inferenceCanvas.width),
+      1,
+    ]),
+  };
+}
+// ==== 手部关节到此为止 =====================================================
+
 function schedulePredict(): void {
   if (!running) return;
   // requestVideoFrameCallback is driven by the cameraFrame loop below.  Keep
@@ -381,6 +548,11 @@ function predict(now: number): void {
   try {
     resizeInferenceCanvas();
     const poseResult = poseLandmarker.detectForVideo(inferenceCanvas, now);
+    const firstPose = poseResult.landmarks[0];
+    // 手部关节只在电脑正用手控鼠标、并且连着的时候才跑：断开时这些点没地方去，
+    // 白费一次推理和一份电。
+    const packedHand = firstPose && socket?.readyState === WebSocket.OPEN
+      ? detectHand(firstPose, now) : null;
     const elapsed = performance.now() - started;
     updateInferenceBudget(elapsed, now);
     motionDebug.lastInferenceMs = elapsed;
@@ -395,7 +567,6 @@ function predict(now: number): void {
       lastOverlayAt = now;
     }
 
-    const firstPose = poseResult.landmarks[0];
     if (firstPose && socket?.readyState === WebSocket.OPEN) {
       // Sequence is allocated before congestion handling so the PC can observe
       // gaps as dropped real-time frames instead of mistaking them for a slower
@@ -404,7 +575,7 @@ function predict(now: number): void {
       if (socket.bufferedAmount <= MAX_SOCKET_BUFFERED_BYTES) {
         const worldPoints = packWorldPoints(poseResult.worldLandmarks?.[0]);
         const frame: Record<string, unknown> = {
-          type: "pose_features_v1", role: "camera", layout: "mc27-v2",
+          type: "pose_features_v1", role: "camera", layout: POSE_LAYOUT,
           device_id: deviceId, sequence: frameSequence,
           captured_at_ms: Date.now() + serverClockOffsetMs,
           sent_at_ms: Date.now() + serverClockOffsetMs,
@@ -417,6 +588,7 @@ function predict(now: number): void {
         };
         // 保持紧凑控制载荷不变，同时为新版电脑携带可选的米制世界坐标。
         if (worldPoints.length === 33) frame.world_points = worldPoints;
+        if (packedHand) frame.hands = [packedHand];
         socket.send(JSON.stringify(frame));
       } else {
         // Real-time control must prefer freshness over completeness. Never add
@@ -452,14 +624,14 @@ function applyMirror(): void { document.querySelector<HTMLElement>("#cameraStage
 async function stopVoiceControl(showOff = true): Promise<void> { voiceEnabled = false; activeVoicePhrases = ""; await nativeVoiceTextListener?.remove().catch(() => {}); await nativeVoiceStateListener?.remove().catch(() => {}); await nativeAudioErrorListener?.remove().catch(() => {}); nativeVoiceTextListener = null; nativeVoiceStateListener = null; nativeAudioErrorListener = null; await NativeAudio.stop().catch(() => {}); if (showOff) { voiceToggle.checked = false; setVoiceStatus("off"); } }
 async function startVoiceControl(): Promise<void> { if (activeRole !== "camera") { voiceToggle.checked = false; setVoiceStatus("error", "仅摄像头可用"); return; } if (voiceEnabled) return; if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "请先连接电脑"); return; } setVoiceStatus("connecting", "加载手机语音模型"); try { const phrases = voicePhrases(); activeVoicePhrases = phrases.join(" "); const ready = await NativeAudio.start(phrases.length ? { phrases } : undefined); if (!ready.recognizerReady) throw new Error("语音模型错误"); voiceEnabled = true; nativeVoiceTextListener = await NativeAudio.addListener("voiceText", (event) => { const text = (event.text || "").trim(); if (!voiceEnabled || !event.final || !text) return; setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "电脑已断开"); return; } const frame: Record<string, unknown> = { type: "voice_text", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, text, confidence: event.confidence, final: true, source: "android_vosk_speech_service_v100" }; socket.send(JSON.stringify(frame)); }); nativeVoiceStateListener = await NativeAudio.addListener("voiceState", (event) => { if (!voiceEnabled) return; const detail = event.message || (event.state === "command" ? "已识别命令" : event.state === "listening" ? "语音识别已就绪" : "等待语音"); setVoiceStatus(event.state === "connecting" ? "connecting" : "listening", detail); }); nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => { setVoiceStatus("error", event.message || "手机语音错误"); void stopVoiceControl(false); }); setVoiceStatus("listening", "Vosk 受限语法已就绪"); } catch (error) { const message = error instanceof Error ? error.message : String(error); const denied = /未授权|permission|denied/i.test(message); await stopVoiceControl(false); voiceToggle.checked = false; setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : /模型|model|recognizer|vosk/i.test(message) ? "模型错误" : message || "错误"); } }
 
-async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline"); }
+async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; releaseHandModel(); handTrackingSide = null; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline"); }
 async function chooseCamera(cameraId: string): Promise<void> { selectedCameraDeviceId = cameraId; cameraDeviceSelect.value = cameraId; if (running) await startCamera(); applyMirror(); }
 async function chooseFacing(target: "user" | "environment"): Promise<void> { if (!running || facingMode === target) { updateCameraButtons(); return; } const previousFacing = facingMode; const previousDevice = selectedCameraDeviceId; facingMode = target; selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = "__auto__"; cameraSwitchState.textContent = "切换中"; try { await startCamera(); cameraSwitchState.textContent = `当前${target === "user" ? "前置镜头" : "后置镜头"}`; } catch (error) { facingMode = previousFacing; selectedCameraDeviceId = previousDevice; cameraSwitchState.textContent = `切换失败：${error instanceof Error ? error.message : "无法打开镜头"}`; try { await startCamera(); } catch { cameraSwitchState.textContent += "；原镜头恢复失败"; } updateCameraButtons(); } }
 function showRole(role: "home" | "camera" | "handheld"): void { activeRole = role; roleCard.classList.toggle("hidden", role !== "home"); setupCard.classList.toggle("hidden", role !== "camera"); handheldCard.classList.toggle("hidden", role !== "handheld"); voiceControl.classList.toggle("hidden", role !== "camera"); document.querySelector("#pageTitle")!.textContent = role === "handheld" ? "手持手柄" : role === "camera" ? "固定摄像头" : "手机控制端"; renderControlConfig(); }
 
 async function sendHandheldFrame(): Promise<void> { if (sensorPolling || handheldSocket?.readyState !== WebSocket.OPEN) return; sensorPolling = true; try { const sample = await SensorBridge.getLatest(); const touches: Record<string, unknown>[] = [...padState].map((control) => ({ control, pressed: true })); if (Math.abs(stickState.x) > 0.02 || Math.abs(stickState.y) > 0.02) touches.push({ control: "stick", x: stickState.x, y: stickState.y }); handheldSocket.send(JSON.stringify({ type: "sensor_frame", role: "sensor", device_id: deviceId, sequence: handheldSequence++, captured_at_ms: Date.now(), player_slot: Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value), quaternion: { x: sample.qx, y: sample.qy, z: sample.qz, w: sample.qw }, orientation: {}, rotation_rate: { x: sample.gx, y: sample.gy, z: sample.gz }, acceleration: { x: sample.ax, y: sample.ay, z: sample.az }, touches, recenter: handheldRecenter })); if (handheldRecenter) { handheldRecenter = false; document.querySelector("#sensorState")!.textContent = "已居中"; } handheldFrames++; const now = performance.now(); if (now - handheldFpsStarted >= 1000) { document.querySelector("#sensorFps")!.textContent = `${Math.round(handheldFrames * 1000 / (now - handheldFpsStarted))} FPS`; handheldFrames = 0; handheldFpsStarted = now; } } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器异常"; } finally { sensorPolling = false; } }
 function clearTouches(): void { padState.clear(); stickState = { x: 0, y: 0 }; document.querySelector<HTMLElement>("#stick i")!.style.transform = "translate(0,0)"; document.querySelectorAll("[data-pad]").forEach((element) => element.classList.remove("pressed")); void sendHandheldFrame(); }
-async function startHandheld(): Promise<void> { showRole("handheld"); try { await SensorBridge.start(); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; const address = handheldServerInput.value.trim() || serverInput.value.trim(); if (!address) throw new Error("请填写电脑服务器地址"); serverInput.value = address; localStorage.setItem("motionbridge-server", address); handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { markControlConfigCached(); clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开"; }); handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器不可用"; } }
+async function startHandheld(): Promise<void> { showRole("handheld"); try { await SensorBridge.start(); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; const address = handheldServerInput.value.trim() || serverInput.value.trim(); if (!address) throw new Error("请填写电脑服务器地址"); serverInput.value = address; localStorage.setItem("motionbridge-server", address); handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldPairing = makePairingSession("sensor", (message) => handheldSocket?.send(JSON.stringify(message))); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (isPairingMessage(message.type)) { void handheldPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { markControlConfigCached(); clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开"; }); handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器不可用"; } }
 async function stopHandheld(): Promise<void> { clearTouches(); if (handheldTimer != null) window.clearInterval(handheldTimer); handheldTimer = null; await new Promise((resolve) => setTimeout(resolve, 35)); handheldSocket?.close(); handheldSocket = null; await SensorBridge.stop().catch(() => {}); await wakeLock?.release().catch(() => {}); wakeLock = null; showRole("home"); setConnection("offline"); }
 async function suspendHandheld(): Promise<void> { clearTouches(); if (handheldTimer != null) window.clearInterval(handheldTimer); handheldTimer = null; await new Promise((resolve) => setTimeout(resolve, 35)); handheldSocket?.close(); handheldSocket = null; await SensorBridge.stop().catch(() => {}); document.querySelector("#sensorState")!.textContent = "已暂停"; }
 async function handleBackButton(): Promise<void> { if (activeRole === "home") { await App.exitApp(); return; } if (activeRole === "camera") { await stop(); showRole("home"); return; } await stopHandheld(); }

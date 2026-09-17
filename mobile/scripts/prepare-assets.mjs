@@ -47,6 +47,11 @@ for (const filename of [
 
 const modelFiles = [
   "pose_landmarker_full.task",
+  // Hand steering reads the fist from finger joints. Without this file the app
+  // still runs -- it falls back to the pose model's three fingertips -- but
+  // that fallback cannot tell an open hand from a fist at all, so a build
+  // missing it is a broken build, not a smaller one.
+  "hand_landmarker.task",
 ];
 
 // MotionControl 1.00 is local-first/offline. Never download models during a build.
