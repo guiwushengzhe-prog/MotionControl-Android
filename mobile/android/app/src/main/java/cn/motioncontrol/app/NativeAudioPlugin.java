@@ -284,51 +284,101 @@ public class NativeAudioPlugin extends Plugin {
     }
 
     /**
-     * The unpacked model directory, fetching it from the PC if it is not here.
+     * The unpacked model directory, following whatever the PC is offering.
      *
-     * <p>Resuming is why this does not wipe the directory first: a file that is
-     * already present at the right size with the right digest is skipped, so an
-     * interrupted download continues rather than starting 65 MB again. The
-     * completion marker is written last, so a half-finished directory is never
-     * mistaken for a usable model.
+     * <p>The manifest carries a digest of the whole listing, and that digest is
+     * what the completion marker holds. So the question asked here is not "do I
+     * have a model" but "do I have <em>this</em> model" -- the day the PC is
+     * given a bigger or better one, the phone notices instead of quietly using
+     * the copy it downloaded months ago.
+     *
+     * <p>The directory name comes from the manifest too, so switching models is
+     * a change on the PC alone.
+     *
+     * <p>Resuming is why nothing is wiped first: a file already present at the
+     * right size with the right digest is skipped, so an interrupted download
+     * continues rather than starting 65 MB again, and replacing a model only
+     * fetches the files that actually differ. The marker is written last, so a
+     * half-finished directory is never mistaken for a usable model.
      */
     private File prepareModel(String baseUrl) throws IOException {
         File filesRoot = getContext().getFilesDir().getCanonicalFile();
-        File modelDirectory = new File(filesRoot, MODEL_DIR_NAME).getCanonicalFile();
         String rootPath = filesRoot.getPath() + File.separator;
-        if (!modelDirectory.getPath().startsWith(rootPath)) throw new IOException("语音模型路径无效");
-        File marker = new File(modelDirectory, MODEL_MARKER);
-        if (marker.isFile() && new File(modelDirectory, "am/final.mdl").isFile()
-                && new File(modelDirectory, "conf/model.conf").isFile()) return modelDirectory;
-
         String base = baseUrl == null ? "" : baseUrl.trim();
         while (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+
         if (base.isEmpty()) {
+            // 防御性分支：打开语音本来就要求先连上电脑，所以正常走不到这里。
+            File existing = new File(filesRoot, MODEL_DIR_NAME).getCanonicalFile();
+            if (isUsableModel(existing)) return existing;
             throw new IOException("语音模型还没下载。先连上电脑，再打开语音控制。");
         }
-        if (!modelDirectory.mkdirs() && !modelDirectory.isDirectory()) {
-            throw new IOException("无法创建语音模型目录");
-        }
-        downloadModel(base, modelDirectory, rootPath);
-        if (!new File(modelDirectory, "am/final.mdl").isFile()
-                || !new File(modelDirectory, "conf/model.conf").isFile()) {
-            deleteTree(modelDirectory);
-            throw new IOException("语音模型文件不完整");
-        }
-        if (!marker.isFile() && !marker.createNewFile()) throw new IOException("无法写入模型完成标记");
-        return modelDirectory;
-    }
 
-    private void downloadModel(String base, File modelDirectory, String rootPath) throws IOException {
         JSONObject manifest = readJson(base + MANIFEST_ROUTE);
         if (!manifest.optBoolean("available", false)) {
             throw new IOException("电脑上没有中文语音模型。检查电脑端的 models/vosk-model-small-cn-0.22。");
         }
         JSONArray files = manifest.optJSONArray("files");
         if (files == null || files.length() == 0) throw new IOException("电脑给的语音模型清单是空的");
+        String digest = manifest.optString("digest", "");
+        File modelDirectory = new File(filesRoot, safeName(manifest.optString("name", MODEL_DIR_NAME)))
+                .getCanonicalFile();
+        if (!modelDirectory.getPath().startsWith(rootPath)) throw new IOException("语音模型路径无效");
+        File marker = new File(modelDirectory, MODEL_MARKER);
+        if (!digest.isEmpty() && digest.equals(readMarker(marker)) && isUsableModel(modelDirectory)) {
+            return modelDirectory;
+        }
+
+        if (!modelDirectory.mkdirs() && !modelDirectory.isDirectory()) {
+            throw new IOException("无法创建语音模型目录");
+        }
+        marker.delete();   // 换模型的中途被打断，不能让残局看起来像下好了
+        downloadModel(base, manifest, files, modelDirectory);
+        if (!isUsableModel(modelDirectory)) {
+            deleteTree(modelDirectory);
+            throw new IOException("语音模型文件不完整");
+        }
+        writeMarker(marker, digest);
+        return modelDirectory;
+    }
+
+    private static boolean isUsableModel(File directory) {
+        return new File(directory, "am/final.mdl").isFile()
+                && new File(directory, "conf/model.conf").isFile();
+    }
+
+    /** 模型名字是电脑给的，所以它只能是一个名字，不能是一条路径。 */
+    private static String safeName(String name) throws IOException {
+        String value = name == null ? "" : name.trim();
+        if (!value.matches("[A-Za-z0-9._-]{1,80}") || value.contains("..")) {
+            throw new IOException("语音模型名字无效：" + value);
+        }
+        return value;
+    }
+
+    private static String readMarker(File marker) {
+        if (!marker.isFile() || marker.length() > 256) return "";
+        try (FileInputStream stream = new FileInputStream(marker)) {
+            byte[] buffer = new byte[(int) marker.length()];
+            int read = stream.read(buffer);
+            return read <= 0 ? "" : new String(buffer, 0, read, StandardCharsets.UTF_8).trim();
+        } catch (IOException error) {
+            return "";
+        }
+    }
+
+    private static void writeMarker(File marker, String digest) throws IOException {
+        try (FileOutputStream file = new FileOutputStream(marker)) {
+            file.write(digest.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private void downloadModel(String base, JSONObject manifest, JSONArray files,
+                               File modelDirectory) throws IOException {
         long total = Math.max(1L, manifest.optLong("total_bytes", 0L));
         long done = 0L;
-        String allowed = rootPath + MODEL_DIR_NAME + File.separator;
+        String allowed = modelDirectory.getPath() + File.separator;
+        java.util.Set<String> wanted = new java.util.HashSet<>();
         for (int index = 0; index < files.length(); index++) {
             JSONObject entry = files.optJSONObject(index);
             if (entry == null) throw new IOException("语音模型清单有坏条目");
@@ -338,6 +388,7 @@ public class NativeAudioPlugin extends Plugin {
             if (relative.isEmpty() || expected.isEmpty() || size < 0) {
                 throw new IOException("语音模型清单有坏条目");
             }
+            wanted.add(relative);
             File output = new File(modelDirectory, relative).getCanonicalFile();
             // 电脑那边只会提供它自己走目录走出来的文件，这里再挡一次：清单是从
             // 网络来的，不能因为对面"应该"正常就免检。
@@ -361,6 +412,25 @@ public class NativeAudioPlugin extends Plugin {
             }
             done += size;
             notifyVoiceState("connecting", progressText(done, total));
+        }
+        pruneStrays(modelDirectory, modelDirectory, wanted);
+    }
+
+    /** 删掉清单里没有的文件：换模型时上一个模型的文件会留在这个目录里。 */
+    private void pruneStrays(File root, File directory, java.util.Set<String> wanted) {
+        File[] entries = directory.listFiles();
+        if (entries == null) return;
+        for (File entry : entries) {
+            if (entry.isDirectory()) {
+                pruneStrays(root, entry, wanted);
+                entry.delete();   // 空了才会删掉，非空时这一步无害地失败
+                continue;
+            }
+            String relative = entry.getAbsolutePath().substring(root.getAbsolutePath().length() + 1)
+                    .replace(File.separatorChar, '/');
+            if (!relative.equals(MODEL_MARKER) && !wanted.contains(relative)) {
+                entry.delete();
+            }
         }
     }
 
