@@ -23,6 +23,8 @@ type ControlConfigV1 = {
   // Whether to run the hand model, and on which hand.  The desktop asks only
   // while it is actually steering with a hand -- see the hand joint section.
   hand_tracking?: { enabled?: boolean; hand?: string };
+  // Every address the desktop can be reached at, best link first.
+  server_candidates?: { host?: string; port?: number; kind?: string }[];
 };
 type SensorSample = { qx: number; qy: number; qz: number; qw: number; gx: number; gy: number; gz: number; ax: number; ay: number; az: number; timestamp: number; running: boolean };
 type MotionDebug = {
@@ -228,6 +230,7 @@ function applyControlConfig(message: unknown): void {
   // 只在电脑真的发来配置时才动手部模型。缓存下来的那份不算数：刚启动、还没连
   // 上电脑就先加载 7.8 MB 的模型，是白占内存。
   syncHandTracking();
+  rememberCandidates(syncedControlConfig.server_candidates);
   try { localStorage.setItem(CONTROL_CONFIG_STORAGE_KEY, JSON.stringify(syncedControlConfig)); } catch { /* Cache is optional. */ }
   renderControlConfig();
   // The grammar is fixed when the recognizer is built, so a phrase edited on
@@ -327,6 +330,66 @@ function makePairingSession(role: PairRole, send: (message: unknown) => void): P
 
 function getDeviceId(): string { let value = localStorage.getItem("motionbridge-device-id"); if (!value) { value = `camera-${crypto.randomUUID()}`; localStorage.setItem("motionbridge-device-id", value); } return value; }
 const deviceId = getDeviceId();
+// ==== 电脑在哪 =============================================================
+// 地址是会变的：换个 WiFi 变一次，插上数据线又多一个。让人去记、去填，是这个
+// 项目里最常见的一种"坏了"。
+//
+// 所以电脑一连上就把自己所有能被连到的地址发过来，这边存下来；下次连接挨个试,
+// 谁先答应用谁。有线排在最前面——实测手机到电脑，数据线 4.4ms、WiFi 8.3ms，抖
+// 动也只有一半。拔了线下次自动落回 WiFi，不用管。
+const SERVER_CANDIDATES_KEY = "motionbridge-server-candidates";
+// 一个够到的地址在局域网里几毫秒就答应了。这个时限是留给"根本不通"的那些：
+// 超过就别等了，后面还有别的要试。
+const SERVER_PROBE_TIMEOUT_MS = 800;
+type ServerCandidate = { host: string; port: number; kind: string };
+
+function readCandidates(): ServerCandidate[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SERVER_CANDIDATES_KEY) || "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.flatMap((item) => {
+      const host = typeof item?.host === "string" ? item.host.trim() : "";
+      const port = Number(item?.port);
+      if (!host || !Number.isFinite(port) || port <= 0) return [];
+      return [{ host, port, kind: typeof item?.kind === "string" ? item.kind : "lan" }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function rememberCandidates(list: unknown): void {
+  if (!Array.isArray(list) || !list.length) return;
+  try { localStorage.setItem(SERVER_CANDIDATES_KEY, JSON.stringify(list)); } catch { /* 存不下就下次再说 */ }
+}
+
+// 只问"有没有人在这个地址上应答"。回应是 no-cors 的不透明响应，读不到内容，也
+// 不需要读：这些地址本来就是电脑自己报上来的。
+async function answers(candidate: ServerCandidate): Promise<boolean> {
+  try {
+    await fetch(`http://${candidate.host}:${candidate.port}/`, {
+      mode: "no-cors", cache: "no-store",
+      signal: AbortSignal.timeout(SERVER_PROBE_TIMEOUT_MS),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function pickServer(typed: string): Promise<string> {
+  const fallback = normalizeSocketUrl(typed);
+  const candidates = readCandidates();
+  if (!candidates.length) return fallback;
+  // 按电脑给的顺序一个个试，而不是一起赛跑：顺序本身带着"哪条更好"的信息，赛
+  // 跑会让恰好快那么几毫秒的 WiFi 赢掉数据线。
+  for (const candidate of candidates) {
+    if (await answers(candidate)) return normalizeSocketUrl(`${candidate.host}:${candidate.port}`);
+  }
+  return fallback;
+}
+// ==== 电脑在哪，到此为止 ===================================================
+
 function normalizeSocketUrl(value: string, path = "/ws/input"): string { const trimmed = value.trim().replace(/\/$/, ""); const parsed = new URL(/^[a-z]+:\/\//i.test(trimmed) ? trimmed : `ws://${trimmed}`); parsed.protocol = ["https:", "wss:"].includes(parsed.protocol) ? "wss:" : "ws:"; parsed.pathname = path; parsed.search = ""; parsed.hash = ""; return parsed.href; }
 function getSuggestedServer(): string { const parameter = new URLSearchParams(location.search).get("server"); if (parameter) return normalizeSocketUrl(parameter); if (location.hostname && location.hostname !== "localhost") return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/input`; return ""; }
 serverInput.value = localStorage.getItem("motionbridge-server") || getSuggestedServer(); handheldServerInput.value = localStorage.getItem("motionbridge-server") || getSuggestedServer();
@@ -348,8 +411,19 @@ type CameraRatioProfile = { width: number; height: number; ratio: number };
 function cameraRatioProfiles(): CameraRatioProfile[] { return [{ width: 480, height: 854, ratio: 9 / 16 }, { width: 480, height: 640, ratio: 3 / 4 }]; }
 async function startCamera(): Promise<void> { clearWebCamera(); await new Promise((resolve) => setTimeout(resolve, 100)); const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } }; stream = null; for (const profile of cameraRatioProfiles()) { try { stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height }, aspectRatio: { exact: profile.ratio }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); break; } catch { /* Try the 4:3 fallback, then the device default below. */ } } if (!stream) stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 480 }, height: { ideal: 854 }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); const track = stream.getVideoTracks()[0]; try { await track.applyConstraints({ frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } }); } catch { /* Some WebView camera providers ignore frame-rate constraints; keep the real value. */ } const settings = track.getSettings(); if (settings.deviceId) selectedCameraDeviceId = settings.deviceId; if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode; motionDebug.facingMode = facingMode; updateCameraButtons(); video.style.display = "block"; video.srcObject = stream; await video.play(); if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效"); motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight; await refreshCameraDevices(); resizeCanvas(); applyMirror(); startCameraFrameCounter(); }
 
-async function start(): Promise<void> { try { overlayRenderingEnabled = true; lastSendStateText = ""; const socketUrl = normalizeSocketUrl(serverInput.value); serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); await loadPoseModel(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); connectSocket(socketUrl); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; schedulePredict(); } catch (error) { setConnection("error"); alert(error instanceof Error ? error.message : String(error)); await stop(); } }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { setConnection("offline"); markControlConfigCached(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => connectSocket(url), 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
+async function start(): Promise<void> { try { overlayRenderingEnabled = true; lastSendStateText = ""; const socketUrl = await pickServer(serverInput.value); serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); await loadPoseModel(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); connectSocket(socketUrl); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; schedulePredict(); } catch (error) { setConnection("error"); alert(error instanceof Error ? error.message : String(error)); await stop(); } }
+function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { setConnection("offline"); markControlConfigCached(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
+// 重连时重新挑一次，而不是死守断掉的那个地址：拔掉数据线就该自动落回 WiFi，
+// 换了网段也该自己找回来。
+async function reconnectToBestServer(): Promise<void> {
+  if (!running) return;
+  const url = await pickServer(serverInput.value);
+  if (!running) return;
+  serverInput.value = url;
+  try { localStorage.setItem("motionbridge-server", url); } catch { /* 存不下不影响连接 */ }
+  connectSocket(url);
+}
+
 function syncClock(): void { if (socket?.readyState !== WebSocket.OPEN) return; lastClockSyncAt = performance.now(); socket.send(JSON.stringify({ type: "clock_sync", client_sent_ms: lastClockSyncAt })); }
 
 function jpegPayloadBytes(base64: string): number {
