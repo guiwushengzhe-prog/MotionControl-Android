@@ -611,7 +611,13 @@ async function loadHandModel(): Promise<void> {
   const files = await getVision();
   const options = (delegate: "GPU" | "CPU") => HandLandmarker.createFromOptions(files, {
     baseOptions: { modelAssetPath: new URL("./models/hand_landmarker.task", location.href).href, delegate },
-    runningMode: "VIDEO", numHands: 1,
+    // IMAGE 而不是 VIDEO。VIDEO 模式会记住上一帧手在画面里的位置，靠这个省掉
+    // 重新找手的开销——那个前提是喂进去的是一段连续的视频。这里喂的是按手腕
+    // 裁出来的一小块，位置和大小每帧都在变，它记住的坐标下一帧指向的已经是别
+    // 的地方了。实测后果：一只静止的手，读数在 0.8 和 1.8 之间逐帧翻，握拳判
+    // 定随之乱跳。每帧独立识别就没有可以被搞坏的跨帧状态，代价是每帧都要重新
+    // 找一次手，但找的范围只有 256x256。
+    runningMode: "IMAGE", numHands: 1,
   });
   try {
     handLandmarker = await options("GPU");
@@ -645,14 +651,14 @@ function handCropBox(points: NormalizedLandmark[], side: HandSide, width: number
   };
 }
 
-function detectHand(points: NormalizedLandmark[], now: number): PackedHand | null {
+function detectHand(points: NormalizedLandmark[]): PackedHand | null {
   const side = handTrackingSide;
   if (!side || !handLandmarker) return null;
   const box = handCropBox(points, side, inferenceCanvas.width, inferenceCanvas.height);
   if (!box) return null;
   handCropContext.drawImage(inferenceCanvas, box.sx, box.sy, box.side, box.side,
                             0, 0, HAND_CROP_SIDE, HAND_CROP_SIDE);
-  const landmarks = handLandmarker.detectForVideo(handCropCanvas, now).landmarks[0];
+  const landmarks = handLandmarker.detect(handCropCanvas).landmarks[0];
   if (!landmarks || landmarks.length !== 21) return null;
   return {
     handedness: side === "left" ? "Left" : "Right",
@@ -699,7 +705,7 @@ function predict(now: number): void {
     // 手部关节只在电脑正用手控鼠标、并且连着的时候才跑：断开时这些点没地方去，
     // 白费一次推理和一份电。
     const packedHand = firstPose && socket?.readyState === WebSocket.OPEN
-      ? detectHand(firstPose, now) : null;
+      ? detectHand(firstPose) : null;
     const elapsed = performance.now() - started;
     updateInferenceBudget(elapsed, now);
     motionDebug.lastInferenceMs = elapsed;
