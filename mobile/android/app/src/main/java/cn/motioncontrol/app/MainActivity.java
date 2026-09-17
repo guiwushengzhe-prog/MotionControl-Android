@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SensorBridgePlugin.class);
         registerPlugin(SecureStorePlugin.class);
         registerPlugin(NativeAudioPlugin.class);
+        registerPlugin(LocalNetworkPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

@@ -338,6 +338,8 @@ const deviceId = getDeviceId();
 // 谁先答应用谁。有线排在最前面——实测手机到电脑，数据线 4.4ms、WiFi 8.3ms，抖
 // 动也只有一半。拔了线下次自动落回 WiFi，不用管。
 const SERVER_CANDIDATES_KEY = "motionbridge-server-candidates";
+// 电脑那边设备口固定在这个端口上。扫描时没有别的线索可用，只能按它来。
+const DEVICE_PORT = 8765;
 // 一个够到的地址在局域网里几毫秒就答应了。这个时限是留给"根本不通"的那些：
 // 超过就别等了，后面还有别的要试。
 const SERVER_PROBE_TIMEOUT_MS = 800;
@@ -365,11 +367,11 @@ function rememberCandidates(list: unknown): void {
 
 // 只问"有没有人在这个地址上应答"。回应是 no-cors 的不透明响应，读不到内容，也
 // 不需要读：这些地址本来就是电脑自己报上来的。
-async function answers(candidate: ServerCandidate): Promise<boolean> {
+async function answers(candidate: ServerCandidate, timeoutMs = SERVER_PROBE_TIMEOUT_MS): Promise<boolean> {
   try {
     await fetch(`http://${candidate.host}:${candidate.port}/`, {
       mode: "no-cors", cache: "no-store",
-      signal: AbortSignal.timeout(SERVER_PROBE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return true;
   } catch {
@@ -377,16 +379,87 @@ async function answers(candidate: ServerCandidate): Promise<boolean> {
   }
 }
 
+// ---- 一个地址都还没有的时候 ----------------------------------------------
+// 电脑连上之后会把地址报过来，那覆盖了以后每一次连接。没覆盖的是第一次，以及
+// 报过来的地址后来变了的情况——这时候手里什么都没有，只能自己找。
+//
+// 找需要网段，网段需要手机自己的地址，而网页里拿不到：WebRTC 以前能从 ICE 候
+// 选里漏出来，现代 Chrome 换成 mDNS 名字就是为了堵住这条。所以走原生插件问
+// Java 要。
+//
+// 数据线这条路上这招最有用：USB 网络共享把手机和电脑单独放在一个小网段里，扫
+// 一遍又快又必中。但网段是厂商定的，不是标准——AOSP 给 192.168.42.x，写这段时
+// 手上这台荣耀给的是 10.119.231.x。硬猜会猜错。
+type LocalInterface = { name: string; address: string; prefix: number };
+const LocalNetwork = registerPlugin<{
+  interfaces(): Promise<{ interfaces: LocalInterface[] }>;
+}>("LocalNetwork");
+
+// 只扫 /24 和更小的网段。USB 网络共享永远是 /24，254 个地址，几秒扫得完；学校
+// 和公司的 WiFi 常常是 /20 起步，几千个地址，扫它没有意义也扫不完。
+const SCAN_MIN_PREFIX = 24;
+const SCAN_BATCH = 64;
+// 同网段内几毫秒就该有回应，实测数据线上是 4ms。这个时限是留给"那个地址上根本
+// 没有机器"的——254 个地址里 253 个都是这种。
+const SCAN_TIMEOUT_MS = 400;
+
+function tetherFirst(items: LocalInterface[]): LocalInterface[] {
+  const wired = (item: LocalInterface) => /^(rndis|usb|ncm)/i.test(item.name);
+  return [...items].sort((a, b) => Number(wired(b)) - Number(wired(a)));
+}
+
+async function scanOwnSubnets(): Promise<ServerCandidate | null> {
+  let own: LocalInterface[] = [];
+  try {
+    own = (await LocalNetwork.interfaces()).interfaces || [];
+  } catch {
+    return null;   // 插件不在（旧壳子），当作找不到
+  }
+  for (const item of tetherFirst(own)) {
+    if (Number(item.prefix) < SCAN_MIN_PREFIX) continue;
+    const octets = item.address.split(".").map(Number);
+    if (octets.length !== 4 || octets.some((value) => !Number.isFinite(value))) continue;
+    const hosts: string[] = [];
+    for (let last = 1; last <= 254; last++) {
+      if (last === octets[3]) continue;   // 自己
+      hosts.push(`${octets[0]}.${octets[1]}.${octets[2]}.${last}`);
+    }
+    for (let at = 0; at < hosts.length; at += SCAN_BATCH) {
+      const batch = hosts.slice(at, at + SCAN_BATCH);
+      const hits = await Promise.all(batch.map(async (host) =>
+        (await answers({ host, port: DEVICE_PORT, kind: "usb" }, SCAN_TIMEOUT_MS)) ? host : null));
+      const found = hits.find((host) => host !== null);
+      if (found) return { host: found, port: DEVICE_PORT, kind: "usb" };
+    }
+  }
+  return null;
+}
+
 async function pickServer(typed: string): Promise<string> {
-  const fallback = normalizeSocketUrl(typed);
-  const candidates = readCandidates();
-  if (!candidates.length) return fallback;
   // 按电脑给的顺序一个个试，而不是一起赛跑：顺序本身带着"哪条更好"的信息，赛
   // 跑会让恰好快那么几毫秒的 WiFi 赢掉数据线。
-  for (const candidate of candidates) {
+  for (const candidate of readCandidates()) {
     if (await answers(candidate)) return normalizeSocketUrl(`${candidate.host}:${candidate.port}`);
   }
-  return fallback;
+  // 手填的那个排在缓存后面：它是上一次的，最容易过期，今天就是它把人卡住的。
+  const typedCandidate = typed.trim();
+  if (typedCandidate) {
+    try {
+      const parsed = new URL(normalizeSocketUrl(typedCandidate));
+      const port = Number(parsed.port) || DEVICE_PORT;
+      if (await answers({ host: parsed.hostname, port, kind: "lan" })) {
+        return normalizeSocketUrl(typedCandidate);
+      }
+    } catch { /* 填得不成样子，当作没填 */ }
+  }
+  // 什么都没答应：自己找一遍。找到就记下来，下次不用再扫。
+  const found = await scanOwnSubnets();
+  if (found) {
+    rememberCandidates([found]);
+    return normalizeSocketUrl(`${found.host}:${found.port}`);
+  }
+  // 都不行：把手填的那个原样交回去，让原来的报错路径去说话。
+  return normalizeSocketUrl(typed);
 }
 // ==== 电脑在哪，到此为止 ===================================================
 
