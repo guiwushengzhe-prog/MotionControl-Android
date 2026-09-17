@@ -232,6 +232,7 @@ function applyControlConfig(message: unknown): void {
   // 上电脑就先加载 7.8 MB 的模型，是白占内存。
   syncHandTracking();
   rememberCandidates(syncedControlConfig.server_candidates);
+  void checkWebUpdate();
   try { localStorage.setItem(CONTROL_CONFIG_STORAGE_KEY, JSON.stringify(syncedControlConfig)); } catch { /* Cache is optional. */ }
   renderControlConfig();
   // The grammar is fixed when the recognizer is built, so a phrase edited on
@@ -404,6 +405,17 @@ const LocalNetwork = registerPlugin<{
   interfaces(): Promise<{ interfaces: LocalInterface[] }>;
 }>("LocalNetwork");
 
+// 网页包更新。下到暂存目录，下次启动才换上去——不在页面跑着的时候动它脚下的文件。
+type WebUpdateResult = { state: "skipped" | "none" | "current" | "ready" | "failed"; message?: string };
+const WebUpdate = registerPlugin<{
+  sync(options: { baseUrl: string }): Promise<WebUpdateResult>;
+  bootOk(): Promise<void>;
+}>("WebUpdate");
+// 脚本跑到这里，说明这份网页包至少不是砖。壳子在启动时留了个记号，这一句把它
+// 清掉；记号要是活到下次启动，壳子就把这个包丢掉、退回 APK 自带的那份。
+void WebUpdate.bootOk().catch(() => {});
+let webUpdateChecked = false;
+
 // 只扫 /24 和更小的网段。USB 网络共享永远是 /24，254 个地址，几秒扫得完；学校
 // 和公司的 WiFi 常常是 /20 起步，几千个地址，扫它没有意义也扫不完。
 const SCAN_MIN_PREFIX = 24;
@@ -545,6 +557,18 @@ function deviceHttpBase(): string {
   } catch {
     return "";
   }
+}
+
+// 一次连接只问一次。失败不拦任何事：APK 里那份永远是好的，照样能玩。
+async function checkWebUpdate(): Promise<void> {
+  if (webUpdateChecked) return;
+  webUpdateChecked = true;
+  const base = deviceHttpBase();
+  if (!base) return;
+  try {
+    const result = await WebUpdate.sync({ baseUrl: base });
+    if (result.state === "ready") setConnection("online");
+  } catch { /* 旧壳子没有这个插件，当作没有更新 */ }
 }
 
 function syncClock(): void { if (socket?.readyState !== WebSocket.OPEN) return; lastClockSyncAt = performance.now(); socket.send(JSON.stringify({ type: "clock_sync", client_sent_ms: lastClockSyncAt })); }

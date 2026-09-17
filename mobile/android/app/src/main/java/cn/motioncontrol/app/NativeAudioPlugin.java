@@ -15,24 +15,17 @@ import com.getcapacitor.annotation.PermissionCallback;
 
 import com.getcapacitor.JSArray;
 
-import org.json.JSONArray;
 import org.json.JSONObject;
 import org.vosk.Model;
 import org.vosk.Recognizer;
 import org.vosk.android.RecognitionListener;
 import org.vosk.android.SpeechService;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -48,7 +41,6 @@ import java.util.Locale;
 public class NativeAudioPlugin extends Plugin {
     private static final int SAMPLE_RATE = 16_000;
     private static final String MODEL_DIR_NAME = "vosk-model-small-cn-0.22";
-    private static final String MODEL_MARKER = ".complete";
     // 这个模型以前是打进 APK 的：41.5 MB，整个安装包的一半，而那些文件跟配对的
     // 电脑上的逐字节一样。手机本来就必须有一台电脑才能用（识别出来的文字要发过
     // 去），所以第一次开语音时从电脑取，谁的流量都不用花，走的还是局域网。
@@ -294,12 +286,6 @@ public class NativeAudioPlugin extends Plugin {
      *
      * <p>The directory name comes from the manifest too, so switching models is
      * a change on the PC alone.
-     *
-     * <p>Resuming is why nothing is wiped first: a file already present at the
-     * right size with the right digest is skipped, so an interrupted download
-     * continues rather than starting 65 MB again, and replacing a model only
-     * fetches the files that actually differ. The marker is written last, so a
-     * half-finished directory is never mistaken for a usable model.
      */
     private File prepareModel(String baseUrl) throws IOException {
         File filesRoot = getContext().getFilesDir().getCanonicalFile();
@@ -314,31 +300,35 @@ public class NativeAudioPlugin extends Plugin {
             throw new IOException("语音模型还没下载。先连上电脑，再打开语音控制。");
         }
 
-        JSONObject manifest = readJson(base + MANIFEST_ROUTE);
+        JSONObject manifest = ManifestSync.manifest(base, MANIFEST_ROUTE);
         if (!manifest.optBoolean("available", false)) {
             throw new IOException("电脑上没有中文语音模型。检查电脑端的 models/vosk-model-small-cn-0.22。");
         }
-        JSONArray files = manifest.optJSONArray("files");
-        if (files == null || files.length() == 0) throw new IOException("电脑给的语音模型清单是空的");
         String digest = manifest.optString("digest", "");
         File modelDirectory = new File(filesRoot, safeName(manifest.optString("name", MODEL_DIR_NAME)))
                 .getCanonicalFile();
         if (!modelDirectory.getPath().startsWith(rootPath)) throw new IOException("语音模型路径无效");
-        File marker = new File(modelDirectory, MODEL_MARKER);
-        if (!digest.isEmpty() && digest.equals(readMarker(marker)) && isUsableModel(modelDirectory)) {
+        if (!digest.isEmpty() && digest.equals(ManifestSync.readMarker(modelDirectory))
+                && isUsableModel(modelDirectory)) {
             return modelDirectory;
         }
 
         if (!modelDirectory.mkdirs() && !modelDirectory.isDirectory()) {
             throw new IOException("无法创建语音模型目录");
         }
-        marker.delete();   // 换模型的中途被打断，不能让残局看起来像下好了
-        downloadModel(base, manifest, files, modelDirectory);
+        ManifestSync.clearMarker(modelDirectory);   // 换模型中途被打断，残局不能看着像下好了
+        final long[] seen = {0L, 0L};
+        String settled = ManifestSync.sync(manifest, modelDirectory,
+                modelDirectory.getPath() + File.separator, base, FILE_ROUTE,
+                (done, total) -> {
+                    seen[0] = done; seen[1] = total;
+                    notifyVoiceState("connecting", progressText(done, total));
+                });
         if (!isUsableModel(modelDirectory)) {
             deleteTree(modelDirectory);
             throw new IOException("语音模型文件不完整");
         }
-        writeMarker(marker, digest);
+        ManifestSync.writeMarker(modelDirectory, settled);
         return modelDirectory;
     }
 
@@ -356,162 +346,9 @@ public class NativeAudioPlugin extends Plugin {
         return value;
     }
 
-    private static String readMarker(File marker) {
-        if (!marker.isFile() || marker.length() > 256) return "";
-        try (FileInputStream stream = new FileInputStream(marker)) {
-            byte[] buffer = new byte[(int) marker.length()];
-            int read = stream.read(buffer);
-            return read <= 0 ? "" : new String(buffer, 0, read, StandardCharsets.UTF_8).trim();
-        } catch (IOException error) {
-            return "";
-        }
-    }
-
-    private static void writeMarker(File marker, String digest) throws IOException {
-        try (FileOutputStream file = new FileOutputStream(marker)) {
-            file.write(digest.getBytes(StandardCharsets.UTF_8));
-        }
-    }
-
-    private void downloadModel(String base, JSONObject manifest, JSONArray files,
-                               File modelDirectory) throws IOException {
-        long total = Math.max(1L, manifest.optLong("total_bytes", 0L));
-        long done = 0L;
-        String allowed = modelDirectory.getPath() + File.separator;
-        java.util.Set<String> wanted = new java.util.HashSet<>();
-        for (int index = 0; index < files.length(); index++) {
-            JSONObject entry = files.optJSONObject(index);
-            if (entry == null) throw new IOException("语音模型清单有坏条目");
-            String relative = entry.optString("path", "").replace('\\', '/');
-            String expected = entry.optString("sha256", "");
-            long size = entry.optLong("size", -1L);
-            if (relative.isEmpty() || expected.isEmpty() || size < 0) {
-                throw new IOException("语音模型清单有坏条目");
-            }
-            wanted.add(relative);
-            File output = new File(modelDirectory, relative).getCanonicalFile();
-            // 电脑那边只会提供它自己走目录走出来的文件，这里再挡一次：清单是从
-            // 网络来的，不能因为对面"应该"正常就免检。
-            if (!output.getPath().startsWith(allowed)) {
-                throw new IOException("语音模型路径无效：" + relative);
-            }
-            if (output.isFile() && output.length() == size && expected.equalsIgnoreCase(digestOf(output))) {
-                done += size;
-                notifyVoiceState("connecting", progressText(done, total));
-                continue;
-            }
-            File parent = output.getParentFile();
-            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
-                throw new IOException("无法创建模型子目录");
-            }
-            String actual = fetchTo(base + FILE_ROUTE + URLEncoder.encode(relative, "UTF-8"), output);
-            if (!expected.equalsIgnoreCase(actual)) {
-                // 校验不过就删掉，否则下次"续传"会把这个坏文件当成下好的跳过去。
-                output.delete();
-                throw new IOException("语音模型文件校验不过：" + relative);
-            }
-            done += size;
-            notifyVoiceState("connecting", progressText(done, total));
-        }
-        pruneStrays(modelDirectory, modelDirectory, wanted);
-    }
-
-    /** 删掉清单里没有的文件：换模型时上一个模型的文件会留在这个目录里。 */
-    private void pruneStrays(File root, File directory, java.util.Set<String> wanted) {
-        File[] entries = directory.listFiles();
-        if (entries == null) return;
-        for (File entry : entries) {
-            if (entry.isDirectory()) {
-                pruneStrays(root, entry, wanted);
-                entry.delete();   // 空了才会删掉，非空时这一步无害地失败
-                continue;
-            }
-            String relative = entry.getAbsolutePath().substring(root.getAbsolutePath().length() + 1)
-                    .replace(File.separatorChar, '/');
-            if (!relative.equals(MODEL_MARKER) && !wanted.contains(relative)) {
-                entry.delete();
-            }
-        }
-    }
-
     private String progressText(long done, long total) {
         return String.format(Locale.US, "正在从电脑下载语音模型 %d%%（%.0f/%.0f MB）",
                 Math.min(100L, done * 100 / total), done / 1048576.0, total / 1048576.0);
-    }
-
-    private HttpURLConnection open(String url) throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-        connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-        connection.setReadTimeout(READ_TIMEOUT_MS);
-        connection.setUseCaches(false);
-        int status = connection.getResponseCode();
-        if (status != 200) {
-            connection.disconnect();
-            throw new IOException("电脑没有给出语音模型（HTTP " + status + "）");
-        }
-        return connection;
-    }
-
-    private JSONObject readJson(String url) throws IOException {
-        HttpURLConnection connection = open(url);
-        try (InputStream stream = connection.getInputStream()) {
-            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-            byte[] chunk = new byte[8192];
-            int count;
-            while ((count = stream.read(chunk)) != -1) {
-                buffer.write(chunk, 0, count);
-                if (buffer.size() > 1 << 20) throw new IOException("语音模型清单异常地大");
-            }
-            return new JSONObject(new String(buffer.toByteArray(), StandardCharsets.UTF_8));
-        } catch (IOException error) {
-            throw error;
-        } catch (Exception error) {
-            throw new IOException("语音模型清单读不懂", error);
-        } finally {
-            connection.disconnect();
-        }
-    }
-
-    /** Stream a file to disk, returning what it actually hashed to. */
-    private String fetchTo(String url, File output) throws IOException {
-        HttpURLConnection connection = open(url);
-        try (InputStream stream = connection.getInputStream();
-             FileOutputStream file = new FileOutputStream(output)) {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] chunk = new byte[65536];
-            int count;
-            while ((count = stream.read(chunk)) != -1) {
-                file.write(chunk, 0, count);
-                digest.update(chunk, 0, count);
-            }
-            return hex(digest.digest());
-        } catch (IOException error) {
-            throw error;
-        } catch (Exception error) {
-            throw new IOException("下载语音模型失败", error);
-        } finally {
-            connection.disconnect();
-        }
-    }
-
-    private String digestOf(File file) throws IOException {
-        try (FileInputStream stream = new FileInputStream(file)) {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] chunk = new byte[65536];
-            int count;
-            while ((count = stream.read(chunk)) != -1) digest.update(chunk, 0, count);
-            return hex(digest.digest());
-        } catch (IOException error) {
-            throw error;
-        } catch (Exception error) {
-            throw new IOException("无法校验已有的语音模型文件", error);
-        }
-    }
-
-    private static String hex(byte[] bytes) {
-        StringBuilder text = new StringBuilder(bytes.length * 2);
-        for (byte value : bytes) text.append(String.format(Locale.US, "%02x", value));
-        return text.toString();
     }
 
     private static void deleteTree(File target) {

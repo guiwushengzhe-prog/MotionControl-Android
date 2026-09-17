@@ -103,3 +103,8 @@ app/src/main/assets/public
 app/src/main/assets/capacitor.config.json
 app/src/main/assets/capacitor.plugins.json
 app/src/main/res/xml/config.xml
+
+# 网页包签名私钥。跟 .jks 同一类东西：丢了只能发新 APK 换公钥，
+# 泄露了别人就能往所有已装手机推代码。绝不进仓库。
+phone-web-signing.pem
+*.pem
