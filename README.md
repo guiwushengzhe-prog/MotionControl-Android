@@ -2,6 +2,9 @@
 
 单手机摄像头体感游戏控制器。手机本地识别人体关键点、手势和语音，电脑端映射为键盘 / Xbox 虚拟手柄 / DSU 体感输出，并支持宏。
 
+这是手机端。电脑端、云端和参与开发的说明在主仓库：
+<https://github.com/guiwushengzhe-prog/MotionControl>
+
 ## 目录
 
 - `mobile/`：手机端（Capacitor + Android），网页版 MediaPipe 人体/手势识别，原生 AudioRecord 语音采集。
