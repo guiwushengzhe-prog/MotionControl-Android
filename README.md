@@ -35,3 +35,16 @@
 ## 说明
 
 人体识别当前使用网页版 MediaPipe；语音使用手机原生 AudioRecord，失败时回退 WebAudio。详见 `docs/`。
+
+## 许可证
+
+Copyright (C) 2026 guiwushengzhe
+
+本项目采用 **GNU Affero General Public License v3.0**（AGPL-3.0），完整条文见
+[LICENSE](LICENSE)。
+
+你可以自由使用、研究、修改和分发这份代码；但分发修改版、或把修改版当成网络
+服务给别人用，都必须同样以 AGPL-3.0 公开完整源码。
+
+第三方组件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，各自遵循自己的
+许可证。
