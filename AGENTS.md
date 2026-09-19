@@ -1,17 +1,18 @@
-# 给 AI 协作者
+# AGENTS.md
 
-> **如果你是 Codex，这份就是给你的。**
-> Claude Code 读的是 [CLAUDE.md](CLAUDE.md)，那份指回这里——两边同一套规矩。
+> **如果你是 Codex，这份就是给你的。你的实验分支叫 `exp/codex/描述`。**
+> Claude Code 读的是 CLAUDE.md，正文和这里逐字相同——不用去翻那一份。
 
 这是 **MotionControl 手机端**，由 **Claude Code** 和 **Codex** 共同开发，人类负责人
 是 guiwu（GitHub: guiwushengzhe-prog）。
 
-**完整的协作约定在电脑端仓库**，两边遵守同一份：
+**电脑端仓库有一份更完整的约定**（发版流程、生产服务器那些），两边遵守同一套：
 https://github.com/guiwushengzhe-prog/MotionControl/blob/main/AGENTS.md
+下面是手机端特有的部分。
 
-下面只写手机端特有的几条。
+<!-- 以下到文件末尾，两份逐字相同 -->
 
-## 分支：先认清你是谁
+## 分支
 
 | 你是 | 实验分支就叫 |
 |---|---|
