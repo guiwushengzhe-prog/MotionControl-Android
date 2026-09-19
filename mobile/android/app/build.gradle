@@ -22,11 +22,17 @@ android {
         applicationId "cn.motioncontrol.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // Frozen for the first signed public release.  versionCode only ever
-        // increases and is never reused; the encoding is MAJOR*10000 +
-        // MINOR*100 + PATCH so the integer stays readable.
-        versionCode 20000
+        // APK 的版本号只写一遍，versionCode 从它算出来。两个数字手工同步的话，
+        // 总有一次会改了一个忘了另一个，而 versionCode 只能往上走、不能重用，
+        // 错了就是一个装不上去的包。编码是 MAJOR*10000 + MINOR*100 + PATCH，
+        // 这样整数自己读得出来（1.2.3 -> 10203）。
+        //
+        // 网页包有它自己的版本号，在 mobile/package.json，和这一个故意分开：
+        // 它能热更，而 APK 不会跟着变。
         versionName "2.0.0"
+        versionCode versionName.tokenize('.').with { p ->
+            p[0].toInteger() * 10000 + p[1].toInteger() * 100 + p[2].toInteger()
+        }
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

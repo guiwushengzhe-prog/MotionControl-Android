@@ -57,7 +57,7 @@ const SensorBridge = registerPlugin<{ start(): Promise<void>; getLatest(): Promi
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <div id="cameraStage"><video id="camera" autoplay playsinline muted></video><canvas id="overlay"></canvas><div class="shade"></div><canvas id="inferenceCanvas" aria-hidden="true"></canvas></div>
-  <header class="app-header"><div class="mobile-brand"><p>MOTIONCONTROL 2.0.0</p><h1 id="pageTitle">手机控制端</h1><small>固定摄像头 · 手持控制器</small></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
+  <header class="app-header"><div class="mobile-brand"><p id="brandVersion">MOTIONCONTROL ${__WEB_VERSION__}</p><h1 id="pageTitle">手机控制端</h1><small>固定摄像头 · 手持控制器</small></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
   <main>
     <section class="setup-card role-card" id="roleCard">
       <span class="eyebrow">开始</span><h2>这台手机要做什么？</h2><p class="role-lead">固定在玩家前方时选“摄像头”；拿在手里时选“手持手柄”。</p>
@@ -1017,7 +1017,17 @@ const stick = document.querySelector<HTMLElement>("#stick")!; stick.addEventList
 window.addEventListener("resize", resizeCanvas);
 document.addEventListener("visibilitychange", () => { if (document.hidden && voiceEnabled) void stopVoiceControl(); if (document.hidden && activeRole === "handheld") void suspendHandheld(); if (document.visibilityState === "visible" && activeRole === "handheld" && handheldTimer == null) void startHandheld(); if (document.visibilityState === "visible" && (running || activeRole === "handheld") && !wakeLock) void navigator.wakeLock?.request("screen").then((lock) => { wakeLock = lock; }).catch(() => {}); });
 window.addEventListener("beforeunload", () => { clearTouches(); void stopVoiceControl(); });
-void App.addListener("backButton", () => { void handleBackButton(); });
+void // 装的 APK 是一个版本，跑的网页可能是另一个。一半的修复走热更，APK 不会
+// 跟着变，所以只报 APK 版本的话，"我这版有没有那个修复"就只能靠猜——而反馈
+// 表单里恰好要填这个数。两个一样时只写一个，不一样才把网页那个也写出来。
+void App.getInfo().then((info) => {
+  const el = document.querySelector<HTMLElement>("#brandVersion");
+  if (!el || !info?.version) return;
+  el.textContent = info.version === __WEB_VERSION__
+    ? `MOTIONCONTROL ${info.version}`
+    : `MOTIONCONTROL ${info.version} · 网页 ${__WEB_VERSION__}`;
+}).catch(() => { /* 浏览器里没有原生信息，维持网页版本就行 */ });
+App.addListener("backButton", () => { void handleBackButton(); });
 // 从系统设置页回来的时候再看一眼。上面那两个按钮把人送出去，
 // 他在那边把开关打开再按返回——这一路全在 App 外面发生，不听一下的话
 // 那行字会停在"两条路都没开"，而他刚刚照做了。
