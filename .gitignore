@@ -67,3 +67,14 @@ data/vgamepad-extract/
 /*_strip.png
 /*_keyframes.png
 /*_transition_*.png
+
+# ==============================
+# AI 工作规则和本地配置
+# ==============================
+# 智能体自己的东西，与项目无关。AGENTS.md / CLAUDE.md 之前提交过一轮，
+# 在公开历史里留下了四个和产品无关的提交。规则现在放各自的长期记忆区。
+# .claude/ 和 .codex/ 原本既未跟踪也未忽略，一次 git add -A 就会扫进来。
+AGENTS.md
+CLAUDE.md
+.claude/
+.codex/
