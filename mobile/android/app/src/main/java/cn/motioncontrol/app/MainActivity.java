@@ -47,7 +47,21 @@ public class MainActivity extends BridgeActivity {
         }
         // 验过签才会有 .issued，所以它的存在就是"这份包验过"的证据。少了它就
         // 不提供——包括验签功能加进来之前装上的那些。旧的信任不能自动延续。
-        if (ManifestSync.readMarker(live).isEmpty() || BundleSignature.readIssued(live) <= 0) {
+        long issued = BundleSignature.readIssued(live);
+        if (ManifestSync.readMarker(live).isEmpty() || issued <= 0) {
+            return null;
+        }
+
+        // 装了一个更新的 APK，就把手上这份热更包丢掉。
+        //
+        // 它优先级比 APK 里那份高，这在平时是对的——热更就是为了盖过去。但覆盖
+        // 安装一个新 APK 的时候就反了：新 APK 自带的网页是更新的，却被一份旧的
+        // 热更包压着，装了等于没装。真踩过：手机上明明是新版本号，跑的还是上一
+        // 版的页面，而且从版本号上完全看不出来。
+        //
+        // issued 是电脑签发时的 Unix 秒，lastUpdateTime 是毫秒。
+        if (issued * 1000L < apkInstalledAt()) {
+            deleteTree(live);
             return null;
         }
 
@@ -67,6 +81,17 @@ public class MainActivity extends BridgeActivity {
             return null;
         }
         return live;
+    }
+
+    /** When this APK was installed or last overwritten, in milliseconds. */
+    private long apkInstalledAt() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).lastUpdateTime;
+        } catch (Exception error) {
+            // Unknown means "do not throw the bundle away": a hot fix that cannot be
+            // installed is worse than one that lingers a version too long.
+            return 0L;
+        }
     }
 
     private static void deleteTree(File path) {

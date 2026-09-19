@@ -66,7 +66,7 @@ app.innerHTML = `
     <section class="setup-card hidden" id="setupCard">
       <div class="card-head"><div><span class="eyebrow">摄像头模式</span><h2>连接电脑</h2></div><button id="cameraHome" class="text-button">返回</button></div>
       <p class="setup-help">电脑端保持 MotionControl 打开。地址一般不用自己填，点「连接并开始」它会自己找。</p>
-      <div class="link-state" id="linkState"><p id="linkLine">正在看这台手机的网络…</p><div class="link-actions" id="linkActions"></div></div>
+      <div class="link-state" id="linkState" hidden><p id="linkLine"></p><div class="link-actions" id="linkActions"></div></div>
       <label>电脑地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label>
       <label>使用镜头<select id="cameraDeviceSelect"><option value="__auto__">自动选择</option></select></label>
       <label class="technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option></select></label>
@@ -951,8 +951,13 @@ async function suspendHandheld(): Promise<void> { clearTouches(); if (handheldTi
 async function handleBackButton(): Promise<void> { if (activeRole === "home") { await App.exitApp(); return; } if (activeRole === "camera") { await stop(); showRole("home"); return; } await stopHandheld(); }
 function updateStick(event: PointerEvent): void { const stick = document.querySelector<HTMLElement>("#stick")!; const rect = stick.getBoundingClientRect(); const x = Math.max(-1, Math.min(1, (event.clientX - (rect.left + rect.width / 2)) / (rect.width * 0.38))); const y = Math.max(-1, Math.min(1, (event.clientY - (rect.top + rect.height / 2)) / (rect.height * 0.38))); stickState = { x, y }; stick.querySelector<HTMLElement>("i")!.style.transform = `translate(${x * 34}px,${y * 34}px)`; }
 
-// 把上面那个判断说给用户听，并且把他要去的那一页放到一次点击之内。
-// 打不开网络共享是系统的规矩（要系统权限），能做到的极限就是替他跳过去。
+// 把上面那个判断说给用户听——但只在有话说的时候。
+//
+// 正常的时候什么都不显示。一行「数据线已接通」对已经接通的人没有用处，它只是
+// 在本来就够满的一页上又占一格，还让真正要紧的那句话看起来和它一样重要。
+// 会显示的只有两种：两条路都没开（按多少次都不会成功），和按过之后确实没找到。
+//
+// 打不开网络共享是系统的规矩（要系统权限），能做到的极限是替他跳过去。
 function renderLinkState(state: LinkState, failed = false): void {
   const line = document.querySelector<HTMLElement>("#linkLine");
   const actions = document.querySelector<HTMLElement>("#linkActions");
@@ -960,28 +965,23 @@ function renderLinkState(state: LinkState, failed = false): void {
   if (!line || !actions || !box) return;
 
   const buttons: { label: string; which: "tether" | "wifi" }[] = [];
-  let tone = "ok";
-  if (!state.known) {
-    line.textContent = "看不出这台手机的网络情况。手机和电脑连同一个 WiFi，或者插数据线并打开「USB 网络共享」。";
-    tone = "info";
-  } else if (state.usb) {
-    line.textContent = failed
-      ? "数据线这条路是通的，但没找到电脑。确认电脑上 MotionControl 开着，并且「摄像头来源」已经选了手机摄像头。"
-      : "数据线已接通，可以直接连。";
-    tone = failed ? "warn" : "ok";
-  } else if (state.wifi) {
-    line.textContent = failed
-      ? "手机在 WiFi 上，但这个网里没找到电脑。多半是两边不在同一个路由器下——换成插数据线最省事。"
-      : "手机在 WiFi 上。电脑要连同一个路由器才行；插数据线更稳。";
-    tone = failed ? "warn" : "info";
-    buttons.push({ label: "换成数据线", which: "tether" }, { label: "看 WiFi", which: "wifi" });
-  } else {
-    line.textContent = "两条路都没开：现在只有移动数据，连不到电脑。二选一——连上电脑那个 WiFi，或者插数据线再打开「USB 网络共享」。";
-    tone = "warn";
+  let text = "";
+  if (state.known && !state.usb && !state.wifi) {
+    text = "两条路都没开：现在只有移动数据，连不到电脑。二选一——连上电脑那个 WiFi，或者插数据线再打开「USB 网络共享」。";
     buttons.push({ label: "打开网络共享", which: "tether" }, { label: "连 WiFi", which: "wifi" });
+  } else if (failed && !state.known) {
+    text = "没找到电脑。手机和电脑要连同一个 WiFi，或者插数据线并打开「USB 网络共享」。";
+    buttons.push({ label: "打开网络共享", which: "tether" }, { label: "连 WiFi", which: "wifi" });
+  } else if (failed && state.usb) {
+    text = "数据线这条路是通的，但没找到电脑。确认电脑上 MotionControl 开着，并且「摄像头来源」已经选了手机摄像头。";
+  } else if (failed) {
+    text = "这个 WiFi 里没找到电脑。多半是两边不在同一个路由器下——换成插数据线最省事。";
+    buttons.push({ label: "换成数据线", which: "tether" });
   }
 
-  box.dataset.tone = tone;
+  box.hidden = !text;
+  if (!text) { actions.replaceChildren(); return; }
+  line.textContent = text;
   actions.replaceChildren(...buttons.map(({ label, which }) => {
     const button = document.createElement("button");
     button.type = "button";
