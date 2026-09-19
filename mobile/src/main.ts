@@ -65,7 +65,8 @@ app.innerHTML = `
     </section>
     <section class="setup-card hidden" id="setupCard">
       <div class="card-head"><div><span class="eyebrow">摄像头模式</span><h2>连接电脑</h2></div><button id="cameraHome" class="text-button">返回</button></div>
-      <p class="setup-help">电脑端保持 MotionControl 打开，填写它显示的局域网地址即可。以后会自动记住。</p>
+      <p class="setup-help">电脑端保持 MotionControl 打开。地址一般不用自己填，点「连接并开始」它会自己找。</p>
+      <div class="link-state" id="linkState"><p id="linkLine">正在看这台手机的网络…</p><div class="link-actions" id="linkActions"></div></div>
       <label>电脑地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label>
       <label>使用镜头<select id="cameraDeviceSelect"><option value="__auto__">自动选择</option></select></label>
       <label class="technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option></select></label>
@@ -135,8 +136,12 @@ let nativeVoiceStateListener: PluginListenerHandle | null = null;
 let nativeAudioErrorListener: PluginListenerHandle | null = null;
 let running = false;
 let activeRole: "home" | "camera" | "handheld" = "home";
+// 前置是默认。这个模式叫「固定摄像头」：手机架在玩家前方，屏幕朝着玩家，所以
+// 对着人的那个镜头就是前置。默认后置的话，第一次用的人看到的是身后的墙，
+// 界面一直写「等待完整人体」——他看不出是没装好还是镜头反了。
+// 选过一次就记住，换回后置的人不会被推回来。
 let facingMode: "user" | "environment" =
-  localStorage.getItem("motionbridge-facing") === "user" ? "user" : "environment";
+  localStorage.getItem("motionbridge-facing") === "environment" ? "environment" : "user";
 let selectedCameraDeviceId = "__auto__";
 // Only the Full model ships: Lite saved 5.5 MB of build but nothing chose it,
 // and a stale "lite" in storage would ask for a file that is no longer there.
@@ -283,7 +288,7 @@ const motionDebug: MotionDebug = window.__motionDebug = {
   videoReady: false,
   videoWidth: 0,
   videoHeight: 0,
-  facingMode: "environment",
+  facingMode: "user",
   modelState: "idle",
   modelUrl: new URL(`./models/pose_landmarker_${modelChoice}.task`, location.href).href,
   actualModel: modelChoice,
@@ -403,7 +408,36 @@ async function answers(candidate: ServerCandidate, timeoutMs = SERVER_PROBE_TIME
 type LocalInterface = { name: string; address: string; prefix: number };
 const LocalNetwork = registerPlugin<{
   interfaces(): Promise<{ interfaces: LocalInterface[] }>;
+  openSettings(options: { which: "tether" | "wifi" }): Promise<{ opened: string }>;
 }>("LocalNetwork");
+
+// ---- 这台手机现在有没有一条能到电脑的路 ------------------------------------
+// 手机连电脑只有两种走法：同一个无线网，或者插数据线 + 打开「USB 网络共享」。
+// 两个都没开的时候，无论按多少次「连接并开始」都不会成功——而以前的表现就是
+// 按下去、转一会儿、说连不上，用户不知道是地址错了、电脑没开，还是自己这边
+// 少开了一个开关。
+//
+// 判断不需要新的权限：网卡名字就说明了一切。rndis0/usb0/ncm0 是网络共享起来
+// 之后才会出现的口，wlan0 是 WiFi，rmnet_data* 是移动数据。看得见哪块口在，
+// 就知道用户开了哪一个。
+type LinkState = { usb: boolean; wifi: boolean; known: boolean };
+
+const WIRED_INTERFACE = /^(rndis|usb|ncm)/i;
+const WIFI_INTERFACE = /^(wlan|ap)/i;
+
+async function readLinkState(): Promise<LinkState> {
+  try {
+    const own = (await LocalNetwork.interfaces()).interfaces || [];
+    return {
+      usb: own.some((item) => WIRED_INTERFACE.test(item.name)),
+      wifi: own.some((item) => WIFI_INTERFACE.test(item.name)),
+      known: true,
+    };
+  } catch {
+    // 插件不在（旧壳子）。说不出所以然的时候就别说，免得把一句猜测摆成结论。
+    return { usb: false, wifi: false, known: false };
+  }
+}
 
 // 网页包更新。下到暂存目录，下次启动才换上去——不在页面跑着的时候动它脚下的文件。
 type WebUpdateResult = { state: "skipped" | "none" | "current" | "ready" | "failed"; message?: string };
@@ -456,11 +490,14 @@ async function scanOwnSubnets(): Promise<ServerCandidate | null> {
   return null;
 }
 
-async function pickServer(typed: string): Promise<string> {
+// found=false 的意思是"一个地址都没答应"。以前这里照样把地址交回去，于是页面
+// 切到运行态，摄像头跑起来，右上角一直是灰的「未连接电脑」，没有任何一处说得出
+// 为什么。调用方拿到这个标记，才有机会在那之前把原因讲出来。
+async function pickServer(typed: string): Promise<{ url: string; found: boolean }> {
   // 按电脑给的顺序一个个试，而不是一起赛跑：顺序本身带着"哪条更好"的信息，赛
   // 跑会让恰好快那么几毫秒的 WiFi 赢掉数据线。
   for (const candidate of readCandidates()) {
-    if (await answers(candidate)) return normalizeSocketUrl(`${candidate.host}:${candidate.port}`);
+    if (await answers(candidate)) return { url: normalizeSocketUrl(`${candidate.host}:${candidate.port}`), found: true };
   }
   // 手填的那个排在缓存后面：它是上一次的，最容易过期，今天就是它把人卡住的。
   const typedCandidate = typed.trim();
@@ -469,7 +506,7 @@ async function pickServer(typed: string): Promise<string> {
       const parsed = new URL(normalizeSocketUrl(typedCandidate));
       const port = Number(parsed.port) || DEVICE_PORT;
       if (await answers({ host: parsed.hostname, port, kind: "lan" })) {
-        return normalizeSocketUrl(typedCandidate);
+        return { url: normalizeSocketUrl(typedCandidate), found: true };
       }
     } catch { /* 填得不成样子，当作没填 */ }
   }
@@ -477,10 +514,10 @@ async function pickServer(typed: string): Promise<string> {
   const found = await scanOwnSubnets();
   if (found) {
     rememberCandidates([found]);
-    return normalizeSocketUrl(`${found.host}:${found.port}`);
+    return { url: normalizeSocketUrl(`${found.host}:${found.port}`), found: true };
   }
   // 都不行：把手填的那个原样交回去，让原来的报错路径去说话。
-  return normalizeSocketUrl(typed);
+  return { url: typed.trim(), found: false };
 }
 // ==== 电脑在哪，到此为止 ===================================================
 
@@ -517,7 +554,9 @@ type CameraRatioProfile = { width: number; height: number; ratio: number };
 function cameraRatioProfiles(): CameraRatioProfile[] { return [{ width: 480, height: 854, ratio: 9 / 16 }, { width: 480, height: 640, ratio: 3 / 4 }]; }
 async function startCamera(): Promise<void> { clearWebCamera(); await new Promise((resolve) => setTimeout(resolve, 100)); const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } }; stream = null; for (const profile of cameraRatioProfiles()) { try { stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height }, aspectRatio: { exact: profile.ratio }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); break; } catch { /* Try the 4:3 fallback, then the device default below. */ } } if (!stream) stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 480 }, height: { ideal: 854 }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); const track = stream.getVideoTracks()[0]; try { await track.applyConstraints({ frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } }); } catch { /* Some WebView camera providers ignore frame-rate constraints; keep the real value. */ } const settings = track.getSettings(); if (settings.deviceId) selectedCameraDeviceId = settings.deviceId; if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode; motionDebug.facingMode = facingMode; updateCameraButtons(); video.style.display = "block"; video.srcObject = stream; await playVideo(); if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效"); motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight; await refreshCameraDevices(); resizeCanvas(); applyMirror(); startCameraFrameCounter(); }
 
-async function start(): Promise<void> { try { overlayRenderingEnabled = true; lastSendStateText = ""; const socketUrl = await pickServer(serverInput.value); serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden");
+async function start(): Promise<void> { try { overlayRenderingEnabled = true; lastSendStateText = ""; const picked = await pickServer(serverInput.value);
+    if (!picked.found) { await refreshLinkState(true); throw new Error("没找到电脑"); }
+    const socketUrl = picked.url; serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden");
     // 先握手，再加载模型。模型要好几秒，那几秒原来是干等；现在连接和加载并行，
     // 等模型就绪时链路通常已经通了，控制配置（要不要跑手部模型）也到了。
     connectSocket(socketUrl);
@@ -531,6 +570,7 @@ function showStartError(error: unknown): void {
     : /NotFound|NotReadable|device/i.test(raw) ? "摄像头打不开，可能被别的应用占着"
     : /超时/.test(raw) ? "摄像头打开超时，重试一次"
     : /模型/.test(raw) ? raw
+    : /没找到电脑/.test(raw) ? "没找到电脑。看下面这行字。"
     : "启动失败，重试一次";
   showStatus.textContent = hint;
   showStatus.classList.remove("hidden");
@@ -542,11 +582,16 @@ function connectSocket(url: string): void { if (reconnectTimer != null) window.c
 // 换了网段也该自己找回来。
 async function reconnectToBestServer(): Promise<void> {
   if (!running) return;
-  const url = await pickServer(serverInput.value);
+  const picked = await pickServer(serverInput.value);
   if (!running) return;
+  // 重连时找不到也要接着试：线可能只是松了一下。但地址不该存下来——
+  // 存一个没人应答的地址，下次开机只会把人卡在同一个地方。
+  const url = picked.url;
   serverInput.value = url;
-  try { localStorage.setItem("motionbridge-server", url); } catch { /* 存不下不影响连接 */ }
-  connectSocket(url);
+  if (picked.found) {
+    try { localStorage.setItem("motionbridge-server", url); } catch { /* 存不下不影响连接 */ }
+  }
+  if (url) connectSocket(url);
 }
 
 // 语音模型从配对的那台电脑取，走的是同一个设备口，只是把 ws:// 换成 http://。
@@ -903,8 +948,57 @@ async function suspendHandheld(): Promise<void> { clearTouches(); if (handheldTi
 async function handleBackButton(): Promise<void> { if (activeRole === "home") { await App.exitApp(); return; } if (activeRole === "camera") { await stop(); showRole("home"); return; } await stopHandheld(); }
 function updateStick(event: PointerEvent): void { const stick = document.querySelector<HTMLElement>("#stick")!; const rect = stick.getBoundingClientRect(); const x = Math.max(-1, Math.min(1, (event.clientX - (rect.left + rect.width / 2)) / (rect.width * 0.38))); const y = Math.max(-1, Math.min(1, (event.clientY - (rect.top + rect.height / 2)) / (rect.height * 0.38))); stickState = { x, y }; stick.querySelector<HTMLElement>("i")!.style.transform = `translate(${x * 34}px,${y * 34}px)`; }
 
+// 把上面那个判断说给用户听，并且把他要去的那一页放到一次点击之内。
+// 打不开网络共享是系统的规矩（要系统权限），能做到的极限就是替他跳过去。
+function renderLinkState(state: LinkState, failed = false): void {
+  const line = document.querySelector<HTMLElement>("#linkLine");
+  const actions = document.querySelector<HTMLElement>("#linkActions");
+  const box = document.querySelector<HTMLElement>("#linkState");
+  if (!line || !actions || !box) return;
+
+  const buttons: { label: string; which: "tether" | "wifi" }[] = [];
+  let tone = "ok";
+  if (!state.known) {
+    line.textContent = "看不出这台手机的网络情况。手机和电脑连同一个 WiFi，或者插数据线并打开「USB 网络共享」。";
+    tone = "info";
+  } else if (state.usb) {
+    line.textContent = failed
+      ? "数据线这条路是通的，但没找到电脑。确认电脑上 MotionControl 开着，并且「摄像头来源」已经选了手机摄像头。"
+      : "数据线已接通，可以直接连。";
+    tone = failed ? "warn" : "ok";
+  } else if (state.wifi) {
+    line.textContent = failed
+      ? "手机在 WiFi 上，但这个网里没找到电脑。多半是两边不在同一个路由器下——换成插数据线最省事。"
+      : "手机在 WiFi 上。电脑要连同一个路由器才行；插数据线更稳。";
+    tone = failed ? "warn" : "info";
+    buttons.push({ label: "换成数据线", which: "tether" }, { label: "看 WiFi", which: "wifi" });
+  } else {
+    line.textContent = "两条路都没开：现在只有移动数据，连不到电脑。二选一——连上电脑那个 WiFi，或者插数据线再打开「USB 网络共享」。";
+    tone = "warn";
+    buttons.push({ label: "打开网络共享", which: "tether" }, { label: "连 WiFi", which: "wifi" });
+  }
+
+  box.dataset.tone = tone;
+  actions.replaceChildren(...buttons.map(({ label, which }) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "text-button";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      void LocalNetwork.openSettings({ which }).catch(() => {
+        line.textContent = "这台手机打不开那一页，请自己去系统设置里找「网络共享」或者 WiFi。";
+      });
+    });
+    return button;
+  }));
+}
+
+async function refreshLinkState(failed = false): Promise<void> {
+  renderLinkState(await readLinkState(), failed);
+}
+
 renderControlConfig();
-document.querySelector("#cameraRole")!.addEventListener("click", () => { void (running ? stop() : Promise.resolve()).then(() => { showRole("camera"); return refreshCameraDevices(); }).catch((error) => { document.querySelector("#securityWarning")!.textContent = error instanceof Error ? error.message : String(error); }); });
+document.querySelector("#cameraRole")!.addEventListener("click", () => { void (running ? stop() : Promise.resolve()).then(() => { showRole("camera"); void refreshLinkState(); return refreshCameraDevices(); }).catch((error) => { document.querySelector("#securityWarning")!.textContent = error instanceof Error ? error.message : String(error); }); });
 document.querySelector("#handheldRole")!.addEventListener("click", () => { void (running || voiceEnabled ? stop() : Promise.resolve()).then(() => startHandheld()); });
 document.querySelector("#cameraHome")!.addEventListener("click", () => { void stop().then(() => showRole("home")); });
 document.querySelector("#startButton")!.addEventListener("click", () => void start()); document.querySelector("#stopButton")!.addEventListener("click", () => void stop());

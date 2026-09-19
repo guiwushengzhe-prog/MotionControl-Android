@@ -41,6 +41,14 @@
         </provider>
     </application>
 
+    <!-- Android 11+ hides other packages unless they are declared here. Without this,
+         resolveActivity() on the settings app comes back null and the "open the tethering
+         page for me" button silently falls all the way through to the wireless settings
+         page on every device. -->
+    <queries>
+        <package android:name="com.android.settings" />
+    </queries>
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />

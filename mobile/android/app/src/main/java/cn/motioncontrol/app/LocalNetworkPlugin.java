@@ -7,6 +7,10 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import android.content.ComponentName;
+import android.content.Intent;
+import android.provider.Settings;
+
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InterfaceAddress;
@@ -34,6 +38,22 @@ import java.util.List;
  */
 @CapacitorPlugin(name = "LocalNetwork")
 public class LocalNetworkPlugin extends Plugin {
+
+    /**
+     * Tethering screens, most likely first. There is no public Intent action for this page.
+     *
+     * <p>A list rather than one name because vendors moved it. Measured on the Honor device this
+     * was written against: the AOSP-era {@code .TetherSettings} resolves but never comes to the
+     * front, {@code android.settings.TETHER_SETTINGS} does not resolve at all, and only
+     * {@code Settings$TetherSettingsActivity} actually opens. Resolving each one first is what
+     * keeps a name that is wrong here from swallowing the tap -- startActivity does not throw
+     * when the component exists and then finishes itself.
+     */
+    private static final String[] TETHER_SCREENS = {
+        "com.android.settings/com.android.settings.Settings$TetherSettingsActivity",
+        "com.android.settings/com.android.settings.TetherSettings",
+    };
+    private static final String TETHER_ACTION = "android.settings.TETHER_SETTINGS";
 
     @PluginMethod
     public void interfaces(PluginCall call) {
@@ -64,5 +84,69 @@ public class LocalNetworkPlugin extends Plugin {
             return;
         }
         call.resolve(new JSObject().put("interfaces", found));
+    }
+
+    /**
+     * Open the system page the player has to visit, because an app cannot go there for them.
+     *
+     * <p>There are exactly two ways this phone can reach the PC: the same wireless network, or
+     * a USB cable with tethering switched on. Neither can be enabled programmatically -- tethering
+     * is guarded by a system permission no ordinary app is granted, and joining a network needs
+     * the user to pick it. So the most an app can do is put them one tap from the right screen
+     * instead of describing where it is and hoping.
+     *
+     * <p>The tethering screen has no public Intent action, so this walks TETHER_SCREENS and falls
+     * through to the wireless settings page, which is public API and always exists. Landing one
+     * level up still beats landing nowhere.
+     */
+    @PluginMethod
+    public void openSettings(PluginCall call) {
+        String which = call.getString("which", "tether");
+        if ("wifi".equals(which)) {
+            if (startSettings(new Intent(Settings.ACTION_WIFI_SETTINGS))) {
+                call.resolve(new JSObject().put("opened", "wifi"));
+            } else {
+                call.reject("打不开 WiFi 设置页");
+            }
+            return;
+        }
+        for (String component : TETHER_SCREENS) {
+            Intent tether = new Intent(Intent.ACTION_MAIN, null);
+            int slash = component.indexOf('/');
+            tether.setComponent(new ComponentName(component.substring(0, slash),
+                    component.substring(slash + 1)));
+            if (resolves(tether) && startSettings(tether)) {
+                call.resolve(new JSObject().put("opened", "tether"));
+                return;
+            }
+        }
+        Intent action = new Intent(TETHER_ACTION);
+        if (resolves(action) && startSettings(action)) {
+            call.resolve(new JSObject().put("opened", "tether"));
+            return;
+        }
+        if (startSettings(new Intent(Settings.ACTION_WIRELESS_SETTINGS))) {
+            call.resolve(new JSObject().put("opened", "wireless"));
+            return;
+        }
+        call.reject("打不开网络共享设置页");
+    }
+
+    private boolean resolves(Intent intent) {
+        try {
+            return getContext().getPackageManager().resolveActivity(intent, 0) != null;
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
+    private boolean startSettings(Intent intent) {
+        try {
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            return true;
+        } catch (Exception error) {
+            return false;
+        }
     }
 }
