@@ -65,7 +65,7 @@ app.innerHTML = `
     </section>
     <section class="setup-card hidden" id="setupCard">
       <div class="card-head"><div><span class="eyebrow">摄像头模式</span><h2>连接电脑</h2></div><button id="cameraHome" class="text-button">返回</button></div>
-      <p class="setup-help">电脑端保持 MotionControl 打开。地址一般不用自己填，点「连接并开始」它会自己找。</p>
+      <p class="setup-help">电脑端保持 MotionControl 打开。地址不用自己填，点「连接并开始」它会自己找。第一次几十秒都正常，以后几秒。</p>
       <div class="link-state" id="linkState" hidden><p id="linkLine"></p><div class="link-actions" id="linkActions"></div></div>
       <label>电脑地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label>
       <label>使用镜头<select id="cameraDeviceSelect"><option value="__auto__">自动选择</option></select></label>
