@@ -1,16 +1,14 @@
 # AGENTS.md
 
-> **如果你是 Codex，这份就是给你的。你的实验分支叫 `exp/codex/描述`。**
-> Claude Code 读的是 CLAUDE.md，正文和这里逐字相同——不用去翻那一份。
-
 这是 **MotionControl 手机端**，由 **Claude Code** 和 **Codex** 共同开发，人类负责人
-是 guiwu（GitHub: guiwushengzhe-prog）。
+是 guiwu（GitHub: guiwushengzhe-prog）。**这份是两边共同遵守的规则，唯一真源。**
 
-**电脑端仓库有一份更完整的约定**（发版流程、生产服务器那些），两边遵守同一套：
+- **Codex** 开始任务时自动读这份。你的实验分支叫 `exp/codex/描述`。
+- **Claude Code** 通过 `CLAUDE.md` 里的 `@AGENTS.md` 导入读到同一份内容。
+
+电脑端仓库有一份更完整的约定（发版流程、生产服务器那些），两边遵守同一套：
 https://github.com/guiwushengzhe-prog/MotionControl/blob/main/AGENTS.md
 下面是手机端特有的部分。
-
-<!-- 以下到文件末尾，两份逐字相同 -->
 
 ## 分支
 
