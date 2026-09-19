@@ -1,19 +1,25 @@
 # 给 AI 协作者
 
-这是 **MotionControl 手机端**。Claude Code 和 Codex 共同开发。
+> **如果你是 Codex，这份就是给你的。**
+> Claude Code 读的是 [CLAUDE.md](CLAUDE.md)，那份指回这里——两边同一套规矩。
+
+这是 **MotionControl 手机端**，由 **Claude Code** 和 **Codex** 共同开发，人类负责人
+是 guiwu（GitHub: guiwushengzhe-prog）。
 
 **完整的协作约定在电脑端仓库**，两边遵守同一份：
 https://github.com/guiwushengzhe-prog/MotionControl/blob/main/AGENTS.md
 
 下面只写手机端特有的几条。
 
-## 分支
+## 分支：先认清你是谁
 
-```
-exp/claude/描述      Claude 开的实验分支
-exp/codex/描述       Codex 开的实验分支
-main                 只放已经发出去的版本
-```
+| 你是 | 实验分支就叫 |
+|---|---|
+| **Codex** | `exp/codex/描述` |
+| **Claude Code** | `exp/claude/描述` |
+
+`main` 只放已经发出去的版本。**别用别人的前缀**——分支名就是用来看出
+这是谁开的。
 
 历史里那批 `codex/xxx` 没有 `exp/` 前缀，是旧约定，不要照着学。
 
