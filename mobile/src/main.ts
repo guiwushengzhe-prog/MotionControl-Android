@@ -22,7 +22,7 @@ type ControlConfigV1 = {
   voice_phrases?: string[];
   // Whether to run the hand model, and on which hand.  The desktop asks only
   // while it is actually steering with a hand -- see the hand joint section.
-  hand_tracking?: { enabled?: boolean; hand?: string };
+  hand_tracking?: { enabled?: boolean; hand?: string; hands?: string[] };
   // Every address the desktop can be reached at, best link first.
   server_candidates?: { host?: string; port?: number; kind?: string }[];
 };
@@ -755,7 +755,7 @@ const POSE_WRIST: Record<HandSide, number> = { left: 15, right: 16 };
 const POSE_ELBOW: Record<HandSide, number> = { left: 13, right: 14 };
 const HAND_CROP_SIDE = 256;
 type PackedHand = { handedness: "Left" | "Right"; points: number[][] };
-let handTrackingSide: HandSide | null = null;
+let handTrackingSides: HandSide[] = [];
 let handLandmarker: HandLandmarker | null = null;
 let handModelLoading = false;
 const handCropCanvas = document.createElement("canvas");
@@ -765,9 +765,11 @@ const handCropContext = handCropCanvas.getContext("2d")!;
 
 function syncHandTracking(): void {
   const request = syncedControlConfig?.hand_tracking;
-  const hand = request?.hand;
-  handTrackingSide = request?.enabled && (hand === "left" || hand === "right") ? hand : null;
-  if (!handTrackingSide) { releaseHandModel(); return; }
+  const requested = request?.hands ?? [request?.hand];
+  handTrackingSides = request?.enabled
+    ? [...new Set(requested.filter((hand): hand is HandSide => hand === "left" || hand === "right"))]
+    : [];
+  if (!handTrackingSides.length) { releaseHandModel(); return; }
   if (handLandmarker || handModelLoading) return;
   handModelLoading = true;
   void loadHandModel().finally(() => { handModelLoading = false; });
@@ -798,7 +800,7 @@ async function loadHandModel(): Promise<void> {
     try { handLandmarker = await options("CPU"); } catch { handLandmarker = null; }
   }
   // 加载期间电脑可能已经把手控鼠标关掉了。
-  if (!handTrackingSide) releaseHandModel();
+  if (!handTrackingSides.length) releaseHandModel();
 }
 
 // 手掌在手腕之外，所以框心要沿着"手肘指向手腕"这个方向再往外推一点；框的大小
@@ -822,9 +824,8 @@ function handCropBox(points: NormalizedLandmark[], side: HandSide, width: number
   };
 }
 
-function detectHand(points: NormalizedLandmark[]): PackedHand | null {
-  const side = handTrackingSide;
-  if (!side || !handLandmarker) return null;
+function detectHand(points: NormalizedLandmark[], side: HandSide): PackedHand | null {
+  if (!handLandmarker) return null;
   const box = handCropBox(points, side, inferenceCanvas.width, inferenceCanvas.height);
   if (!box) return null;
   handCropContext.drawImage(inferenceCanvas, box.sx, box.sy, box.side, box.side,
@@ -875,8 +876,10 @@ function predict(now: number): void {
     const firstPose = poseResult.landmarks[0];
     // 手部关节只在电脑正用手控鼠标、并且连着的时候才跑：断开时这些点没地方去，
     // 白费一次推理和一份电。
-    const packedHand = firstPose && socket?.readyState === WebSocket.OPEN
-      ? detectHand(firstPose) : null;
+    // 同一视频帧顺序识别两只手，不复用上一帧的握拳状态；同手双轴只识别一次。
+    const packedHands = firstPose && socket?.readyState === WebSocket.OPEN
+      ? handTrackingSides.map(side => detectHand(firstPose, side))
+          .filter((hand): hand is PackedHand => hand !== null) : [];
     const elapsed = performance.now() - started;
     updateInferenceBudget(elapsed, now);
     motionDebug.lastInferenceMs = elapsed;
@@ -915,7 +918,7 @@ function predict(now: number): void {
         };
         // 保持紧凑控制载荷不变，同时为新版电脑携带可选的米制世界坐标。
         if (worldPoints.length === 33) frame.world_points = worldPoints;
-        if (packedHand) frame.hands = [packedHand];
+        if (packedHands.length) frame.hands = packedHands;
         socket.send(JSON.stringify(frame));
       } else {
         // Real-time control must prefer freshness over completeness. Never add
@@ -957,7 +960,7 @@ async function startVoiceControl(): Promise<void> { if (activeRole !== "camera")
     // 压成一句"模型错误"等于把唯一有用的线索丢掉。
     setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : message || "错误"); } }
 
-async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; releaseHandModel(); handTrackingSide = null; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline");
+async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; releaseHandModel(); handTrackingSides = []; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline");
   // 回到这一页就重新读一遍。人很可能就是刚刚按着上面那个按钮去把网络共享
   // 打开了再回来的——还给他看一句"两条路都没开"，那句话就从提示变成了错误。
   await refreshLinkState(); }
