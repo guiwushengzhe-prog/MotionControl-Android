@@ -119,6 +119,16 @@ voiceToggle.checked = localStorage.getItem("motionbridge-voice-auto") !== "0";
 const voiceStateLabel = document.querySelector<HTMLElement>("#voiceState")!;
 const hideStatus = document.querySelector<HTMLButtonElement>("#hideStatus")!;
 const showStatus = document.querySelector<HTMLButtonElement>("#showStatus")!;
+const startButton = document.querySelector<HTMLButtonElement>("#startButton")!;
+const START_LABEL = startButton.textContent || "连接并开始";
+// 从按下去到画面出来最长要三四秒：缓存地址 800ms、输入框里那个过期地址 800ms、
+// 扫一遍子网四批各 400ms，再加打开摄像头。原来这整段时间界面一个字都不变，
+// 点上了和没点上长得一模一样，人只会再点一次——而两次 start 会叠着跑，各开一路
+// 摄像头。按钮自己就是最好的反馈位：手指刚离开的地方变了字，就说明点上了。
+function setStartBusy(label: string | null): void {
+  startButton.disabled = label !== null;
+  startButton.textContent = label ?? START_LABEL;
+}
 const frontCameraButton = document.querySelector<HTMLButtonElement>("#frontCameraButton")!;
 const backCameraButton = document.querySelector<HTMLButtonElement>("#backCameraButton")!;
 const cameraSwitchState = document.querySelector<HTMLElement>("#cameraSwitchState")!;
@@ -463,7 +473,7 @@ function tetherFirst(items: LocalInterface[]): LocalInterface[] {
   return [...items].sort((a, b) => Number(wired(b)) - Number(wired(a)));
 }
 
-async function scanOwnSubnets(): Promise<ServerCandidate | null> {
+async function scanOwnSubnets(onPhase: (text: string) => void = () => {}): Promise<ServerCandidate | null> {
   let own: LocalInterface[] = [];
   try {
     own = (await LocalNetwork.interfaces()).interfaces || [];
@@ -479,6 +489,9 @@ async function scanOwnSubnets(): Promise<ServerCandidate | null> {
       if (last === octets[3]) continue;   // 自己
       hosts.push(`${octets[0]}.${octets[1]}.${octets[2]}.${last}`);
     }
+    // 报网段而不是百分比：扫到第几台对人没有意义，但"正在扫 10.119.231.x"能让
+    // 人看出它找的是数据线那条网，还是无线那条。
+    onPhase(`正在扫 ${octets[0]}.${octets[1]}.${octets[2]}.x …`);
     for (let at = 0; at < hosts.length; at += SCAN_BATCH) {
       const batch = hosts.slice(at, at + SCAN_BATCH);
       const hits = await Promise.all(batch.map(async (host) =>
@@ -493,15 +506,20 @@ async function scanOwnSubnets(): Promise<ServerCandidate | null> {
 // found=false 的意思是"一个地址都没答应"。以前这里照样把地址交回去，于是页面
 // 切到运行态，摄像头跑起来，右上角一直是灰的「未连接电脑」，没有任何一处说得出
 // 为什么。调用方拿到这个标记，才有机会在那之前把原因讲出来。
-async function pickServer(typed: string): Promise<{ url: string; found: boolean }> {
+// onPhase 报的是"现在在试哪一步"。这几步各自都可能空跑将近一秒，合起来是人
+// 唯一会怀疑程序死了的那段时间；不往外说一声，它就只是一段静止。
+async function pickServer(typed: string, onPhase: (text: string) => void = () => {}): Promise<{ url: string; found: boolean }> {
   // 按电脑给的顺序一个个试，而不是一起赛跑：顺序本身带着"哪条更好"的信息，赛
   // 跑会让恰好快那么几毫秒的 WiFi 赢掉数据线。
-  for (const candidate of readCandidates()) {
+  const cached = readCandidates();
+  if (cached.length) onPhase("正在试上次的地址…");
+  for (const candidate of cached) {
     if (await answers(candidate)) return { url: normalizeSocketUrl(`${candidate.host}:${candidate.port}`), found: true };
   }
   // 手填的那个排在缓存后面：它是上一次的，最容易过期，今天就是它把人卡住的。
   const typedCandidate = typed.trim();
   if (typedCandidate) {
+    onPhase("正在试填的地址…");
     try {
       const parsed = new URL(normalizeSocketUrl(typedCandidate));
       const port = Number(parsed.port) || DEVICE_PORT;
@@ -511,7 +529,7 @@ async function pickServer(typed: string): Promise<{ url: string; found: boolean 
     } catch { /* 填得不成样子，当作没填 */ }
   }
   // 什么都没答应：自己找一遍。找到就记下来，下次不用再扫。
-  const found = await scanOwnSubnets();
+  const found = await scanOwnSubnets(onPhase);
   if (found) {
     rememberCandidates([found]);
     return { url: normalizeSocketUrl(`${found.host}:${found.port}`), found: true };
@@ -554,14 +572,19 @@ type CameraRatioProfile = { width: number; height: number; ratio: number };
 function cameraRatioProfiles(): CameraRatioProfile[] { return [{ width: 480, height: 854, ratio: 9 / 16 }, { width: 480, height: 640, ratio: 3 / 4 }]; }
 async function startCamera(): Promise<void> { clearWebCamera(); await new Promise((resolve) => setTimeout(resolve, 100)); const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } }; stream = null; for (const profile of cameraRatioProfiles()) { try { stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height }, aspectRatio: { exact: profile.ratio }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); break; } catch { /* Try the 4:3 fallback, then the device default below. */ } } if (!stream) stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 480 }, height: { ideal: 854 }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); const track = stream.getVideoTracks()[0]; try { await track.applyConstraints({ frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } }); } catch { /* Some WebView camera providers ignore frame-rate constraints; keep the real value. */ } const settings = track.getSettings(); if (settings.deviceId) selectedCameraDeviceId = settings.deviceId; if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode; motionDebug.facingMode = facingMode; updateCameraButtons(); video.style.display = "block"; video.srcObject = stream; await playVideo(); if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效"); motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight; await refreshCameraDevices(); resizeCanvas(); applyMirror(); startCameraFrameCounter(); }
 
-async function start(): Promise<void> { try { overlayRenderingEnabled = true; lastSendStateText = ""; const picked = await pickServer(serverInput.value);
+async function start(): Promise<void> {
+  // 徽标和按钮都要在找电脑之前就变。原来 setConnection("connecting") 排在
+  // pickServer 后面，于是全程最慢的那几秒，恰好是唯一没有任何提示的几秒。
+  if (startButton.disabled) return;   // 已经在跑了，别叠第二路
+  setStartBusy("正在找电脑…"); setConnection("connecting");
+  try { overlayRenderingEnabled = true; lastSendStateText = ""; const picked = await pickServer(serverInput.value, setStartBusy);
     if (!picked.found) { await refreshLinkState(true); throw new Error("没找到电脑"); }
-    const socketUrl = picked.url; serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setConnection("connecting"); await startCamera(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden");
+    const socketUrl = picked.url; serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setStartBusy("正在打开摄像头…"); await startCamera(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden");
     // 先握手，再加载模型。模型要好几秒，那几秒原来是干等；现在连接和加载并行，
     // 等模型就绪时链路通常已经通了，控制配置（要不要跑手部模型）也到了。
     connectSocket(socketUrl);
     await loadPoseModel();
-    wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; schedulePredict(); } catch (error) { setConnection("error"); showStartError(error); await stop(); } }
+    wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; schedulePredict(); } catch (error) { setConnection("error"); showStartError(error); await stop(); } finally { setStartBusy(null); } }
 
 function showStartError(error: unknown): void {
   const raw = error instanceof Error ? error.message : String(error);
