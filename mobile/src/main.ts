@@ -19,6 +19,9 @@ type ControlConfigV1 = {
   version?: string;
   game?: { id?: string; name?: string; appid?: number | null };
   bindings?: { zones?: Record<string, SyncedBinding>; motions?: Record<string, SyncedBinding>; poses?: Record<string, SyncedBinding>; voice?: Record<string, SyncedBinding> };
+  // 绑定里的宏是按编号引用的，没有这份就只能在圈上显示一串编号。
+  // 只在配置变化时随推送来一次，不是实时数据。
+  macros?: { id?: string; name?: string; repeat?: boolean }[];
   zones?: Record<string, unknown>;
   vertical_look?: Record<string, unknown>;
   // Every phrase the desktop can act on.  The recognizer here is built from
@@ -206,10 +209,18 @@ function loadCachedControlConfig(): ControlConfigV1 | null {
     return parsed?.type === "control_config_v1" ? parsed : null;
   } catch { return null; }
 }
+function macroLabel(id: string): string {
+  const found = (syncedControlConfig?.macros || []).find((item) => String(item.id || "") === id);
+  // 电脑上删了那条宏、而这边还拿着旧缓存时会走到这里。照实说，别编一个名字。
+  if (!found) return "宏已丢失";
+  return found.repeat ? `${found.name}（循环）` : String(found.name || "");
+}
 function actionText(action: SyncedAction | undefined, fallback: string): string {
   const type = String(action?.type || "");
   const target = String(action?.target || "").toUpperCase();
   if (!type || !target) return fallback ? `默认 ${fallback}` : "未映射";
+  // 宏的编号是小写的，而且对人没意义——圈上要写它的名字。
+  if (type === "macro") return `宏 ${macroLabel(String(action?.target || "").toLowerCase())}`;
   if (type === "keyboard") return `键盘 ${target}`;
   if (type === "mouse_button") return `鼠标 ${{ LEFT: "左键", RIGHT: "右键", MIDDLE: "中键", X1: "侧键1", X2: "侧键2" }[target as "LEFT" | "RIGHT" | "MIDDLE" | "X1" | "X2"] || target}`;
   if (type === "mouse_wheel") return `滚轮 ${target.includes("UP") ? "↑" : target.includes("DOWN") ? "↓" : target}`;
