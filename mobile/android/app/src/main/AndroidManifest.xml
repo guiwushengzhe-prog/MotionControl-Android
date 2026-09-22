@@ -55,5 +55,13 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Discovery sends UDP broadcast and reads unicast replies, and INTERNET
+         already covers both of those. This is for noticing that the network
+         changed -- the cable came out, the hotspot moved to another subnet --
+         so the app can look again instead of waiting for the player to.
+         Declared now rather than when that code lands: it is a normal
+         permission with no prompt, and adding one costs a new APK, which is the
+         exact thing the hot-update channel exists to avoid. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-feature android:name="android.hardware.camera.any" android:required="true" />
 </manifest>
