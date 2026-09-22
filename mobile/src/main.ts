@@ -3,6 +3,10 @@ import { App } from "@capacitor/app";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import { PairingSession, isPairingMessage } from "./pairing-session";
 import type { PairRole } from "./pairing-crypto";
+import {
+  candidatesOf, dedupeServers, forgetFailures, lastOctetHint, mergeCandidates,
+  pickBest, rankCandidates, type Discovered, type ProbeResult, type ServerCandidate,
+} from "./discovery";
 import "./style.css";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
@@ -138,6 +142,8 @@ let poseLandmarker: PoseLandmarker | null = null;
 let stream: MediaStream | null = null;
 let socket: WebSocket | null = null;
 let handheldSocket: WebSocket | null = null;
+// 主动停止和断线重连要分得开：停了之后还在后台重连，是最难查的那种「关不掉」。
+let handheldRunning = false;
 let reconnectTimer: number | null = null;
 let handheldTimer: number | null = null;
 let wakeLock: WakeLockSentinel | null = null;
@@ -368,7 +374,13 @@ const DEVICE_PORT = 8765;
 // 一个够到的地址在局域网里几毫秒就答应了。这个时限是留给"根本不通"的那些：
 // 超过就别等了，后面还有别的要试。
 const SERVER_PROBE_TIMEOUT_MS = 800;
-type ServerCandidate = { host: string; port: number; kind: string };
+// 并行探测时给单条的时限。原来是串行，所以每条 800ms 会一条条叠加——五条过期的
+// 缓存地址就是四秒纯浪费。现在一起发，总时间等于最慢的那一条。
+const PARALLEL_PROBE_TIMEOUT_MS = 600;
+// 先到的不算数，等这么久收齐几个再按链路挑。实测数据线 4.4ms、无线 8.3ms，差几
+// 毫秒，谁先到基本随机；宽限窗远大于这个差值，数据线在场就必定落在窗内。
+const PROBE_GRACE_MS = 150;
+const DISCOVER_TIMEOUT_MS = 900;
 
 function readCandidates(): ServerCandidate[] {
   try {
@@ -385,14 +397,44 @@ function readCandidates(): ServerCandidate[] {
   }
 }
 
-function rememberCandidates(list: unknown): void {
-  if (!Array.isArray(list) || !list.length) return;
+/** 原样写下去，包括写成空的——淘汰完最后一条死地址时要用到。 */
+function saveCandidates(list: ServerCandidate[]): void {
   try { localStorage.setItem(SERVER_CANDIDATES_KEY, JSON.stringify(list)); } catch { /* 存不下就下次再说 */ }
 }
 
-// 只问"有没有人在这个地址上应答"。回应是 no-cors 的不透明响应，读不到内容，也
-// 不需要读：这些地址本来就是电脑自己报上来的。
+/**
+ * 电脑连上时报过来的那份是权威全表，整体替换。
+ *
+ * 空的不写：那多半是电脑那边一次异常的空载荷，照着它清空等于把手上唯一的线索
+ * 扔掉。真正要清空的场合走 saveCandidates。
+ */
+function rememberCandidates(list: unknown): void {
+  if (!Array.isArray(list) || !list.length) return;
+  saveCandidates(list as ServerCandidate[]);
+}
+
+/** 自己找到的是单条线索，只能往里加——覆盖会把电脑报的那份完整地址表冲掉。 */
+function addCandidates(found: ServerCandidate[]): void {
+  saveCandidates(mergeCandidates(readCandidates(), found));
+}
+
+/**
+ * 这个地址上是不是真有一台 MotionControl。
+ *
+ * 优先走原生：WebView 的源是 http://localhost，电脑端没有 CORS 头，所以网页里的
+ * fetch 只能用 no-cors——拿到的是不透明响应，读不到状态码也读不到内容，于是 8765
+ * 上任何 HTTP 服务都算命中（路由器管理页、打印机、别的开发服务器）。原生能读到
+ * 内容，才分得出来。
+ *
+ * 旧壳子没有这个方法，退回原来那套 no-cors。会误判，但比连不上强。
+ */
 async function answers(candidate: ServerCandidate, timeoutMs = SERVER_PROBE_TIMEOUT_MS): Promise<boolean> {
+  try {
+    const result = await LocalNetwork.probe({
+      host: candidate.host, port: candidate.port, timeoutMs,
+    });
+    return Boolean(result?.ok);
+  } catch { /* 旧壳子，往下走 */ }
   try {
     await fetch(`http://${candidate.host}:${candidate.port}/`, {
       mode: "no-cors", cache: "no-store",
@@ -419,6 +461,11 @@ type LocalInterface = { name: string; address: string; prefix: number };
 const LocalNetwork = registerPlugin<{
   interfaces(): Promise<{ interfaces: LocalInterface[] }>;
   openSettings(options: { which: "tether" | "wifi" }): Promise<{ opened: string }>;
+  // 下面两个只有新壳子有。网页包能热更而 APK 不能，所以装着旧 APK 的人也会收到
+  // 这份新网页——调用处必须接住"没有这个方法"，退回原来那套，不能崩在这里。
+  discover(options: { timeoutMs?: number }): Promise<{ servers: Discovered[] }>;
+  probe(options: { host: string; port: number; timeoutMs?: number }):
+    Promise<{ ok: boolean; version?: string; rttMs: number }>;
 }>("LocalNetwork");
 
 // ---- 这台手机现在有没有一条能到电脑的路 ------------------------------------
@@ -430,7 +477,7 @@ const LocalNetwork = registerPlugin<{
 // 判断不需要新的权限：网卡名字就说明了一切。rndis0/usb0/ncm0 是网络共享起来
 // 之后才会出现的口，wlan0 是 WiFi，rmnet_data* 是移动数据。看得见哪块口在，
 // 就知道用户开了哪一个。
-type LinkState = { usb: boolean; wifi: boolean; known: boolean };
+type LinkState = { usb: boolean; wifi: boolean; known: boolean; links?: LocalInterface[] };
 
 const WIRED_INTERFACE = /^(rndis|usb|ncm)/i;
 const WIFI_INTERFACE = /^(wlan|ap)/i;
@@ -442,6 +489,7 @@ async function readLinkState(): Promise<LinkState> {
       usb: own.some((item) => WIRED_INTERFACE.test(item.name)),
       wifi: own.some((item) => WIFI_INTERFACE.test(item.name)),
       known: true,
+      links: own,
     };
   } catch {
     // 插件不在（旧壳子）。说不出所以然的时候就别说，免得把一句猜测摆成结论。
@@ -508,15 +556,78 @@ async function scanOwnSubnets(onPhase: (text: string) => void = () => {}): Promi
 // 为什么。调用方拿到这个标记，才有机会在那之前把原因讲出来。
 // onPhase 报的是"现在在试哪一步"。这几步各自都可能空跑将近一秒，合起来是人
 // 唯一会怀疑程序死了的那段时间；不往外说一声，它就只是一段静止。
-async function pickServer(typed: string, onPhase: (text: string) => void = () => {}): Promise<{ url: string; found: boolean }> {
-  // 按电脑给的顺序一个个试，而不是一起赛跑：顺序本身带着"哪条更好"的信息，赛
-  // 跑会让恰好快那么几毫秒的 WiFi 赢掉数据线。
-  const cached = readCandidates();
-  if (cached.length) onPhase("正在试上次的地址…");
-  for (const candidate of cached) {
-    if (await answers(candidate)) return { url: normalizeSocketUrl(`${candidate.host}:${candidate.port}`), found: true };
+/**
+ * 一起探一批地址，等第一个答应之后再多收一小会儿，然后按链路挑。
+ *
+ * 不用串行是因为一条过期地址就要空烧 800ms，五条就是四秒纯浪费。不用"谁先答应用
+ * 谁"是因为数据线和无线只差几毫秒，先到基本随机，那样数据线会随机地输掉。
+ */
+async function probeAll(candidates: ServerCandidate[]): Promise<ProbeResult[]> {
+  if (!candidates.length) return [];
+  const results: ProbeResult[] = [];
+  let firstHitAt = 0;
+  const everyone = Promise.all(candidates.map(async (candidate) => {
+    const started = Date.now();
+    const ok = await answers(candidate, PARALLEL_PROBE_TIMEOUT_MS);
+    results.push({ candidate, ok, rttMs: Date.now() - started });
+    if (ok && !firstHitAt) firstHitAt = Date.now();
+  }));
+  // 有人答应了就在宽限窗后收口，不必陪着最慢那条等满超时；一个都没答应才等满。
+  const graceOver = new Promise<void>((resolve) => {
+    const tick = setInterval(() => {
+      if (firstHitAt && Date.now() - firstHitAt >= PROBE_GRACE_MS) { clearInterval(tick); resolve(); }
+    }, 25);
+    setTimeout(() => { clearInterval(tick); resolve(); }, PARALLEL_PROBE_TIMEOUT_MS + 100);
+  });
+  await Promise.race([everyone, graceOver]);
+  return [...results];
+}
+
+/** 广播喊一声。旧壳子没有这个方法，当作没找到继续往下走。 */
+async function broadcastFind(): Promise<Discovered[]> {
+  try {
+    const result = await LocalNetwork.discover({ timeoutMs: DISCOVER_TIMEOUT_MS });
+    return dedupeServers(result?.servers ?? []);
+  } catch {
+    return [];
   }
-  // 手填的那个排在缓存后面：它是上一次的，最容易过期，今天就是它把人卡住的。
+}
+
+// found=false 的意思是"一个地址都没答应"。以前这里照样把地址交回去，于是页面
+// 切到运行态，摄像头跑起来，右上角一直是灰的「未连接电脑」，没有任何一处说得出
+// 为什么。调用方拿到这个标记，才有机会在那之前把原因讲出来。
+async function pickServer(typed: string, onPhase: (text: string) => void = () => {}):
+    Promise<{ url: string; found: boolean; servers: Discovered[]; udpSilent: boolean }> {
+  const links = await ownLinks();
+  let cached = readCandidates();
+
+  // 一、上次能连上的地址。网段没变的话这一步就结束了，约一百多毫秒。
+  if (cached.length) {
+    onPhase("正在试上次的地址…");
+    const ranked = rankCandidates(cached, links);
+    const results = await probeAll(ranked);
+    const best = pickBest(results);
+    if (best) {
+      addCandidates([best]);
+      return { url: normalizeSocketUrl(`${best.host}:${best.port}`), found: true, servers: [], udpSilent: false };
+    }
+    // 没人应答：给它们记一笔。攒够次数才丢，因为一次不通可能只是电脑还没开。
+    cached = forgetFailures(cached, results.map((item) => item.candidate));
+    saveCandidates(cached);
+  }
+
+  // 二、广播喊一声。它不依赖任何记住的东西，网段整个变了也照样找得到——而共享
+  // 网络的网段确实会整个变，这一步就是为那件事存在的。
+  onPhase("正在找电脑…");
+  const servers = await broadcastFind();
+  if (servers.length) {
+    const flat = servers.flatMap(candidatesOf);
+    addCandidates(flat);
+    const best = pickBest(await probeAll(rankCandidates(flat, links))) ?? flat[0];
+    return { url: normalizeSocketUrl(`${best.host}:${best.port}`), found: true, servers, udpSilent: false };
+  }
+
+  // 三、手填的地址。排在广播后面：广播拿到的是此刻的真相，比任何存下来的都新鲜。
   const typedCandidate = typed.trim();
   if (typedCandidate) {
     onPhase("正在试填的地址…");
@@ -524,18 +635,30 @@ async function pickServer(typed: string, onPhase: (text: string) => void = () =>
       const parsed = new URL(normalizeSocketUrl(typedCandidate));
       const port = Number(parsed.port) || DEVICE_PORT;
       if (await answers({ host: parsed.hostname, port, kind: "lan" })) {
-        return { url: normalizeSocketUrl(typedCandidate), found: true };
+        addCandidates([{ host: parsed.hostname, port, kind: "lan" }]);
+        return { url: normalizeSocketUrl(typedCandidate), found: true, servers: [], udpSilent: true };
       }
     } catch { /* 填得不成样子，当作没填 */ }
   }
-  // 什么都没答应：自己找一遍。找到就记下来，下次不用再扫。
+
+  // 四、挨个敲。广播没人应答但这里敲得到，说明 UDP 被单独挡住了——这两者唯一的
+  // 差别就是协议，所以它是分辨防火墙问题最干净的信号。扫描因此不只是兜底，
+  // 它还是诊断。
   const found = await scanOwnSubnets(onPhase);
   if (found) {
-    rememberCandidates([found]);
-    return { url: normalizeSocketUrl(`${found.host}:${found.port}`), found: true };
+    addCandidates([found]);
+    return { url: normalizeSocketUrl(`${found.host}:${found.port}`), found: true, servers: [], udpSilent: true };
   }
-  // 都不行：把手填的那个原样交回去，让原来的报错路径去说话。
-  return { url: typed.trim(), found: false };
+  return { url: typed.trim(), found: false, servers: [], udpSilent: true };
+}
+
+/** 这台手机现在有哪些网卡。拿不到就当作没有，调用方自己会退化。 */
+async function ownLinks(): Promise<LocalInterface[]> {
+  try {
+    return (await LocalNetwork.interfaces()).interfaces || [];
+  } catch {
+    return [];
+  }
 }
 // ==== 电脑在哪，到此为止 ===================================================
 
@@ -968,9 +1091,22 @@ function showRole(role: "home" | "camera" | "handheld"): void { activeRole = rol
 
 async function sendHandheldFrame(): Promise<void> { if (sensorPolling || handheldSocket?.readyState !== WebSocket.OPEN) return; sensorPolling = true; try { const sample = await SensorBridge.getLatest(); const touches: Record<string, unknown>[] = [...padState].map((control) => ({ control, pressed: true })); if (Math.abs(stickState.x) > 0.02 || Math.abs(stickState.y) > 0.02) touches.push({ control: "stick", x: stickState.x, y: stickState.y }); handheldSocket.send(JSON.stringify({ type: "sensor_frame", role: "sensor", device_id: deviceId, sequence: handheldSequence++, captured_at_ms: Date.now(), player_slot: Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value), quaternion: { x: sample.qx, y: sample.qy, z: sample.qz, w: sample.qw }, orientation: {}, rotation_rate: { x: sample.gx, y: sample.gy, z: sample.gz }, acceleration: { x: sample.ax, y: sample.ay, z: sample.az }, touches, recenter: handheldRecenter })); if (handheldRecenter) { handheldRecenter = false; document.querySelector("#sensorState")!.textContent = "已居中"; } handheldFrames++; const now = performance.now(); if (now - handheldFpsStarted >= 1000) { document.querySelector("#sensorFps")!.textContent = `${Math.round(handheldFrames * 1000 / (now - handheldFpsStarted))} FPS`; handheldFrames = 0; handheldFpsStarted = now; } } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器异常"; } finally { sensorPolling = false; } }
 function clearTouches(): void { padState.clear(); stickState = { x: 0, y: 0 }; document.querySelector<HTMLElement>("#stick i")!.style.transform = "translate(0,0)"; document.querySelectorAll("[data-pad]").forEach((element) => element.classList.remove("pressed")); void sendHandheldFrame(); }
-async function startHandheld(): Promise<void> { showRole("handheld"); try { await SensorBridge.start(); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; const address = handheldServerInput.value.trim() || serverInput.value.trim(); if (!address) throw new Error("请填写电脑服务器地址"); serverInput.value = address; localStorage.setItem("motionbridge-server", address); handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldPairing = makePairingSession("sensor", (message) => handheldSocket?.send(JSON.stringify(message))); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (isPairingMessage(message.type)) { void handheldPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { markControlConfigCached(); clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开"; }); handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器不可用"; } }
-async function stopHandheld(): Promise<void> { clearTouches(); if (handheldTimer != null) window.clearInterval(handheldTimer); handheldTimer = null; await new Promise((resolve) => setTimeout(resolve, 35)); handheldSocket?.close(); handheldSocket = null; await SensorBridge.stop().catch(() => {}); await wakeLock?.release().catch(() => {}); wakeLock = null; showRole("home"); setConnection("offline"); }
-async function suspendHandheld(): Promise<void> { clearTouches(); if (handheldTimer != null) window.clearInterval(handheldTimer); handheldTimer = null; await new Promise((resolve) => setTimeout(resolve, 35)); handheldSocket?.close(); handheldSocket = null; await SensorBridge.stop().catch(() => {}); document.querySelector("#sensorState")!.textContent = "已暂停"; }
+async function startHandheld(): Promise<void> { showRole("handheld");
+  // 重连会再走一遍这里，旧的定时器不清就会越攒越多。
+  if (handheldTimer != null) { window.clearInterval(handheldTimer); handheldTimer = null; }
+  try { await SensorBridge.start(); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; const sensorLine = document.querySelector("#sensorState")!;
+    // 原来这里只认输入框里的地址，填错或者换了网段就直接报「请填写电脑服务器地址」。
+    // 手柄模式其实比摄像头模式更需要自动发现：握着手柄的人眼睛在电视上。
+    const picked = await pickServer(handheldServerInput.value.trim() || serverInput.value.trim(),
+                                    (phase) => { sensorLine.textContent = phase; });
+    if (!picked.found) throw new Error("没找到电脑");
+    const address = picked.url; serverInput.value = address; handheldServerInput.value = address;
+    localStorage.setItem("motionbridge-server", address); handheldRunning = true;
+    handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldPairing = makePairingSession("sensor", (message) => handheldSocket?.send(JSON.stringify(message))); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (isPairingMessage(message.type)) { void handheldPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { markControlConfigCached(); clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开";
+      // 摄像头模式早就这么做了，手柄模式一直没有：断了就是断了，要人再来一次。
+      if (handheldRunning) window.setTimeout(() => { if (handheldRunning) void startHandheld(); }, 1500); }); handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器不可用"; } }
+async function stopHandheld(): Promise<void> { handheldRunning = false; clearTouches(); if (handheldTimer != null) window.clearInterval(handheldTimer); handheldTimer = null; await new Promise((resolve) => setTimeout(resolve, 35)); handheldSocket?.close(); handheldSocket = null; await SensorBridge.stop().catch(() => {}); await wakeLock?.release().catch(() => {}); wakeLock = null; showRole("home"); setConnection("offline"); }
+async function suspendHandheld(): Promise<void> { handheldRunning = false; clearTouches(); if (handheldTimer != null) window.clearInterval(handheldTimer); handheldTimer = null; await new Promise((resolve) => setTimeout(resolve, 35)); handheldSocket?.close(); handheldSocket = null; await SensorBridge.stop().catch(() => {}); document.querySelector("#sensorState")!.textContent = "已暂停"; }
 async function handleBackButton(): Promise<void> { if (activeRole === "home") { await App.exitApp(); return; } if (activeRole === "camera") { await stop(); showRole("home"); return; } await stopHandheld(); }
 function updateStick(event: PointerEvent): void { const stick = document.querySelector<HTMLElement>("#stick")!; const rect = stick.getBoundingClientRect(); const x = Math.max(-1, Math.min(1, (event.clientX - (rect.left + rect.width / 2)) / (rect.width * 0.38))); const y = Math.max(-1, Math.min(1, (event.clientY - (rect.top + rect.height / 2)) / (rect.height * 0.38))); stickState = { x, y }; stick.querySelector<HTMLElement>("i")!.style.transform = `translate(${x * 34}px,${y * 34}px)`; }
 
@@ -1000,6 +1136,15 @@ function renderLinkState(state: LinkState, failed = false): void {
   } else if (failed) {
     text = "这个 WiFi 里没找到电脑。多半是两边不在同一个路由器下——换成插数据线最省事。";
     buttons.push({ label: "换成数据线", which: "tether" });
+  }
+  if (failed) {
+    // 自动找不到时最后一招：让人照着电脑屏幕填。但完整 IP 有十五个字符，错一个
+    // 就白填一次——而手机已经知道自己在哪个网段了，真正缺的只有最后一段。
+    const hint = lastOctetHint(state.links ?? []);
+    if (hint && !serverInput.value.includes(hint.prefix)) {
+      serverInput.value = hint.prefix;
+      text += `\n实在找不到就手填：电脑上那个地址的最后一段（比如 ${hint.example}），补在上面的「电脑地址」里。前面几位已经替你填好了。`;
+    }
   }
 
   box.hidden = !text;
