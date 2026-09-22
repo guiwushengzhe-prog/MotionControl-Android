@@ -29,7 +29,7 @@ android {
         //
         // 网页包有它自己的版本号，在 mobile/package.json，和这一个故意分开：
         // 它能热更，而 APK 不会跟着变。
-        versionName "2.0.0"
+        versionName "2.1.1"
         versionCode versionName.tokenize('.').with { p ->
             p[0].toInteger() * 10000 + p[1].toInteger() * 100 + p[2].toInteger()
         }
