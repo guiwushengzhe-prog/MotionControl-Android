@@ -186,13 +186,17 @@ let stickState = { x: 0, y: 0 };
 const CONTROL_CONFIG_STORAGE_KEY = "motionbridge-control-config-v1";
 let syncedControlConfig: ControlConfigV1 | null = loadCachedControlConfig();
 let controlConfigFresh = false;
+// 第三列是电脑没给映射时的兜底显示。以前写的是一个具体按键（"A"之类），于是
+// 没绑东西的区域也会煞有介事地显示一个键名，而那个键早就是别的区域的了——
+// 头顶那块就是这么一直显示着 A 的。说"未映射"比编一个准确。
 const ZONE_SYNC_ORDER = [
-  ["leftHandUpper", "左手上", "Y"],
-  ["leftHandLower", "左手下", "X"],
-  ["rightHandUpper", "右手上", "B"],
-  ["rightHandLower", "右手下", "A"],
-  ["leftFoot", "左脚", "LB"],
-  ["rightFoot", "右脚", "RB"],
+  ["leftHandUpper", "左手上", ""],
+  ["leftHandLower", "左手下", ""],
+  ["rightHandUpper", "右手上", ""],
+  ["rightHandLower", "右手下", ""],
+  ["leftFoot", "左脚", ""],
+  ["rightFoot", "右脚", ""],
+  ["headJump", "头顶", ""],
 ] as const;
 function loadCachedControlConfig(): ControlConfigV1 | null {
   try {
@@ -205,7 +209,7 @@ function loadCachedControlConfig(): ControlConfigV1 | null {
 function actionText(action: SyncedAction | undefined, fallback: string): string {
   const type = String(action?.type || "");
   const target = String(action?.target || "").toUpperCase();
-  if (!type || !target) return `默认 ${fallback}`;
+  if (!type || !target) return fallback ? `默认 ${fallback}` : "未映射";
   if (type === "keyboard") return `键盘 ${target}`;
   if (type === "mouse_button") return `鼠标 ${{ LEFT: "左键", RIGHT: "右键", MIDDLE: "中键", X1: "侧键1", X2: "侧键2" }[target as "LEFT" | "RIGHT" | "MIDDLE" | "X1" | "X2"] || target}`;
   if (type === "mouse_wheel") return `滚轮 ${target.includes("UP") ? "↑" : target.includes("DOWN") ? "↓" : target}`;
