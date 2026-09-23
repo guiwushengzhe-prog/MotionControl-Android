@@ -253,7 +253,7 @@ function zoneAction(id: string): SyncedAction | undefined {
  * 边也不轮询，收到才画。唯一的定时器是"过几秒把它调暗"的那一次性的，不是循环。
  */
 type TriggerBrief = { id?: string; name?: string; action?: SyncedAction | null };
-type TriggerStateV1 = { type: "trigger_state_v1"; held?: TriggerBrief[]; fired?: TriggerBrief[]; at?: number };
+type TriggerStateV1 = { type: "trigger_state_v1"; held?: TriggerBrief[]; fired?: TriggerBrief[]; zones?: Record<string, unknown>; at?: number };
 type GameOutputStateV1 = { type: "game_output_state_v1"; enabled?: boolean; ok?: boolean; error?: string };
 /** 打中之后大字亮多久。太短了人还没把视线从游戏挪过来就灭了。 */
 const TRIGGER_HOLD_MS = 2500;
@@ -265,6 +265,7 @@ let runtimeZones: Record<string, unknown> = {};
 
 function applyTriggerState(message: TriggerStateV1): void {
   triggerHeld = Array.isArray(message.held) ? message.held : [];
+  if (message.zones && typeof message.zones === "object") runtimeZones = message.zones;
   const fired = Array.isArray(message.fired) ? message.fired : [];
   if (fired.length) {
     triggerLast = fired[fired.length - 1];
