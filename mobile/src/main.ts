@@ -22,6 +22,8 @@ type ControlConfigV1 = {
   // 绑定里的宏是按编号引用的，没有这份就只能在圈上显示一串编号。
   // 只在配置变化时随推送来一次，不是实时数据。
   macros?: { id?: string; name?: string; repeat?: boolean }[];
+  // 真正会生效的绑定（含区域的内置兜底）。框上写的键以它为准。
+  effective_bindings?: Record<string, SyncedBinding>;
   zones?: Record<string, unknown>;
   vertical_look?: Record<string, unknown>;
   // Every phrase the desktop can act on.  The recognizer here is built from
@@ -86,12 +88,14 @@ app.innerHTML = `
       <div class="runtime-camera-choice"><span class="control-label">镜头方向</span><div class="camera-buttons" role="group" aria-label="选择镜头"><button id="frontCameraButton" type="button" aria-pressed="false">前置</button><button id="backCameraButton" type="button" aria-pressed="false">后置</button></div><small id="cameraSwitchState" class="camera-switch-state"></small></div>
       <div class="runtime-actions"><div class="runtime-voice" id="voiceControl"><label><input id="voiceToggle" type="checkbox"><span>语音控制</span></label><span id="voiceState">关闭</span></div><button id="hideStatus" class="status-hide" type="button">沉浸显示</button><button id="stopButton" class="stop">停止</button></div>
     </section>
+    <div class="trigger-board camera-trigger-board hidden" id="cameraTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
     <button id="showStatus" class="status-show hidden" type="button">显示控制</button>
     <section class="handheld-card hidden" id="handheldCard">
-      <div class="handheld-top handheld-connection-row"><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><label class="hidden" id="handheldAddressField">电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label></div>
-      <div class="profile-sync handheld-profile-sync" id="handheldProfileSync"><div class="profile-sync-head"><span>当前游戏</span><b id="handheldProfileGame">等待电脑同步</b><small id="handheldProfileState">未同步</small></div><div id="handheldProfileCoverage" class="profile-coverage">等待映射</div><div class="profile-sync-bindings" id="handheldProfileBindings"></div></div>
-      <div class="handheld-top"><label>玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span><b id="sensorFps">0 FPS</b><small id="sensorState">等待传感器</small></span><button id="centerSensor">重新居中</button><button id="stopHandheld" class="stop">停止</button></div>
+      <div class="trigger-board handheld-trigger-board" id="handheldTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
+      <div class="handheld-top handheld-connection-row"><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><label class="hidden" id="handheldAddressField">电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label><small id="sensorState">等待传感器</small><button id="centerSensor">重新居中</button><button id="stopHandheld" class="stop">停止</button></div>
+      <div class="profile-sync-bindings handheld-targets" id="handheldProfileBindings"></div>
       <div class="shoulders"><button data-pad="l">LB</button><button data-pad="zl">LT</button><button data-pad="zr">RT</button><button data-pad="r">RB</button></div><div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div></div>
+      <details class="handheld-more"><summary>更多</summary><div class="handheld-more-body"><label>玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span>传感器 <b id="sensorFps">0 FPS</b></span></div></details>
     </section>
   </main>
   <div class="pairing hidden" id="pairingDialog">
@@ -189,17 +193,14 @@ let stickState = { x: 0, y: 0 };
 const CONTROL_CONFIG_STORAGE_KEY = "motionbridge-control-config-v1";
 let syncedControlConfig: ControlConfigV1 | null = loadCachedControlConfig();
 let controlConfigFresh = false;
-// 第三列是电脑没给映射时的兜底显示。以前写的是一个具体按键（"A"之类），于是
-// 没绑东西的区域也会煞有介事地显示一个键名，而那个键早就是别的区域的了——
-// 头顶那块就是这么一直显示着 A 的。说"未映射"比编一个准确。
+// 电脑早就把手部四个区合成了两个（左手、右手）。这里以前还按老的四个查，于是手部
+// 那四个框查的名字根本不存在——永远写「未映射」，也永远不会亮。
 const ZONE_SYNC_ORDER = [
-  ["leftHandUpper", "左手上", ""],
-  ["leftHandLower", "左手下", ""],
-  ["rightHandUpper", "右手上", ""],
-  ["rightHandLower", "右手下", ""],
-  ["leftFoot", "左脚", ""],
-  ["rightFoot", "右脚", ""],
-  ["headJump", "头顶", ""],
+  ["leftHand", "左手"],
+  ["rightHand", "右手"],
+  ["leftFoot", "左脚"],
+  ["rightFoot", "右脚"],
+  ["headJump", "头顶"],
 ] as const;
 function loadCachedControlConfig(): ControlConfigV1 | null {
   try {
@@ -214,6 +215,108 @@ function macroLabel(id: string): string {
   // 电脑上删了那条宏、而这边还拿着旧缓存时会走到这里。照实说，别编一个名字。
   if (!found) return "宏已丢失";
   return found.repeat ? `${found.name}（循环）` : String(found.name || "");
+}
+function escapeText(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" } as Record<string, string>)[ch]);
+}
+/** 一个键的短写法，给大字用。"Xbox B" 太长了，几米外只看得清一个"B"。 */
+function shortKey(action: SyncedAction | undefined): string {
+  const type = String(action?.type || "");
+  const rawTarget = action?.target as unknown;
+  const raw = Array.isArray(rawTarget) ? rawTarget.join("+") : String(rawTarget || "");
+  const target = raw.toUpperCase();
+  if (!type || !raw) return "未映射";
+  if (type === "macro") return macroLabel(raw.toLowerCase());
+  if (type === "mouse_button") return ({ LEFT: "左键", RIGHT: "右键", MIDDLE: "中键", X1: "侧键1", X2: "侧键2" } as Record<string, string>)[target] || target;
+  if (type === "mouse_wheel") return target.includes("UP") ? "滚轮↑" : "滚轮↓";
+  if (type === "gamepad_axis") return ({ LS_UP: "摇杆↑", LS_DOWN: "摇杆↓", LS_LEFT: "摇杆←", LS_RIGHT: "摇杆→" } as Record<string, string>)[target] || target;
+  return target.replace("LS_UP", "↑").replace("LS_DOWN", "↓").replace("LS_LEFT", "←").replace("LS_RIGHT", "→");
+}
+/**
+ * 区域真正会按下去的那个键。
+ *
+ * 先看电脑算好的 effective_bindings：区域有一层内置兜底，配置里没有 zone.headJump 时
+ * 它照样按 A。只看 bindings 的话这里会写「未映射」，而游戏里明明有反应——电脑那边
+ * 就是在「靶场」上看见大字写「头顶区 → A」、旁边的框却写「未映射」才发现的。
+ */
+function zoneAction(id: string): SyncedAction | undefined {
+  const effective = syncedControlConfig?.effective_bindings?.[`zone.${id}`];
+  if (effective?.action) return effective.action;
+  const binding = syncedControlConfig?.bindings?.zones?.[id];
+  return binding?.disabled ? undefined : binding?.action;
+}
+
+/* --- 触发牌 ------------------------------------------------------------------
+ * 打游戏时游戏是全屏的，人看不到电脑上的「靶场」，只看得见手机。所以"刚才到底
+ * 触发了什么、按的是哪个键"要在手机上用大字写出来——区域、动作、姿势、语音都算。
+ *
+ * 电脑只在"按着的集合"变了的时候推一次（trigger_state_v1），不是每帧推。手机这
+ * 边也不轮询，收到才画。唯一的定时器是"过几秒把它调暗"的那一次性的，不是循环。
+ */
+type TriggerBrief = { id?: string; name?: string; action?: SyncedAction | null };
+type TriggerStateV1 = { type: "trigger_state_v1"; held?: TriggerBrief[]; fired?: TriggerBrief[]; at?: number };
+/** 打中之后大字亮多久。太短了人还没把视线从游戏挪过来就灭了。 */
+const TRIGGER_HOLD_MS = 2500;
+let triggerHeld: TriggerBrief[] = [];
+let triggerLast: TriggerBrief | null = null;
+let triggerLastAt = 0;
+let triggerFadeTimer: number | null = null;
+
+function applyTriggerState(message: TriggerStateV1): void {
+  triggerHeld = Array.isArray(message.held) ? message.held : [];
+  const fired = Array.isArray(message.fired) ? message.fired : [];
+  if (fired.length) {
+    triggerLast = fired[fired.length - 1];
+    triggerLastAt = performance.now();
+  }
+  renderTriggerBoards();
+}
+
+/** 断线时把"按着"清掉。不清的话最后按着的那个键会一直亮着，像是卡住了。 */
+function clearTriggerState(): void {
+  triggerHeld = [];
+  renderTriggerBoards();
+}
+
+function renderTriggerBoards(): void {
+  const now = performance.now();
+  const recent = !!triggerLast && now - triggerLastAt < TRIGGER_HOLD_MS;
+  const shown = triggerHeld.length ? triggerHeld : (triggerLast ? [triggerLast] : []);
+  const live = triggerHeld.length > 0 || recent;
+  const keyText = shown.length ? shown.map((item) => shortKey(item.action ?? undefined)).join(" + ") : "—";
+  const nameText = shown.length
+    ? shown.map((item) => item.name || String(item.id || "")).join(" + ")
+    : "做个动作或者说句口令试试";
+
+  // 摄像头那块浮在画面最上面，「沉浸显示」时也在——那正是打游戏时的样子。
+  //
+  // 它占的就是标题栏的位置，所以连上之后标题栏收起来：「已连接电脑」下面的运行卡片
+  // 里也写着，不缺它。一断线标题栏就回来，而触发牌消失——那一变本身就是在提醒人
+  // 出问题了。只在摄像头模式下动标题栏，手柄模式有自己的规矩（showRole 里）。
+  const cameraLive = activeRole === "camera" && socket?.readyState === WebSocket.OPEN;
+  const cameraBoard = document.querySelector<HTMLElement>("#cameraTriggerBoard");
+  if (cameraBoard) cameraBoard.classList.toggle("hidden", !cameraLive);
+  if (activeRole === "camera") document.querySelector<HTMLElement>("header")?.classList.toggle("hidden", cameraLive);
+
+  for (const board of document.querySelectorAll<HTMLElement>(".trigger-board")) {
+    const key = board.querySelector<HTMLElement>(".trigger-board-key");
+    const name = board.querySelector<HTMLElement>(".trigger-board-name");
+    if (key) key.textContent = keyText;
+    if (name) name.textContent = nameText;
+    board.classList.toggle("on", live);
+  }
+
+  // 区域框也跟着亮：按着的那个框变绿。
+  const heldIds = new Set(triggerHeld.map((item) => String(item.id || "")));
+  for (const box of document.querySelectorAll<HTMLElement>(".profile-sync-bindings [data-trigger]")) {
+    box.classList.toggle("lit", heldIds.has(box.dataset.trigger || ""));
+  }
+
+  // 过一会儿调暗。一次性的，下一次触发会把它重排。
+  if (triggerFadeTimer != null) window.clearTimeout(triggerFadeTimer);
+  triggerFadeTimer = recent && !triggerHeld.length
+    ? window.setTimeout(renderTriggerBoards, TRIGGER_HOLD_MS - (now - triggerLastAt) + 30)
+    : null;
 }
 function actionText(action: SyncedAction | undefined, fallback: string): string {
   const type = String(action?.type || "");
@@ -239,18 +342,12 @@ function renderControlConfig(): void {
   const voiceCount = Object.keys(config?.bindings?.voice || {}).length;
   const zoneCount = Object.keys(zones).length;
   const coverageText = config ? `${zoneCount} 区域 · ${motionCount + poseCount} 动作 · ${voiceCount} 语音` : "等待映射";
-  const bindingHtml = ZONE_SYNC_ORDER.map(([id, label, fallback]) => {
-    const binding = zones[id];
-    const text = binding?.disabled ? "关闭" : actionText(binding?.action, fallback);
-    return `<span><i>${label}</i><b>${text}</b></span>`;
-  }).join("");
+  const bindingHtml = ZONE_SYNC_ORDER.map(([id, label]) =>
+    `<span data-trigger="zone.${id}"><i>${label}</i><b>${escapeText(shortKey(zoneAction(id)))}</b></span>`).join("");
   // 六区映射说的是身体区域，那是摄像头模式的事。手拿着手机的时候这台手机不产生
   // 身体区域，把它们摆在手柄界面上只会让人以为挥挥手也有用。游戏名留着——知道
   // 电脑那边当前是哪个游戏，是有用的上下文。
-  const handheldBindings = document.querySelector<HTMLElement>("#handheldProfileBindings");
-  if (handheldBindings) handheldBindings.hidden = true;
-  const handheldCoverage = document.querySelector<HTMLElement>("#handheldProfileCoverage");
-  if (handheldCoverage) handheldCoverage.hidden = true;
+  // 手柄界面上的靶子保留：身体、语音触发了什么，拿着手机的人也要看得见。
   for (const [gameId, stateId, bindingsId, coverageId] of [["cameraProfileGame", "cameraProfileState", "cameraProfileBindings", "cameraProfileCoverage"], ["handheldProfileGame", "handheldProfileState", "handheldProfileBindings", "handheldProfileCoverage"]] as const) {
     const game = document.querySelector<HTMLElement>(`#${gameId}`);
     const stateEl = document.querySelector<HTMLElement>(`#${stateId}`);
@@ -261,6 +358,7 @@ function renderControlConfig(): void {
     if (coverage) coverage.textContent = coverageText;
     if (bindings) bindings.innerHTML = bindingHtml;
   }
+  renderTriggerBoards();
 }
 let activeVoicePhrases = "";
 function voicePhrases(): string[] {
@@ -745,7 +843,7 @@ function showStartError(error: unknown): void {
   setupCard.classList.remove("hidden");
   runtimeCard.classList.add("hidden");
 }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { setConnection("offline"); markControlConfigCached(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
+function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
 // 重连时重新挑一次，而不是死守断掉的那个地址：拔掉数据线就该自动落回 WiFi，
 // 换了网段也该自己找回来。
 async function reconnectToBestServer(): Promise<void> {
@@ -1129,7 +1227,7 @@ async function startHandheld(): Promise<void> { showRole("handheld");
     if (!picked.found) throw new Error("没找到电脑");
     const address = picked.url; serverInput.value = address; handheldServerInput.value = address;
     localStorage.setItem("motionbridge-server", address); handheldRunning = true;
-    handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldPairing = makePairingSession("sensor", (message) => handheldSocket?.send(JSON.stringify(message))); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (isPairingMessage(message.type)) { void handheldPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { markControlConfigCached(); clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开";
+    handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldPairing = makePairingSession("sensor", (message) => handheldSocket?.send(JSON.stringify(message))); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (isPairingMessage(message.type)) { void handheldPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { markControlConfigCached(); clearTriggerState(); clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开";
       // 摄像头模式早就这么做了，手柄模式一直没有：断了就是断了，要人再来一次。
       if (handheldRunning) window.setTimeout(() => { if (handheldRunning) void startHandheld(); }, 1500); }); handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器不可用";
     // 地址框平时收着——自动找得到的话它一辈子用不上。只有真找不到时才露出来，

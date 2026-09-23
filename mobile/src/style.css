@@ -155,3 +155,88 @@ button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input
 .link-state p { margin: 0; font-size: 13px; line-height: 1.65; color: #ebbc99; }
 .link-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 9px; }
 .link-actions:empty { display: none; }
+
+/* 触发牌：打游戏时游戏是全屏的，人看的就是手机上这一块。字要大。 */
+.trigger-board { display: grid; justify-items: center; gap: 2px; padding: 10px 16px; border-radius: 14px; border: 2px solid rgba(255,255,255,.14); background: rgba(8,12,16,.88); transition: border-color .12s, background .12s; }
+.trigger-board.hidden { display: none; }
+.trigger-board-key { font-size: 46px; line-height: 1.1; font-weight: 800; color: #9aa7b2; text-align: center; word-break: break-word; }
+.trigger-board-name { font-size: 15px; color: #8d9ba7; text-align: center; }
+.trigger-board.on { border-color: #58d18b; background: rgba(18,58,36,.94); }
+.trigger-board.on .trigger-board-key { color: #6ef0a2; }
+.trigger-board.on .trigger-board-name { color: #d9f5e4; }
+/* 摄像头那块浮在画面最上面，「沉浸显示」时也在。不挡触摸：它只是给人看的。 */
+.camera-trigger-board { position: fixed; z-index: 5; top: max(12px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); min-width: min(260px, 70vw); max-width: calc(100vw - 24px); pointer-events: none; }
+
+/* 靶子：那排区域框。键位字原来只有 9px，几米外什么都看不见。按着的那个变绿。 */
+.profile-sync-bindings { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.profile-sync-bindings span { padding: 8px 8px; transition: background .1s, box-shadow .1s; }
+.profile-sync-bindings i { font-size: 12px; }
+.profile-sync-bindings b { font-size: 22px; }
+.profile-sync-bindings span.lit { background: rgba(88,209,139,.30); box-shadow: 0 0 0 2px #58d18b inset; }
+.profile-sync-bindings span.lit b { color: #6ef0a2; }
+
+/* 手柄：玩的时候用得上的都放大；用不上的收进「更多」。 */
+.handheld-card { grid-template-rows: auto auto auto auto 1fr auto; }
+.handheld-trigger-board .trigger-board-key { font-size: 40px; }
+.handheld-top #sensorState { flex: 1; min-width: 0; color: #91a0ab; font-size: 12px; }
+.handheld-top button { min-height: 44px; padding: 8px 14px; font-size: 15px; }
+.shoulders button { min-height: 64px; font-size: 22px; font-weight: 700; border-radius: 14px; }
+.face-buttons { width: min(42vh, 300px); }
+.face-buttons button { font-size: 28px; font-weight: 800; }
+.stick { width: min(38vh, 260px); }
+.middle-buttons button { min-height: 52px; font-size: 16px; border-radius: 12px; }
+.handheld-more { color: #8d9ba7; font-size: 12px; }
+.handheld-more summary { cursor: pointer; padding: 4px 0; }
+.handheld-more-body { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding-top: 6px; }
+
+/* 竖屏和窄屏要排在最后：上面那几条宽度写的是横屏，不压回来的话竖屏会撑出屏幕。 */
+@media (orientation: portrait) {
+  .stick, .face-buttons { width: min(44vw, 240px); }
+  .trigger-board-key { font-size: 38px; }
+}
+@media (max-width: 600px) {
+  .profile-sync-bindings { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* 横着拿（手柄本来就是横着用的）：竖着一层层往下排，摇杆和 ABXY 会被挤出屏幕。
+   改成左右三栏——摇杆在左、ABXY 在右，触发牌和靶子夹在中间，正好在两个拇指之间、
+   眼睛最容易扫到的地方。
+   .gamepad 用 display: contents，让摇杆、中间两键、ABXY 直接变成这张网格的格子，
+   不用为横屏另写一套 HTML。 */
+@media (orientation: landscape) {
+  .handheld-card {
+    inset: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto auto auto 1fr;
+    grid-template-areas:
+      "shoulders shoulders shoulders"
+      "stick     board     face"
+      "stick     targets   face"
+      "stick     status    face"
+      "stick     middle    face"
+      "stick     more      face";
+    gap: 8px;
+  }
+  .gamepad { display: contents; }
+  .shoulders { grid-area: shoulders; }
+  .shoulders button { min-height: 52px; }
+  .stick { grid-area: stick; align-self: center; width: min(62vh, 240px); }
+  .face-buttons { grid-area: face; align-self: center; width: min(62vh, 240px); }
+  .handheld-trigger-board { grid-area: board; padding: 6px 10px; }
+  .handheld-trigger-board .trigger-board-key { font-size: 34px; }
+  .handheld-trigger-board .trigger-board-name { font-size: 13px; }
+  .handheld-targets { grid-area: targets; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .handheld-targets b { font-size: 17px; }
+  .handheld-connection-row { grid-area: status; padding: 4px 8px; }
+  .handheld-connection-row button { min-height: 38px; padding: 6px 10px; font-size: 14px; }
+  .middle-buttons { grid-area: middle; grid-template-columns: 1fr 1fr; }
+  .middle-buttons button { min-height: 40px; }
+  .handheld-more { grid-area: more; }
+}
+
+/* 底下那一排：语音状态那句话可能很长（“电脑上没有中文语音…”），让它自己省略，
+   别把「沉浸显示」「停止」挤成两行——那两个是玩的时候真要按的。 */
+.runtime-actions { flex-wrap: nowrap; }
+.runtime-actions .runtime-voice { flex: 1 1 0; min-width: 0; width: auto; }
+.runtime-actions .runtime-voice span { min-width: 0; max-width: none; flex: 1 1 0; }
+.runtime-actions > button { flex: 0 0 auto; white-space: nowrap; min-height: 48px; padding: 10px 16px; font-size: 16px; }
