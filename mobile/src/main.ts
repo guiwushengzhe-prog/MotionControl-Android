@@ -1311,7 +1311,41 @@ document.querySelector("#centerSensor")!.addEventListener("click", () => { handh
 document.querySelectorAll<HTMLElement>("[data-pad]").forEach((button) => { button.addEventListener("pointerdown", (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); padState.add(button.dataset.pad!); button.classList.add("pressed"); }); const release = () => { padState.delete(button.dataset.pad!); button.classList.remove("pressed"); }; button.addEventListener("pointerup", release); button.addEventListener("pointercancel", release); button.addEventListener("lostpointercapture", release); });
 const stick = document.querySelector<HTMLElement>("#stick")!; stick.addEventListener("pointerdown", (event) => { stick.setPointerCapture(event.pointerId); updateStick(event); }); stick.addEventListener("pointermove", (event) => { if (stick.hasPointerCapture(event.pointerId)) updateStick(event); }); const releaseStick = () => { stickState = { x: 0, y: 0 }; stick.querySelector<HTMLElement>("i")!.style.transform = "translate(0,0)"; }; stick.addEventListener("pointerup", releaseStick); stick.addEventListener("pointercancel", releaseStick);
 window.addEventListener("resize", resizeCanvas);
-document.addEventListener("visibilitychange", () => { if (document.hidden && voiceEnabled) void stopVoiceControl(); if (document.hidden && activeRole === "handheld") void suspendHandheld(); if (document.visibilityState === "visible" && activeRole === "handheld" && handheldTimer == null) void startHandheld(); if (document.visibilityState === "visible" && (running || activeRole === "handheld") && !wakeLock) void navigator.wakeLock?.request("screen").then((lock) => { wakeLock = lock; }).catch(() => {}); });
+// 进后台 / 回前台。
+//
+// 摄像头模式以前在这里什么都不做：进后台时系统把摄像头收走、画面循环停了，界面却还
+// 以为在跑；回来就卡在那儿，只能手动停止再开始。现在进后台就干净地停掉，回来自动
+// 重新连上开始——半死不活的状态修补起来总会漏一处，整个停掉再起一遍是确定的。
+//
+// 语音开关要记住。以前进后台会顺手把它取消勾选，回来就再也不自己开了。
+let resumeCameraOnReturn = false;
+let cameraSuspending: Promise<void> | null = null;
+function onVisibilityChange(): void {
+  if (document.hidden) {
+    const keepVoice = voiceToggle.checked;
+    if (running && activeRole === "camera") {
+      resumeCameraOnReturn = true;
+      cameraSuspending = stop().finally(() => { voiceToggle.checked = keepVoice; });
+    } else if (voiceEnabled) {
+      void stopVoiceControl(false);
+    }
+    if (activeRole === "handheld") void suspendHandheld();
+    return;
+  }
+  if (activeRole === "handheld" && handheldTimer == null) void startHandheld();
+  if (resumeCameraOnReturn && activeRole === "camera") {
+    resumeCameraOnReturn = false;
+    // 等进后台时那次停止真的走完再开。停止里有几步是异步的，要是回来得快，它的
+    // 收尾（把界面切回设置页）会落在重新开始之后，界面就和实际状态对不上了。
+    void (async () => {
+      await cameraSuspending;
+      cameraSuspending = null;
+      if (!running) await start();
+    })();
+  }
+  if ((running || activeRole === "handheld") && !wakeLock) void navigator.wakeLock?.request("screen").then((lock) => { wakeLock = lock; }).catch(() => {});
+}
+document.addEventListener("visibilitychange", onVisibilityChange);
 window.addEventListener("beforeunload", () => { clearTouches(); void stopVoiceControl(); });
 void // 装的 APK 是一个版本，跑的网页可能是另一个。一半的修复走热更，APK 不会
 // 跟着变，所以只报 APK 版本的话，"我这版有没有那个修复"就只能靠猜——而反馈
