@@ -83,7 +83,6 @@ app.innerHTML = `
     </section>
     <section class="runtime-card hidden" id="runtimeCard">
       <div class="runtime-primary"><div><span class="eyebrow">识别状态</span><strong id="sendState">等待完整人体</strong></div><span class="runtime-link">电脑 <b id="panelConnection">未连接</b></span></div>
-      <div class="profile-sync" id="cameraProfileSync"><div class="profile-sync-head"><span>当前游戏</span><b id="cameraProfileGame">等待电脑同步</b><small id="cameraProfileState">未同步</small></div><div id="cameraProfileCoverage" class="profile-coverage">等待映射</div><div class="profile-sync-bindings" id="cameraProfileBindings"></div></div>
       <div class="technical runtime-tech"><span>摄像头 <b id="cameraFps">0 FPS</b></span><span>识别 <b id="localFps">0 FPS</b></span><span id="modelStatus">Full33</span><span id="delegateStatus">—</span><small id="modelError"></small></div>
       <div class="runtime-camera-choice"><span class="control-label">镜头方向</span><div class="camera-buttons" role="group" aria-label="选择镜头"><button id="frontCameraButton" type="button" aria-pressed="false">前置</button><button id="backCameraButton" type="button" aria-pressed="false">后置</button></div><small id="cameraSwitchState" class="camera-switch-state"></small></div>
       <div class="runtime-actions"><div class="runtime-voice" id="voiceControl"><label><input id="voiceToggle" type="checkbox"><span>语音控制</span></label><span id="voiceState">关闭</span></div><button id="hideStatus" class="status-hide" type="button">沉浸显示</button><button id="stopButton" class="stop">停止</button></div>
@@ -93,7 +92,6 @@ app.innerHTML = `
     <section class="handheld-card hidden" id="handheldCard">
       <div class="trigger-board handheld-trigger-board" id="handheldTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
       <div class="handheld-top handheld-connection-row"><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><label class="hidden" id="handheldAddressField">电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label><small id="sensorState">等待传感器</small><button id="centerSensor">重新居中</button><button id="stopHandheld" class="stop">停止</button></div>
-      <div class="profile-sync-bindings handheld-targets" id="handheldProfileBindings"></div>
       <div class="shoulders"><button data-pad="l">LB</button><button data-pad="zl">LT</button><button data-pad="zr">RT</button><button data-pad="r">RB</button></div><div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div></div>
       <details class="handheld-more"><summary>更多</summary><div class="handheld-more-body"><label>玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span>传感器 <b id="sensorFps">0 FPS</b></span></div></details>
     </section>
@@ -333,31 +331,7 @@ function actionText(action: SyncedAction | undefined, fallback: string): string 
   return `${type} ${target}`;
 }
 function renderControlConfig(): void {
-  const config = syncedControlConfig;
-  const gameName = config?.game?.name || config?.game?.id || "等待电脑同步";
-  const state = config ? (controlConfigFresh ? "已同步" : "缓存") : "未同步";
-  const zones = config?.bindings?.zones || {};
-  const motionCount = Object.keys(config?.bindings?.motions || {}).length;
-  const poseCount = Object.keys(config?.bindings?.poses || {}).length;
-  const voiceCount = Object.keys(config?.bindings?.voice || {}).length;
-  const zoneCount = Object.keys(zones).length;
-  const coverageText = config ? `${zoneCount} 区域 · ${motionCount + poseCount} 动作 · ${voiceCount} 语音` : "等待映射";
-  const bindingHtml = ZONE_SYNC_ORDER.map(([id, label]) =>
-    `<span data-trigger="zone.${id}"><i>${label}</i><b>${escapeText(shortKey(zoneAction(id)))}</b></span>`).join("");
-  // 六区映射说的是身体区域，那是摄像头模式的事。手拿着手机的时候这台手机不产生
-  // 身体区域，把它们摆在手柄界面上只会让人以为挥挥手也有用。游戏名留着——知道
-  // 电脑那边当前是哪个游戏，是有用的上下文。
-  // 手柄界面上的靶子保留：身体、语音触发了什么，拿着手机的人也要看得见。
-  for (const [gameId, stateId, bindingsId, coverageId] of [["cameraProfileGame", "cameraProfileState", "cameraProfileBindings", "cameraProfileCoverage"], ["handheldProfileGame", "handheldProfileState", "handheldProfileBindings", "handheldProfileCoverage"]] as const) {
-    const game = document.querySelector<HTMLElement>(`#${gameId}`);
-    const stateEl = document.querySelector<HTMLElement>(`#${stateId}`);
-    const bindings = document.querySelector<HTMLElement>(`#${bindingsId}`);
-    const coverage = document.querySelector<HTMLElement>(`#${coverageId}`);
-    if (game) game.textContent = gameName;
-    if (stateEl) { stateEl.textContent = state; stateEl.className = controlConfigFresh ? "fresh" : config ? "cached" : ""; }
-    if (coverage) coverage.textContent = coverageText;
-    if (bindings) bindings.innerHTML = bindingHtml;
-  }
+  // Config remains synced for recognition and voice; the phone runtime page shows only status.
   renderTriggerBoards();
 }
 let activeVoicePhrases = "";
