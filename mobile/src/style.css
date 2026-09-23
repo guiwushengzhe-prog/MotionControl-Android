@@ -66,10 +66,10 @@ button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; backg
 .camera-buttons button.selected { color: #111704; border-color: #c8ff38; background: #c8ff38; }
 .camera-switch-state { min-height: 14px; color: #ffb29d; font-size: 10px; }
 .runtime-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.runtime-voice { display: flex; align-items: center; gap: 10px; margin-right: auto; color: #f5f7f8; font-size: 11px; }
+.runtime-voice { display: flex; align-items: center; gap: 6px; min-width: 0; color: #f5f7f8; font-size: 11px; }
 .runtime-voice label { display: flex; align-items: center; gap: 6px; }
 .runtime-voice input { width: 16px; height: 16px; margin: 0; accent-color: #c8ff38; }
-.runtime-voice span { color: #aab5be; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runtime-voice span { color: #aab5be; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-hide, .status-show { color: #d7e0e6; border: 1px solid rgba(255,255,255,.2); background: rgba(8,12,16,.94); font-size: 10px; font-weight: 700; white-space: nowrap; }
 .status-hide { padding: 9px 11px; }
 .status-show { pointer-events: auto; position: fixed; z-index: 6; right: max(12px, env(safe-area-inset-right)); bottom: calc(max(12px, env(safe-area-inset-bottom)) + 8px); min-width: 76px; min-height: 34px; padding: 7px 10px; border-radius: 9px; touch-action: manipulation; }
@@ -123,7 +123,6 @@ button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; backg
   .status-summary span { max-width: 20vw; overflow: hidden; text-overflow: ellipsis; }
   .profile-sync-bindings { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .runtime-actions { align-items: stretch; }
-  .runtime-voice { width: 100%; margin-right: 0; }
   .runtime-actions > button { flex: 1; min-width: 0; padding: 9px 8px; }
   .handheld-card { inset-top: 70px; }
   .gamepad { grid-template-columns: 1fr 1fr; }
@@ -141,7 +140,7 @@ label{color:#9ca9b5;font-size:11px}.setup-card input,.setup-card select,.handhel
 .runtime-card{width:min(760px,calc(100vw - 18px));padding:11px;border-color:var(--mc-line);border-radius:17px;background:rgba(10,15,21,.96)}.runtime-primary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:3px 3px 10px}.runtime-primary>div{min-width:0}.runtime-primary strong{display:block;margin-top:3px;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.runtime-link{flex:0 0 auto;color:#8e9ca8;font-size:10px}.runtime-link b{display:block;margin-top:2px;color:#dfe7ed}.profile-sync{border-color:var(--mc-line);background:#111922;padding:9px}.profile-sync-head b{font-size:12px}.profile-coverage{color:#8fa0ad;font-size:9px}.profile-sync-bindings{gap:4px}.profile-sync-bindings span{background:#0b1117;border:1px solid #1f2a35}.runtime-camera-choice{grid-template-columns:auto 1fr;align-items:center;gap:8px;margin-top:9px}.runtime-camera-choice .control-label{font-size:10px}.camera-buttons{grid-template-columns:1fr 1fr;gap:5px}.camera-buttons button{min-height:38px;padding:8px;border-color:var(--mc-line);background:#151f29}.camera-buttons button.selected{border-color:#4785ce;background:#244b78;color:#eaf4ff}.camera-switch-state{grid-column:1/-1}.runtime-actions{margin-top:8px}.runtime-voice{padding:0 4px}.runtime-voice input{accent-color:var(--mc-success)}.runtime-actions button{min-height:40px}.runtime-actions .stop{border-color:#653740;color:#ffd9dd;background:#2a171c}.status-hide,.status-show{border-color:var(--mc-line);background:#111922}.guide{border-color:rgba(107,168,255,.38)}
 .handheld-card{gap:8px}.handheld-top,.handheld-profile-sync{border-color:var(--mc-line);background:rgba(12,18,24,.94)}.shoulders button,.face-buttons button,.middle-buttons button{border-color:#34414e;background:#131c25}.handheld-card button.pressed{background:#3f84e8;color:white}.stick{border-color:#40505f;background:radial-gradient(circle,#24313d 0 26%,#111820 27% 100%)}.stick i{background:#6ba8ff}
 button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #78b2ff;outline-offset:2px}
-@media(max-width:600px){.app-header{padding-left:12px;padding-right:12px}.mobile-brand small{display:none}.setup-card{padding:16px}.role-grid{grid-template-columns:1fr}.role-option{min-height:86px!important}.runtime-card{bottom:max(7px,env(safe-area-inset-bottom));padding:9px}.profile-sync-bindings{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime-camera-choice{grid-template-columns:1fr}.runtime-actions{gap:6px}.runtime-actions .runtime-voice{width:auto;flex:1}.status-hide,.runtime-actions .stop{padding:8px 10px}}
+@media(max-width:600px){.app-header{padding-left:12px;padding-right:12px}.mobile-brand small{display:none}.setup-card{padding:16px}.role-grid{grid-template-columns:1fr}.role-option{min-height:86px!important}.runtime-card{bottom:max(7px,env(safe-area-inset-bottom));padding:9px}.profile-sync-bindings{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime-camera-choice{grid-template-columns:1fr}.runtime-actions{gap:6px}.status-hide,.runtime-actions .stop{padding:8px 10px}}
 .runtime-actions .game-control{border-color:#3b6fa5;background:#14283b;color:#b9dcff}.runtime-actions .game-control.enabled{border-color:#55c985;background:#173d2d;color:#d5ffe5}
 
 /* 连接出问题时才出现的那一块。正常情况下它根本不渲染,所以只有一种颜色。 */
@@ -235,9 +234,14 @@ button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input
   .handheld-more { grid-area: more; }
 }
 
-/* 底下那一排：语音状态那句话可能很长（“电脑上没有中文语音…”），让它自己省略，
-   别把「沉浸显示」「停止」挤成两行——那两个是玩的时候真要按的。 */
+/* 状态行中间放语音开关；长状态只省略自身，保留两侧状态。 */
+.runtime-primary > div:first-child { flex: 1 1 0; }
+.runtime-primary .runtime-voice { flex: 0 1 170px; padding: 0; }
+.runtime-primary .runtime-voice label { flex: 0 0 auto; color: #eef4f8; white-space: nowrap; }
+.runtime-primary .runtime-voice > span { min-width: 0; }
 .runtime-actions { flex-wrap: nowrap; }
-.runtime-actions .runtime-voice { flex: 1 1 0; min-width: 0; width: auto; }
-.runtime-actions .runtime-voice span { min-width: 0; max-width: none; flex: 1 1 0; }
-.runtime-actions > button { flex: 0 0 auto; white-space: nowrap; min-height: 48px; padding: 10px 16px; font-size: 16px; }
+.runtime-actions > button { flex: 1 1 0; min-width: 0; white-space: nowrap; min-height: 48px; padding: 10px 8px; font-size: 16px; }
+@media (max-width: 380px) {
+  .runtime-primary { display: grid; grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; }
+  .runtime-primary .runtime-voice { grid-column: 1 / -1; grid-row: 2; }
+}
