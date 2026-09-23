@@ -253,7 +253,7 @@ function zoneAction(id: string): SyncedAction | undefined {
  * 边也不轮询，收到才画。唯一的定时器是"过几秒把它调暗"的那一次性的，不是循环。
  */
 type TriggerBrief = { id?: string; name?: string; action?: SyncedAction | null };
-type TriggerStateV1 = { type: "trigger_state_v1"; held?: TriggerBrief[]; fired?: TriggerBrief[]; at?: number };
+type TriggerStateV1 = { type: "trigger_state_v1"; held?: TriggerBrief[]; fired?: TriggerBrief[]; zones?: Record<string, unknown>; at?: number };
 type GameOutputStateV1 = { type: "game_output_state_v1"; enabled?: boolean; ok?: boolean; error?: string };
 /** 打中之后大字亮多久。太短了人还没把视线从游戏挪过来就灭了。 */
 const TRIGGER_HOLD_MS = 2500;
@@ -261,9 +261,11 @@ let triggerHeld: TriggerBrief[] = [];
 let triggerLast: TriggerBrief | null = null;
 let triggerLastAt = 0;
 let triggerFadeTimer: number | null = null;
+let runtimeZones: Record<string, unknown> = {};
 
 function applyTriggerState(message: TriggerStateV1): void {
   triggerHeld = Array.isArray(message.held) ? message.held : [];
+  if (message.zones && typeof message.zones === "object") runtimeZones = message.zones;
   const fired = Array.isArray(message.fired) ? message.fired : [];
   if (fired.length) {
     triggerLast = fired[fired.length - 1];
@@ -275,6 +277,7 @@ function applyTriggerState(message: TriggerStateV1): void {
 /** 断线时把"按着"清掉。不清的话最后按着的那个键会一直亮着，像是卡住了。 */
 function clearTriggerState(): void {
   triggerHeld = [];
+  runtimeZones = {};
   renderTriggerBoards();
 }
 
@@ -319,17 +322,25 @@ function renderTriggerBoards(): void {
     : null;
 }
 function renderZoneOverlay(): void {
-  const zones = syncedControlConfig?.zones || {};
+  const zones: Record<string, unknown> = { ...(syncedControlConfig?.zones || {}), ...runtimeZones };
   const heldIds = new Set(triggerHeld.map((item) => String(item.id || "")));
   const width = canvas.width, height = canvas.height;
   if (!width || !height) return;
   for (const [id, raw] of Object.entries(zones)) {
-    const zone = raw as { shape?: string; cx?: number; cy?: number; r?: number };
-    if (zone.shape !== "circle" || !Number.isFinite(zone.cx) || !Number.isFinite(zone.cy) || !Number.isFinite(zone.r)) continue;
-    const radius = Math.max(2, Number(zone.r) * Math.min(width, height));
-    context.beginPath();
-    context.arc(Number(zone.cx) * width, Number(zone.cy) * height, radius, 0, Math.PI * 2);
-    const active = heldIds.has(id);
+    const state = raw as { circle?: { cx?: number; cy?: number; r?: number }; rect?: { x1?: number; y1?: number; x2?: number; y2?: number }; shape?: string; cx?: number; cy?: number; r?: number };
+    const circle = state.circle || (state.shape === "circle" ? state : undefined);
+    const rect = state.rect;
+    if (circle && Number.isFinite(circle.cx) && Number.isFinite(circle.cy) && Number.isFinite(circle.r)) {
+      const radius = Math.max(2, Number(circle.r) * Math.min(width, height));
+      context.beginPath();
+      context.arc(Number(circle.cx) * width, Number(circle.cy) * height, radius, 0, Math.PI * 2);
+    } else if (rect && [rect.x1, rect.y1, rect.x2, rect.y2].every(Number.isFinite)) {
+      const x = (1 - Number(rect.x2)) * width, y = Number(rect.y1) * height;
+      const w = (Number(rect.x2) - Number(rect.x1)) * width, h = (Number(rect.y2) - Number(rect.y1)) * height;
+      if (w <= 0 || h <= 0) continue;
+      context.beginPath(); context.rect(x, y, w, h);
+    } else continue;
+    const active = heldIds.has(id) || heldIds.has(`zone.${id}`);
     context.lineWidth = active ? 4 : 2;
     context.strokeStyle = active ? "#6ef0a2" : "rgba(107,168,255,.82)";
     context.fillStyle = active ? "rgba(90,220,140,.20)" : "rgba(80,150,230,.07)";
@@ -851,7 +862,7 @@ function showStartError(error: unknown): void {
   setupCard.classList.remove("hidden");
   runtimeCard.classList.add("hidden");
 }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
+function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "等待电脑状态"; setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
 // 重连时重新挑一次，而不是死守断掉的那个地址：拔掉数据线就该自动落回 WiFi，
 // 换了网段也该自己找回来。
 async function reconnectToBestServer(): Promise<void> {
