@@ -343,10 +343,28 @@ function renderZoneOverlay(): void {
       context.beginPath(); context.rect(x, y, w, h);
     } else continue;
     const active = Boolean(state.pressed) || heldIds.has(id) || heldIds.has(`zone.${id}`);
-    context.lineWidth = active ? 4 : 2;
-    context.strokeStyle = active ? "#6ef0a2" : "rgba(107,168,255,.82)";
-    context.fillStyle = active ? "rgba(90,220,140,.20)" : "rgba(80,150,230,.07)";
+    // Keep the live zones readable over a real camera image.  The old blue
+    // hairline nearly disappeared on bright backgrounds.
+    context.lineWidth = active ? 5 : 4;
+    context.strokeStyle = active ? "#54f29a" : "#ffc857";
+    context.fillStyle = active ? "rgba(24,120,72,.28)" : "rgba(8,18,28,.30)";
     context.fill(); context.stroke();
+
+    // Put the mapped key on the zone itself so the phone view explains what
+    // the box does without requiring the desktop panel.
+    const mappedKey = shortKey(zoneAction(id));
+    const centerX = circle ? Number(circle.cx) * width : (Number(rect!.x1) + Number(rect!.x2)) * width / 2;
+    const centerY = circle ? Number(circle.cy) * height : (Number(rect!.y1) + Number(rect!.y2)) * height / 2;
+    context.save();
+    context.font = "700 24px sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    const labelWidth = Math.max(46, context.measureText(mappedKey).width + 22);
+    context.fillStyle = "rgba(3,8,13,.86)";
+    context.fillRect(centerX - labelWidth / 2, centerY - 19, labelWidth, 38);
+    context.fillStyle = active ? "#b8ffd2" : "#fff3c2";
+    context.fillText(mappedKey, centerX, centerY);
+    context.restore();
   }
 }
 let gameOutputEnabled: boolean | null = null;
