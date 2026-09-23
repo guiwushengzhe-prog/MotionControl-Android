@@ -247,3 +247,8 @@ button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input
   .runtime-primary { display: grid; grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; }
   .runtime-primary .runtime-voice { grid-column: 1 / -1; grid-row: 2; }
 }
+
+.runtime-camera-choice { grid-template-columns: 1fr auto; align-items: center; }
+.zone-toggle { min-height: 38px; padding: 8px 11px; border: 1px solid var(--mc-line); border-radius: 9px; background: #151f29; color: #d7e0e6; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.zone-toggle.selected { border-color: #4785ce; background: #244b78; color: #eaf4ff; }
+@media (max-width: 600px) { .runtime-camera-choice { grid-template-columns: 1fr; } }

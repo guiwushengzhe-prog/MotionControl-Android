@@ -84,8 +84,8 @@ app.innerHTML = `
     <section class="runtime-card hidden" id="runtimeCard">
       <div class="runtime-primary"><div><strong id="sendState">等待完整人体</strong></div><div class="runtime-voice" id="voiceControl"><label><input id="voiceToggle" type="checkbox"><span>语音控制</span></label><span id="voiceState">关闭</span></div><span class="runtime-link"><b id="panelConnection">未连接</b></span></div>
       <div class="technical runtime-tech"><span>摄像头 <b id="cameraFps">0 FPS</b></span><span>识别 <b id="localFps">0 FPS</b></span><span id="modelStatus">Full33</span><span id="delegateStatus">—</span><small id="modelError"></small></div>
-      <div class="runtime-camera-choice"><div class="camera-buttons" role="group" aria-label="选择镜头"><button id="frontCameraButton" type="button" aria-pressed="false">前置</button><button id="backCameraButton" type="button" aria-pressed="false">后置</button></div><small id="cameraSwitchState" class="camera-switch-state"></small></div>
-      <div class="runtime-actions"><button id="gameControlButton" class="game-control" type="button" disabled>等待电脑状态</button><button id="hideStatus" class="status-hide" type="button">沉浸显示</button><button id="stopButton" class="stop">停止</button></div>
+      <div class="runtime-camera-choice"><div class="camera-buttons" role="group" aria-label="选择镜头"><button id="frontCameraButton" type="button" aria-pressed="false">前置</button><button id="backCameraButton" type="button" aria-pressed="false">后置</button></div><button id="toggleZonesButton" class="zone-toggle" type="button" aria-pressed="true">区域框：开</button><small id="cameraSwitchState" class="camera-switch-state"></small></div>
+      <div class="runtime-actions"><button id="gameControlButton" class="game-control" type="button" disabled>连接电脑中</button><button id="hideStatus" class="status-hide" type="button">沉浸显示</button><button id="stopButton" class="stop">停止</button></div>
     </section>
     <div class="trigger-board camera-trigger-board hidden" id="cameraTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
     <button id="showStatus" class="status-show hidden" type="button">显示控制</button>
@@ -129,6 +129,7 @@ const voiceStateLabel = document.querySelector<HTMLElement>("#voiceState")!;
 const hideStatus = document.querySelector<HTMLButtonElement>("#hideStatus")!;
 const showStatus = document.querySelector<HTMLButtonElement>("#showStatus")!;
 const gameControlButton = document.querySelector<HTMLButtonElement>("#gameControlButton")!;
+const toggleZonesButton = document.querySelector<HTMLButtonElement>("#toggleZonesButton")!;
 const startButton = document.querySelector<HTMLButtonElement>("#startButton")!;
 const START_LABEL = startButton.textContent || "连接并开始";
 // 从按下去到画面出来最长要三四秒：缓存地址 800ms、输入框里那个过期地址 800ms、
@@ -262,6 +263,33 @@ let triggerLast: TriggerBrief | null = null;
 let triggerLastAt = 0;
 let triggerFadeTimer: number | null = null;
 let runtimeZones: Record<string, unknown> = {};
+type ZoneGeometry =
+  | { kind: "circle"; cx: number; cy: number; r: number }
+  | { kind: "rect"; x1: number; y1: number; x2: number; y2: number };
+const animatedZones: Record<string, ZoneGeometry> = {};
+let lastZoneAnimationAt = performance.now();
+
+function zoneGeometry(raw: unknown): ZoneGeometry | null {
+  if (!raw || typeof raw !== "object") return null;
+  const state = raw as { circle?: Record<string, unknown>; rect?: Record<string, unknown>; shape?: string; cx?: number; cy?: number; r?: number };
+  const circle = state.circle || (state.shape === "circle" ? state : undefined);
+  if (circle && [circle.cx, circle.cy, circle.r].every((value) => Number.isFinite(Number(value)))) {
+    return { kind: "circle", cx: Number(circle.cx), cy: Number(circle.cy), r: Number(circle.r) };
+  }
+  const rect = state.rect;
+  if (rect && [rect.x1, rect.y1, rect.x2, rect.y2].every((value) => Number.isFinite(Number(value)))) {
+    return { kind: "rect", x1: Number(rect.x1), y1: Number(rect.y1), x2: Number(rect.x2), y2: Number(rect.y2) };
+  }
+  return null;
+}
+
+function smoothZone(from: ZoneGeometry, to: ZoneGeometry, amount: number): ZoneGeometry {
+  if (from.kind !== to.kind) return to;
+  const mix = (a: number, b: number) => a + (b - a) * amount;
+  return from.kind === "circle"
+    ? { kind: "circle", cx: mix(from.cx, (to as typeof from).cx), cy: mix(from.cy, (to as typeof from).cy), r: mix(from.r, (to as typeof from).r) }
+    : { kind: "rect", x1: mix(from.x1, (to as typeof from).x1), y1: mix(from.y1, (to as typeof from).y1), x2: mix(from.x2, (to as typeof from).x2), y2: mix(from.y2, (to as typeof from).y2) };
+}
 
 function applyTriggerState(message: TriggerStateV1): void {
   triggerHeld = Array.isArray(message.held) ? message.held : [];
@@ -322,48 +350,65 @@ function renderTriggerBoards(): void {
     : null;
 }
 function renderZoneOverlay(): void {
+  if (!zoneOverlayEnabled) return;
   const zones: Record<string, unknown> = { ...(syncedControlConfig?.zones || {}), ...runtimeZones };
   const heldIds = new Set(triggerHeld.map((item) => String(item.id || "")));
   const width = canvas.width, height = canvas.height;
   if (!width || !height) return;
+  const now = performance.now();
+  const amount = Math.min(1, 1 - Math.exp(-(now - lastZoneAnimationAt) / 120));
+  lastZoneAnimationAt = now;
   for (const id of ["leftHand", "rightHand", "leftFoot", "rightFoot", "headJump", "lookGate"]) {
     const raw = zones[id];
-    if (!raw || typeof raw !== "object") continue;
-    const state = raw as { pressed?: boolean; circle?: { cx?: number; cy?: number; r?: number }; rect?: { x1?: number; y1?: number; x2?: number; y2?: number }; shape?: string; cx?: number; cy?: number; r?: number };
-    const circle = state.circle || (state.shape === "circle" ? state : undefined);
-    const rect = state.rect;
-    if (circle && Number.isFinite(circle.cx) && Number.isFinite(circle.cy) && Number.isFinite(circle.r)) {
-      const radius = Math.max(2, Number(circle.r) * Math.min(width, height));
-      context.beginPath();
-      context.arc(Number(circle.cx) * width, Number(circle.cy) * height, radius, 0, Math.PI * 2);
-    } else if (rect && [rect.x1, rect.y1, rect.x2, rect.y2].every(Number.isFinite)) {
-      const x = Number(rect.x1) * width, y = Number(rect.y1) * height;
-      const w = (Number(rect.x2) - Number(rect.x1)) * width, h = (Number(rect.y2) - Number(rect.y1)) * height;
+    const target = zoneGeometry(raw);
+    const current = animatedZones[id];
+    // Keep the last valid geometry when a low-rate update omits a zone.  This
+    // prevents a one-frame disappearance while the next snapshot arrives.
+    if (target) animatedZones[id] = current ? smoothZone(current, target, amount) : target;
+    const geometry = animatedZones[id];
+    if (!geometry) continue;
+    const state = (raw && typeof raw === "object" ? raw : {}) as { pressed?: boolean };
+    let bounds: { x: number; y: number; w: number; h: number };
+    context.beginPath();
+    if (geometry.kind === "circle") {
+      const radius = Math.max(2, geometry.r * Math.min(width, height));
+      const cx = geometry.cx * width, cy = geometry.cy * height;
+      context.arc(cx, cy, radius, 0, Math.PI * 2);
+      bounds = { x: cx - radius, y: cy - radius, w: radius * 2, h: radius * 2 };
+    } else {
+      const x = geometry.x1 * width, y = geometry.y1 * height;
+      const w = (geometry.x2 - geometry.x1) * width, h = (geometry.y2 - geometry.y1) * height;
       if (w <= 0 || h <= 0) continue;
-      context.beginPath(); context.rect(x, y, w, h);
-    } else continue;
+      context.rect(x, y, w, h);
+      bounds = { x, y, w, h };
+    }
     const active = Boolean(state.pressed) || heldIds.has(id) || heldIds.has(`zone.${id}`);
-    // Keep the live zones readable over a real camera image.  The old blue
-    // hairline nearly disappeared on bright backgrounds.
     context.lineWidth = active ? 5 : 4;
-    context.strokeStyle = active ? "#54f29a" : "#ffc857";
-    context.fillStyle = active ? "rgba(24,120,72,.28)" : "rgba(8,18,28,.30)";
+    context.strokeStyle = active ? "#54f29a" : "#ffb52e";
+    context.fillStyle = active ? "rgba(24,120,72,.25)" : "rgba(8,18,28,.18)";
     context.fill(); context.stroke();
 
-    // Put the mapped key on the zone itself so the phone view explains what
-    // the box does without requiring the desktop panel.
     const mappedKey = shortKey(zoneAction(id));
-    const centerX = circle ? Number(circle.cx) * width : (Number(rect!.x1) + Number(rect!.x2)) * width / 2;
-    const centerY = circle ? Number(circle.cy) * height : (Number(rect!.y1) + Number(rect!.y2)) * height / 2;
+    context.font = "800 38px sans-serif";
+    const labelWidth = Math.max(68, context.measureText(mappedKey).width + 32);
+    const labelX = Math.max(4, Math.min(width - labelWidth - 4, bounds.x + 10));
+    const labelY = Math.max(4, Math.min(height - 54, bounds.y + 10));
     context.save();
-    context.font = "700 24px sans-serif";
     context.textAlign = "center";
     context.textBaseline = "middle";
-    const labelWidth = Math.max(46, context.measureText(mappedKey).width + 22);
-    context.fillStyle = "rgba(3,8,13,.86)";
-    context.fillRect(centerX - labelWidth / 2, centerY - 19, labelWidth, 38);
-    context.fillStyle = active ? "#b8ffd2" : "#fff3c2";
-    context.fillText(mappedKey, centerX, centerY);
+    context.fillStyle = "rgba(3,8,13,.92)";
+    context.strokeStyle = active ? "#54f29a" : "#ffb52e";
+    context.lineWidth = 2;
+    context.beginPath();
+    if (typeof context.roundRect === "function") context.roundRect(labelX, labelY, labelWidth, 48, 10);
+    else context.rect(labelX, labelY, labelWidth, 48);
+    context.fill(); context.stroke();
+    context.fillStyle = "#ffffff";
+    // The front camera stage is mirrored as a whole.  Counter-mirror only the
+    // text so the key remains readable while the box stays aligned to the body.
+    context.translate(labelX + labelWidth / 2, labelY + 24);
+    context.scale(-1, 1);
+    context.fillText(mappedKey, 0, 0);
     context.restore();
   }
 }
@@ -457,6 +502,7 @@ let lastOverlayAt = 0;
 let drawingUtils: DrawingUtils | null = null;
 let networkDroppedFrames = 0;
 let overlayRenderingEnabled = true;
+let zoneOverlayEnabled = localStorage.getItem("motionbridge-zone-overlay") !== "0";
 let lastSendStateText = "";
 const padState = new Set<string>();
 const motionDebug: MotionDebug = window.__motionDebug = {
@@ -513,7 +559,16 @@ function makePairingSession(role: PairRole, send: (message: unknown) => void): P
   const session: PairingSession = new PairingSession(getDeviceId(), role, send, {
     onNeedCode: () => openPairingDialog(session),
     onStatus: (text, kind) => setPairingStatus(text, kind ?? "info"),
-    onReady: closePairingDialog,
+    onReady: () => {
+      closePairingDialog();
+      // An unpaired phone may still stream poses, but it cannot change the
+      // computer's game output.  Do not leave the player staring at an
+      // endless "waiting" label in that case.
+      if (gameOutputEnabled === null) {
+        gameControlButton.disabled = true;
+        gameControlButton.textContent = "需配对后控制";
+      }
+    },
   });
   return session;
 }
@@ -882,7 +937,7 @@ function showStartError(error: unknown): void {
   setupCard.classList.remove("hidden");
   runtimeCard.classList.add("hidden");
 }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "等待电脑状态"; setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
+function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "需重新连接"; setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
 // 重连时重新挑一次，而不是死守断掉的那个地址：拔掉数据线就该自动落回 WiFi，
 // 换了网段也该自己找回来。
 async function reconnectToBestServer(): Promise<void> {
@@ -1168,8 +1223,8 @@ function predict(now: number): void {
     // Drawing is presentation only.  Throttle it so canvas work cannot steal
     // the frame budget from control inference.  When the user hides the mobile
     // control overlay during gameplay, stop skeleton rendering entirely.
-    if (overlayRenderingEnabled && now - lastOverlayAt >= OVERLAY_INTERVAL_MS) {
-      draw(poseResult.landmarks);
+    if ((overlayRenderingEnabled || zoneOverlayEnabled) && now - lastOverlayAt >= OVERLAY_INTERVAL_MS) {
+      draw(poseResult.landmarks, overlayRenderingEnabled);
       lastOverlayAt = now;
     }
 
@@ -1223,7 +1278,7 @@ function predict(now: number): void {
   } finally { inferenceBusy = false; }
 }
 function poseStatusText(playerLocked: boolean): string { if (lastServerPoseCount > 0) return playerLocked ? "已识别" : "人体已识别·动作模型准备中"; return "相机正常·未发现完整人体"; }
-function draw(poses: NormalizedLandmark[][]): void { resizeCanvas(); context.clearRect(0, 0, canvas.width, canvas.height); drawingUtils ||= new DrawingUtils(context); const pose = poses[0]; if (pose) { drawingUtils.drawConnectors(pose, PoseLandmarker.POSE_CONNECTIONS, { color: "#c8ff38", lineWidth: 2 }); drawingUtils.drawLandmarks(pose, { color: "#fff", fillColor: "#0b1014", radius: 2 }); } renderZoneOverlay(); }
+function draw(poses: NormalizedLandmark[][], showSkeleton = true): void { resizeCanvas(); context.clearRect(0, 0, canvas.width, canvas.height); drawingUtils ||= new DrawingUtils(context); const pose = poses[0]; if (showSkeleton && pose) { drawingUtils.drawConnectors(pose, PoseLandmarker.POSE_CONNECTIONS, { color: "#c8ff38", lineWidth: 2 }); drawingUtils.drawLandmarks(pose, { color: "#fff", fillColor: "#0b1014", radius: 2 }); } renderZoneOverlay(); }
 function resizeCanvas(): void { const width = video.videoWidth || 960; const height = video.videoHeight || 540; if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; } }
 function recordCameraFrame(now: number): void { cameraFrameCount++; if (now - cameraFpsStarted >= 1000) { document.querySelector("#cameraFps")!.textContent = `${Math.round(cameraFrameCount * 1000 / (now - cameraFpsStarted))} FPS`; cameraFrameCount = 0; cameraFpsStarted = now; } }
 function cameraFrame(now: number): void { if (!cameraFrameLoop || !stream) return; recordCameraFrame(now); if (cameraFrameLoop && stream) video.requestVideoFrameCallback(cameraFrame); if (running) predict(now); }
@@ -1342,7 +1397,20 @@ document.querySelector("#handheldRole")!.addEventListener("click", () => { void 
 document.querySelector("#cameraHome")!.addEventListener("click", () => { void stop().then(() => showRole("home")); });
 document.querySelector("#startButton")!.addEventListener("click", () => void start()); document.querySelector("#stopButton")!.addEventListener("click", () => void stop());
 gameControlButton.addEventListener("click", () => { if (gameOutputEnabled !== null) requestGameOutput(!gameOutputEnabled); });
-hideStatus.addEventListener("click", () => { runtimeCard.classList.add("hidden"); showStatus.classList.remove("hidden"); overlayRenderingEnabled = false; context.clearRect(0, 0, canvas.width, canvas.height); });
+function updateZoneToggle(): void {
+  toggleZonesButton.setAttribute("aria-pressed", String(zoneOverlayEnabled));
+  toggleZonesButton.textContent = zoneOverlayEnabled ? "区域框：开" : "区域框：关";
+  toggleZonesButton.classList.toggle("selected", zoneOverlayEnabled);
+}
+updateZoneToggle();
+toggleZonesButton.addEventListener("click", () => {
+  zoneOverlayEnabled = !zoneOverlayEnabled;
+  localStorage.setItem("motionbridge-zone-overlay", zoneOverlayEnabled ? "1" : "0");
+  updateZoneToggle();
+  if (!zoneOverlayEnabled) context.clearRect(0, 0, canvas.width, canvas.height);
+  lastOverlayAt = 0;
+});
+hideStatus.addEventListener("click", () => { runtimeCard.classList.add("hidden"); showStatus.classList.remove("hidden"); overlayRenderingEnabled = false; });
 showStatus.addEventListener("click", () => { if (!running) return; runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); overlayRenderingEnabled = true; lastOverlayAt = 0; });
 modelSelect.value = modelChoice;
 modelSelect.addEventListener("change", () => { modelChoice = modelSelect.value === "lite" ? "lite" : "full"; localStorage.setItem("motionbridge-model", modelChoice); updateModelLabel(); });
