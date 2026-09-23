@@ -403,7 +403,6 @@ public class LocalNetworkPlugin extends Plugin {
             row.put("name", reply.optString("name"));
             row.put("version", reply.optString("version"));
             row.put("instance", instance);
-            row.put("pairingRequired", reply.optBoolean("pairing_required", false));
             JSONArray listed = reply.optJSONArray("candidates");
             JSArray candidates = new JSArray();
             if (listed != null) {

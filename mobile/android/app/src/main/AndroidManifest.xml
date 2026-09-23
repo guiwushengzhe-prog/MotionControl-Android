@@ -2,10 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- allowBackup is off: the server address and device id cost nothing to
-         re-enter, and the pairing secret must never reach a cloud backup.
-         usesCleartextTraffic stays on because the phone talks to the PC over
-         ws:// on the LAN; pairing authenticates that link, it does not
-         encrypt it. -->
+         re-enter.  usesCleartextTraffic stays on because the phone talks to
+         the PC over ws:// on the LAN. -->
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"

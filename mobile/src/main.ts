@@ -1,8 +1,6 @@
 import { DrawingUtils, FilesetResolver, HandLandmarker, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import { App } from "@capacitor/app";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
-import { PairingSession, isPairingMessage } from "./pairing-session";
-import type { PairRole } from "./pairing-crypto";
 import {
   candidatesOf, dedupeServers, forgetFailures, lastOctetHint, mergeCandidates,
   pickBest, rankCandidates, type Discovered, type ProbeResult, type ServerCandidate,
@@ -96,15 +94,6 @@ app.innerHTML = `
       <details class="handheld-more"><summary>更多</summary><div class="handheld-more-body"><label>玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span>传感器 <b id="sensorFps">0 FPS</b></span></div></details>
     </section>
   </main>
-  <div class="pairing hidden" id="pairingDialog">
-      <div class="pairing-box">
-        <h2>首次配对</h2>
-        <p class="pairing-help">在电脑的 MotionControl 里点“配对新设备”，把屏幕上的 8 位数字填在这里。配对码 2 分钟内有效。</p>
-        <input id="pairingCode" inputmode="numeric" maxlength="8" placeholder="8 位配对码" autocomplete="off">
-        <p class="pairing-status" id="pairingStatus"></p>
-        <div class="actions"><button id="pairingSubmit" class="start-primary">完成配对</button><button id="pairingCancel" class="text-button">稍后</button></div>
-      </div>
-    </div>
   <div class="guide hidden" id="guide"></div><div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头</b></div>`;
 
 const video = document.querySelector<HTMLVideoElement>("#camera")!;
@@ -292,11 +281,17 @@ function smoothZone(from: ZoneGeometry, to: ZoneGeometry, amount: number): ZoneG
 }
 
 function applyTriggerState(message: TriggerStateV1): void {
+  const released = triggerHeld;
   triggerHeld = Array.isArray(message.held) ? message.held : [];
   if (message.zones && typeof message.zones === "object") runtimeZones = message.zones;
   const fired = Array.isArray(message.fired) ? message.fired : [];
   if (fired.length) {
     triggerLast = fired[fired.length - 1];
+    triggerLastAt = performance.now();
+  } else if (released.length && !triggerHeld.length) {
+    // 松手这一刻重新计时。按住很久再松开时，按下那一刻早就过了停留时间，
+    // 不这样的话牌子一松手就没了，人来不及看。
+    triggerLast = released[released.length - 1];
     triggerLastAt = performance.now();
   }
   renderTriggerBoards();
@@ -322,14 +317,22 @@ function renderTriggerBoards(): void {
   // 摄像头那块浮在画面最上面，「沉浸显示」时也在——那正是打游戏时的样子。
   //
   // 它占的就是标题栏的位置，所以连上之后标题栏收起来：「已连接电脑」下面的运行卡片
-  // 里也写着，不缺它。一断线标题栏就回来，而触发牌消失——那一变本身就是在提醒人
-  // 出问题了。只在摄像头模式下动标题栏，手柄模式有自己的规矩（showRole 里）。
+  // 里也写着，不缺它。一断线标题栏就回来——那一变本身就是在提醒人出问题了。只在
+  // 摄像头模式下动标题栏，手柄模式有自己的规矩（showRole 里）。
+  //
+  // 牌子只在刚触发过时出现，停一会儿就淡出。一直挂着的话它压在头顶区那个框上，
+  // 没东西可看的时候就是一块挡画面的黑牌子。
   const cameraLive = activeRole === "camera" && socket?.readyState === WebSocket.OPEN;
   const cameraBoard = document.querySelector<HTMLElement>("#cameraTriggerBoard");
-  if (cameraBoard) cameraBoard.classList.toggle("hidden", !cameraLive);
+  if (cameraBoard) {
+    cameraBoard.classList.toggle("hidden", !cameraLive);
+    cameraBoard.classList.toggle("idle", !live);
+  }
   if (activeRole === "camera") document.querySelector<HTMLElement>("header")?.classList.toggle("hidden", cameraLive);
 
   for (const board of document.querySelectorAll<HTMLElement>(".trigger-board")) {
+    // 正在淡出的那块保持原样，别在淡出途中变回灰色的占位字。
+    if (board === cameraBoard && !live) continue;
     const key = board.querySelector<HTMLElement>(".trigger-board-key");
     const name = board.querySelector<HTMLElement>(".trigger-board-name");
     if (key) key.textContent = keyText;
@@ -355,6 +358,8 @@ function renderZoneOverlay(): void {
   const heldIds = new Set(triggerHeld.map((item) => String(item.id || "")));
   const width = canvas.width, height = canvas.height;
   if (!width || !height) return;
+  const px = overlayCssPx;
+  const mirrored = facingMode === "user";
   const now = performance.now();
   const amount = Math.min(1, 1 - Math.exp(-(now - lastZoneAnimationAt) / 120));
   lastZoneAnimationAt = now;
@@ -368,46 +373,58 @@ function renderZoneOverlay(): void {
     const geometry = animatedZones[id];
     if (!geometry) continue;
     const state = (raw && typeof raw === "object" ? raw : {}) as { pressed?: boolean };
-    let bounds: { x: number; y: number; w: number; h: number };
+    // 键位牌挂在框的上沿正中。挂在中间，前置镜头整块镜像时它也还在原位。
+    let labelCx: number, labelCy: number;
     context.beginPath();
     if (geometry.kind === "circle") {
       const radius = Math.max(2, geometry.r * Math.min(width, height));
       const cx = geometry.cx * width, cy = geometry.cy * height;
       context.arc(cx, cy, radius, 0, Math.PI * 2);
-      bounds = { x: cx - radius, y: cy - radius, w: radius * 2, h: radius * 2 };
+      labelCx = cx; labelCy = cy - radius;
     } else {
       const x = geometry.x1 * width, y = geometry.y1 * height;
       const w = (geometry.x2 - geometry.x1) * width, h = (geometry.y2 - geometry.y1) * height;
       if (w <= 0 || h <= 0) continue;
       context.rect(x, y, w, h);
-      bounds = { x, y, w, h };
+      labelCx = x + w / 2; labelCy = y;
     }
     const active = Boolean(state.pressed) || heldIds.has(id) || heldIds.has(`zone.${id}`);
-    context.lineWidth = active ? 5 : 4;
-    context.strokeStyle = active ? "#54f29a" : "#ffb52e";
-    context.fillStyle = active ? "rgba(24,120,72,.25)" : "rgba(8,18,28,.18)";
-    context.fill(); context.stroke();
+    const color = active ? "#54f29a" : "#ffb52e";
+    context.lineJoin = "round";
+    context.fillStyle = active ? "rgba(84,242,154,.28)" : "rgba(255,181,46,.10)";
+    context.fill();
+    // 先描一圈深色的底，再描彩色的线。墙是白的、衣服是黑的，只有一种颜色的线总有
+    // 一种背景上看不清；垫了这圈底，什么背景上都是一条清楚的边。
+    context.strokeStyle = "rgba(0,0,0,.6)";
+    context.lineWidth = (active ? 10 : 8) * px;
+    context.stroke();
+    context.strokeStyle = color;
+    context.lineWidth = (active ? 6 : 4) * px;
+    context.stroke();
 
+    // 键位牌用框的颜色实心填、深色字：几米外看得清，也一眼知道是哪个框的。
     const mappedKey = shortKey(zoneAction(id));
-    context.font = "800 38px sans-serif";
-    const labelWidth = Math.max(68, context.measureText(mappedKey).width + 32);
-    const labelX = Math.max(4, Math.min(width - labelWidth - 4, bounds.x + 10));
-    const labelY = Math.max(4, Math.min(height - 54, bounds.y + 10));
+    const pillHeight = 44 * px, margin = 6 * px;
+    context.font = `800 ${28 * px}px sans-serif`;
+    const pillWidth = Math.max(pillHeight * 1.6, context.measureText(mappedKey).width + 30 * px);
+    const pillX = Math.max(margin, Math.min(width - pillWidth - margin, labelCx - pillWidth / 2));
+    const pillY = Math.max(margin, Math.min(height - pillHeight - margin, labelCy - pillHeight / 2));
+    context.beginPath();
+    if (typeof context.roundRect === "function") context.roundRect(pillX, pillY, pillWidth, pillHeight, pillHeight / 2);
+    else context.rect(pillX, pillY, pillWidth, pillHeight);
+    context.fillStyle = color;
+    context.fill();
+    context.strokeStyle = "rgba(0,0,0,.6)";
+    context.lineWidth = 3 * px;
+    context.stroke();
     context.save();
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillStyle = "rgba(3,8,13,.92)";
-    context.strokeStyle = active ? "#54f29a" : "#ffb52e";
-    context.lineWidth = 2;
-    context.beginPath();
-    if (typeof context.roundRect === "function") context.roundRect(labelX, labelY, labelWidth, 48, 10);
-    else context.rect(labelX, labelY, labelWidth, 48);
-    context.fill(); context.stroke();
-    context.fillStyle = "#ffffff";
-    // The front camera stage is mirrored as a whole.  Counter-mirror only the
-    // text so the key remains readable while the box stays aligned to the body.
-    context.translate(labelX + labelWidth / 2, labelY + 24);
-    context.scale(-1, 1);
+    context.fillStyle = "#0b1014";
+    context.translate(pillX + pillWidth / 2, pillY + pillHeight / 2);
+    // 前置镜头时整块画面是镜像的，字要翻回来才读得出。后置不镜像，原来这里也照翻，
+    // 换到后置字就成了反的。
+    if (mirrored) context.scale(-1, 1);
     context.fillText(mappedKey, 0, 0);
     context.restore();
   }
@@ -486,6 +503,12 @@ const CAMERA_TARGET_FPS = 30;
 const MAX_INFERENCE_FPS = 32;
 const MIN_INFERENCE_INTERVAL_MS = 1000 / MAX_INFERENCE_FPS;
 const OVERLAY_INTERVAL_MS = 100; // 10 FPS visual skeleton; control data stays high-rate.
+// 叠加层按屏幕上的真实像素开画布，不按摄像头分辨率：摄像头只有 480 宽，拉满一块
+// 1080 宽的屏幕要放大两倍多，框线和字全是糊的。上限 2 倍，再高肉眼分不出，只是
+// 白多画像素。
+const OVERLAY_MAX_PIXEL_RATIO = 2;
+/** 画布上几个像素等于屏幕上 1 个 CSS 像素。框线、字号都按它乘，换手机粗细不变。 */
+let overlayCssPx = 1;
 const MAX_SOCKET_BUFFERED_BYTES = 8 * 1024;
 // mc33-v3 sends the whole skeleton. The earlier compact sets skipped indices
 // 17-22 -- pinky, index and thumb on both hands -- to save bandwidth. Those six
@@ -520,58 +543,6 @@ const motionDebug: MotionDebug = window.__motionDebug = {
   lastPoseCount: 0,
   lastInferenceMs: 0,
 };
-
-// --- device pairing -------------------------------------------------------
-// One session per socket: the PC binds an identity to the connection, not to
-// the device, so the camera and handheld sockets authenticate independently.
-const pairingDialog = document.querySelector<HTMLDivElement>("#pairingDialog")!;
-const pairingCodeInput = document.querySelector<HTMLInputElement>("#pairingCode")!;
-const pairingStatus = document.querySelector<HTMLParagraphElement>("#pairingStatus")!;
-let activePairingSession: PairingSession | null = null;
-let cameraPairing: PairingSession | null = null;
-let handheldPairing: PairingSession | null = null;
-
-function setPairingStatus(text: string, kind: "info" | "error" = "info"): void {
-  pairingStatus.textContent = text;
-  pairingStatus.className = kind === "error" ? "pairing-status error" : "pairing-status";
-}
-
-function openPairingDialog(session: PairingSession): void {
-  activePairingSession = session;
-  pairingCodeInput.value = "";
-  setPairingStatus("");
-  pairingDialog.classList.remove("hidden");
-  pairingCodeInput.focus();
-}
-
-function closePairingDialog(): void {
-  pairingDialog.classList.add("hidden");
-}
-
-document.querySelector("#pairingSubmit")!.addEventListener("click", () => {
-  void activePairingSession?.submitCode(pairingCodeInput.value);
-});
-document.querySelector("#pairingCancel")!.addEventListener("click", closePairingDialog);
-
-function makePairingSession(role: PairRole, send: (message: unknown) => void): PairingSession {
-  // Declared first so the callbacks can close over the same object the caller
-  // gets back; they only ever run after construction has finished.
-  const session: PairingSession = new PairingSession(getDeviceId(), role, send, {
-    onNeedCode: () => openPairingDialog(session),
-    onStatus: (text, kind) => setPairingStatus(text, kind ?? "info"),
-    onReady: () => {
-      closePairingDialog();
-      // An unpaired phone may still stream poses, but it cannot change the
-      // computer's game output.  Do not leave the player staring at an
-      // endless "waiting" label in that case.
-      if (gameOutputEnabled === null) {
-        gameControlButton.disabled = true;
-        gameControlButton.textContent = "需配对后控制";
-      }
-    },
-  });
-  return session;
-}
 
 function getDeviceId(): string { let value = localStorage.getItem("motionbridge-device-id"); if (!value) { value = `camera-${crypto.randomUUID()}`; localStorage.setItem("motionbridge-device-id", value); } return value; }
 const deviceId = getDeviceId();
@@ -937,7 +908,7 @@ function showStartError(error: unknown): void {
   setupCard.classList.remove("hidden");
   runtimeCard.classList.add("hidden");
 }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); cameraPairing = makePairingSession("camera", (message) => socket?.send(JSON.stringify(message))); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "需重新连接"; setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (isPairingMessage(message.type)) { void cameraPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
+function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "需重新连接"; setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
 // 重连时重新挑一次，而不是死守断掉的那个地址：拔掉数据线就该自动落回 WiFi，
 // 换了网段也该自己找回来。
 async function reconnectToBestServer(): Promise<void> {
@@ -954,7 +925,7 @@ async function reconnectToBestServer(): Promise<void> {
   if (url) connectSocket(url);
 }
 
-// 语音模型从配对的那台电脑取，走的是同一个设备口，只是把 ws:// 换成 http://。
+// 语音模型从连着的那台电脑取，走的是同一个设备口，只是把 ws:// 换成 http://。
 function deviceHttpBase(): string {
   try {
     const parsed = new URL(serverInput.value);
@@ -1278,8 +1249,16 @@ function predict(now: number): void {
   } finally { inferenceBusy = false; }
 }
 function poseStatusText(playerLocked: boolean): string { if (lastServerPoseCount > 0) return playerLocked ? "已识别" : "人体已识别·动作模型准备中"; return "相机正常·未发现完整人体"; }
-function draw(poses: NormalizedLandmark[][], showSkeleton = true): void { resizeCanvas(); context.clearRect(0, 0, canvas.width, canvas.height); drawingUtils ||= new DrawingUtils(context); const pose = poses[0]; if (showSkeleton && pose) { drawingUtils.drawConnectors(pose, PoseLandmarker.POSE_CONNECTIONS, { color: "#c8ff38", lineWidth: 2 }); drawingUtils.drawLandmarks(pose, { color: "#fff", fillColor: "#0b1014", radius: 2 }); } renderZoneOverlay(); }
-function resizeCanvas(): void { const width = video.videoWidth || 960; const height = video.videoHeight || 540; if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; } }
+function draw(poses: NormalizedLandmark[][], showSkeleton = true): void { resizeCanvas(); context.clearRect(0, 0, canvas.width, canvas.height); drawingUtils ||= new DrawingUtils(context); const pose = poses[0]; if (showSkeleton && pose) { drawingUtils.drawConnectors(pose, PoseLandmarker.POSE_CONNECTIONS, { color: "#c8ff38", lineWidth: 2 * overlayCssPx }); drawingUtils.drawLandmarks(pose, { color: "#fff", fillColor: "#0b1014", radius: 2 * overlayCssPx }); } renderZoneOverlay(); }
+function resizeCanvas(): void {
+  const videoWidth = video.videoWidth || 960, videoHeight = video.videoHeight || 540;
+  // 画面是 object-fit: contain 铺进整块屏幕的，这是它实际占的 CSS 像素比例。
+  // 画布保持和摄像头同一比例，归一化坐标照旧能直接乘。
+  const shown = Math.min(window.innerWidth / videoWidth, window.innerHeight / videoHeight) || 1;
+  overlayCssPx = Math.min(window.devicePixelRatio || 1, OVERLAY_MAX_PIXEL_RATIO);
+  const width = Math.round(videoWidth * shown * overlayCssPx), height = Math.round(videoHeight * shown * overlayCssPx);
+  if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+}
 function recordCameraFrame(now: number): void { cameraFrameCount++; if (now - cameraFpsStarted >= 1000) { document.querySelector("#cameraFps")!.textContent = `${Math.round(cameraFrameCount * 1000 / (now - cameraFpsStarted))} FPS`; cameraFrameCount = 0; cameraFpsStarted = now; } }
 function cameraFrame(now: number): void { if (!cameraFrameLoop || !stream) return; recordCameraFrame(now); if (cameraFrameLoop && stream) video.requestVideoFrameCallback(cameraFrame); if (running) predict(now); }
 function startCameraFrameCounter(): void { cameraFrameLoop = typeof video.requestVideoFrameCallback === "function"; cameraFrameCount = 0; cameraFpsStarted = performance.now(); if (cameraFrameLoop) video.requestVideoFrameCallback(cameraFrame); }
@@ -1322,7 +1301,7 @@ async function startHandheld(): Promise<void> { showRole("handheld");
     if (!picked.found) throw new Error("没找到电脑");
     const address = picked.url; serverInput.value = address; handheldServerInput.value = address;
     localStorage.setItem("motionbridge-server", address); handheldRunning = true;
-    handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldPairing = makePairingSession("sensor", (message) => handheldSocket?.send(JSON.stringify(message))); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (isPairingMessage(message.type)) { void handheldPairing?.handle(message); return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { markControlConfigCached(); clearTriggerState(); clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开";
+    handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { markControlConfigCached(); clearTriggerState(); clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开";
       // 摄像头模式早就这么做了，手柄模式一直没有：断了就是断了，要人再来一次。
       if (handheldRunning) window.setTimeout(() => { if (handheldRunning) void startHandheld(); }, 1500); }); handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器不可用";
     // 地址框平时收着——自动找得到的话它一辈子用不上。只有真找不到时才露出来，

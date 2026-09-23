@@ -41,7 +41,7 @@ import java.util.Locale;
 public class NativeAudioPlugin extends Plugin {
     private static final int SAMPLE_RATE = 16_000;
     private static final String MODEL_DIR_NAME = "vosk-model-small-cn-0.22";
-    // 这个模型以前是打进 APK 的：41.5 MB，整个安装包的一半，而那些文件跟配对的
+    // 这个模型以前是打进 APK 的：41.5 MB，整个安装包的一半，而那些文件跟连着的
     // 电脑上的逐字节一样。手机本来就必须有一台电脑才能用（识别出来的文字要发过
     // 去），所以第一次开语音时从电脑取，谁的流量都不用花，走的还是局域网。
     private static final String MANIFEST_ROUTE = "/api/model/voice-cn";

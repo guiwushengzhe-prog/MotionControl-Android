@@ -17,7 +17,8 @@ html.native-preview body #camera { visibility: hidden; background: transparent; 
 #inferenceCanvas { display: none; }
 #camera { background: radial-gradient(circle at center, #17242b, #080b0f 70%); }
 #overlay { z-index: 2; background: transparent; }
-.shade { z-index: 3; pointer-events: none; background: linear-gradient(180deg, rgba(0,0,0,.64), transparent 30%, transparent 65%, rgba(0,0,0,.72)); }
+/* 暗角压在画面上、框的下面。原来压在框上面，画面最上面那段（头顶区）的框被压暗了六成。 */
+.shade { z-index: 1; pointer-events: none; background: linear-gradient(180deg, rgba(0,0,0,.64), transparent 30%, transparent 65%, rgba(0,0,0,.72)); }
 header { position: fixed; z-index: 4; left: max(20px, env(safe-area-inset-left)); right: max(20px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); display: flex; justify-content: space-between; align-items: flex-start; }
 header p { color: #c8ff38; letter-spacing: .16em; font-size: 9px; font-weight: 900; margin: 0 0 3px; }
 h1 { margin: 0; font-size: clamp(20px, 4vw, 32px); letter-spacing: -.04em; }
@@ -81,17 +82,6 @@ button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; backg
 .loading b { font-size: 12px; }
 .technical { display: none !important; }
 .hidden { display: none !important; }
-/* First-run pairing.  Same overlay treatment as .loading, one z-index above it
-   so it is never hidden behind the camera-opening spinner. */
-.pairing { position: fixed; z-index: 8; inset: 0; background: rgba(5,8,11,.92); display: grid; place-content: center; }
-.pairing-box { width: min(420px, calc(100vw - 40px)); padding: 24px; border: 1px solid #35404a; border-radius: 14px; background: #0b1016; display: grid; gap: 14px; }
-.pairing-box h2 { margin: 0; font-size: 17px; }
-.pairing-help { margin: 0; font-size: 12px; line-height: 1.6; color: #8fa0ad; }
-.pairing-box input { width: 100%; padding: 12px; border: 1px solid #35404a; border-radius: 10px; background: #050809; color: #e8f0f5; font-size: 22px; letter-spacing: .3em; text-align: center; }
-.pairing-status { margin: 0; min-height: 17px; font-size: 12px; color: #8fa0ad; }
-.pairing-status.error { color: #ff6b6b; }
-.pairing-box .actions { display: flex; gap: 10px; align-items: center; }
-.pairing-box .actions .start-primary { flex: 1; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .role-card { width: min(520px, calc(100vw - 32px)); }
 .role-card h2 { text-align: center; margin-bottom: 18px; }
@@ -166,6 +156,8 @@ button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input
 .trigger-board.on .trigger-board-name { color: #d9f5e4; }
 /* 摄像头那块浮在画面最上面，「沉浸显示」时也在。不挡触摸：它只是给人看的。 */
 .camera-trigger-board { position: fixed; z-index: 5; top: max(12px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); min-width: min(260px, 70vw); max-width: calc(100vw - 24px); pointer-events: none; }
+/* 触发时立刻出现，停一会儿后淡出。过渡只写在 .idle 上，所以出现不带延迟。 */
+.camera-trigger-board.idle { opacity: 0; transition: opacity .4s; }
 
 /* 靶子：那排区域框。键位字原来只有 9px，几米外什么都看不见。按着的那个变绿。 */
 .profile-sync-bindings { grid-template-columns: repeat(5, minmax(0, 1fr)); }

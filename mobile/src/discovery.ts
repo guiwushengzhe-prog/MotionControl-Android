@@ -21,7 +21,6 @@ export type Discovered = {
   name?: string;
   version?: string;
   instance?: string;
-  pairingRequired?: boolean;
   candidates?: ServerCandidate[];
 };
 
