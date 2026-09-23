@@ -241,6 +241,8 @@ button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input
 .runtime-primary .runtime-voice > span { min-width: 0; }
 .runtime-actions { flex-wrap: nowrap; }
 .runtime-actions > button { flex: 1 1 0; min-width: 0; white-space: nowrap; min-height: 48px; padding: 10px 8px; font-size: 16px; }
+.runtime-actions > .game-control { flex-grow: 1.5; }
+.runtime-camera-choice { grid-template-columns: 1fr; }
 @media (max-width: 380px) {
   .runtime-primary { display: grid; grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; }
   .runtime-primary .runtime-voice { grid-column: 1 / -1; grid-row: 2; }
