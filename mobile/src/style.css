@@ -142,6 +142,7 @@ label{color:#9ca9b5;font-size:11px}.setup-card input,.setup-card select,.handhel
 .handheld-card{gap:8px}.handheld-top,.handheld-profile-sync{border-color:var(--mc-line);background:rgba(12,18,24,.94)}.shoulders button,.face-buttons button,.middle-buttons button{border-color:#34414e;background:#131c25}.handheld-card button.pressed{background:#3f84e8;color:white}.stick{border-color:#40505f;background:radial-gradient(circle,#24313d 0 26%,#111820 27% 100%)}.stick i{background:#6ba8ff}
 button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #78b2ff;outline-offset:2px}
 @media(max-width:600px){.app-header{padding-left:12px;padding-right:12px}.mobile-brand small{display:none}.setup-card{padding:16px}.role-grid{grid-template-columns:1fr}.role-option{min-height:86px!important}.runtime-card{bottom:max(7px,env(safe-area-inset-bottom));padding:9px}.profile-sync-bindings{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime-camera-choice{grid-template-columns:1fr}.runtime-actions{gap:6px}.runtime-actions .runtime-voice{width:auto;flex:1}.status-hide,.runtime-actions .stop{padding:8px 10px}}
+.runtime-actions .game-control{border-color:#3b6fa5;background:#14283b;color:#b9dcff}.runtime-actions .game-control.enabled{border-color:#55c985;background:#173d2d;color:#d5ffe5}
 
 /* 连接出问题时才出现的那一块。正常情况下它根本不渲染,所以只有一种颜色。 */
 .link-state {
