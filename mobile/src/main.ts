@@ -27,6 +27,9 @@ type ControlConfigV1 = {
   // Every phrase the desktop can act on.  The recognizer here is built from
   // this list, so the two sides cannot drift apart.
   voice_phrases?: string[];
+  // 同一份口令按模型词表拆好的样子，空格隔开。有它就照它建 grammar，和电脑听到的
+  // 一样；「城堡」这种只能按整词认的口令，逐字拆会被模型丢掉一个字。
+  voice_grammar?: string[];
   // Whether to run the hand model, and on which hand.  The desktop asks only
   // while it is actually steering with a hand -- see the hand joint section.
   hand_tracking?: { enabled?: boolean; hand?: string };
@@ -52,7 +55,7 @@ type MotionDebug = {
 declare global { interface Window { __motionDebug: MotionDebug; } }
 type LocalVoiceText = { text: string; confidence?: number; final: boolean; recognizer: string; recognizedAtMs: number };
 type NativeAudioApi = {
-  start(options?: { phrases?: string[]; baseUrl?: string }): Promise<{ sampleRate: number; channels: number; format: string; source: string; recognizerReady: boolean; audioReady: boolean }>;
+  start(options?: { phrases?: string[]; grammar?: string[]; baseUrl?: string }): Promise<{ sampleRate: number; channels: number; format: string; source: string; recognizerReady: boolean; audioReady: boolean }>;
   stop(): Promise<void>;
   addListener(eventName: "voiceText", listener: (event: LocalVoiceText) => void): Promise<PluginListenerHandle>;
   addListener(eventName: "voiceState", listener: (event: { state: string; message: string }) => void): Promise<PluginListenerHandle>;
@@ -466,6 +469,10 @@ function voicePhrases(): string[] {
   const list = syncedControlConfig?.voice_phrases;
   return Array.isArray(list) ? list.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
 }
+function voiceGrammar(): string[] {
+  const list = syncedControlConfig?.voice_grammar;
+  return Array.isArray(list) ? list.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+}
 function applyControlConfig(message: unknown): void {
   if (!message || typeof message !== "object" || (message as { type?: string }).type !== "control_config_v1") return;
   syncedControlConfig = message as ControlConfigV1;
@@ -480,7 +487,7 @@ function applyControlConfig(message: unknown): void {
   // The grammar is fixed when the recognizer is built, so a phrase edited on
   // the desktop only becomes audible after a rebuild.  Restart just for a real
   // change: config arrives on every edit and on every reconnect.
-  const phrases = voicePhrases().join(" ");
+  const phrases = [...voicePhrases(), ...voiceGrammar()].join(" ");
   if (voiceEnabled && phrases && phrases !== activeVoicePhrases) {
     void (async () => { await stopVoiceControl(false); await startVoiceControl(); })();
   }
@@ -1266,11 +1273,11 @@ function applyMirror(): void { document.querySelector<HTMLElement>("#cameraStage
 
 // 复选框保存用户偏好；后台停止或启动报错只更新状态，不能把偏好改成关闭。
 async function stopVoiceControl(showOff = true): Promise<void> { voiceEnabled = false; activeVoicePhrases = ""; await nativeVoiceTextListener?.remove().catch(() => {}); await nativeVoiceStateListener?.remove().catch(() => {}); await nativeAudioErrorListener?.remove().catch(() => {}); nativeVoiceTextListener = null; nativeVoiceStateListener = null; nativeAudioErrorListener = null; await NativeAudio.stop().catch(() => {}); if (showOff) setVoiceStatus("off"); }
-async function startVoiceControl(): Promise<void> { if (activeRole !== "camera") { setVoiceStatus("error", "仅摄像头可用"); return; } if (voiceEnabled) return; if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "请先连接电脑"); return; } setVoiceStatus("connecting", "准备语音模型"); try { const phrases = voicePhrases(); activeVoicePhrases = phrases.join(" ");
+async function startVoiceControl(): Promise<void> { if (activeRole !== "camera") { setVoiceStatus("error", "仅摄像头可用"); return; } if (voiceEnabled) return; if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "请先连接电脑"); return; } setVoiceStatus("connecting", "准备语音模型"); try { const phrases = voicePhrases(); const grammar = voiceGrammar(); activeVoicePhrases = [...phrases, ...grammar].join(" ");
     // 状态监听必须在 start 之前挂上。第一次开语音要从电脑下载 65 MB，进度是在
     // start 还没返回的那段时间里发出来的——挂晚了一条都收不到，界面看着像卡死。
     nativeVoiceStateListener = await NativeAudio.addListener("voiceState", (event) => { if (!voiceEnabled && event.state !== "connecting") return; const detail = event.message || (event.state === "command" ? "已识别命令" : event.state === "listening" ? "语音识别已就绪" : "等待语音"); setVoiceStatus(event.state === "connecting" ? "connecting" : "listening", detail); });
-    const ready = await NativeAudio.start({ phrases: phrases.length ? phrases : undefined, baseUrl: deviceHttpBase() }); if (!ready.recognizerReady) throw new Error("语音模型错误"); voiceEnabled = true; nativeVoiceTextListener = await NativeAudio.addListener("voiceText", (event) => { const text = (event.text || "").trim(); if (!voiceEnabled || !event.final || !text) return; setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "电脑已断开"); return; } const frame: Record<string, unknown> = { type: "voice_text", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, text, confidence: event.confidence, final: true, source: "android_vosk_speech_service_v100" }; socket.send(JSON.stringify(frame)); }); nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => { setVoiceStatus("error", event.message || "手机语音错误"); void stopVoiceControl(false); }); setVoiceStatus("listening", "Vosk 受限语法已就绪"); } catch (error) { const message = error instanceof Error ? error.message : String(error); const denied = /未授权|permission|denied/i.test(message); await stopVoiceControl(false); // 插件报上来的话本来就是给人看的（"先连上电脑"、"电脑上没有中文语音模型"），
+    const ready = await NativeAudio.start({ phrases: phrases.length ? phrases : undefined, grammar: grammar.length ? grammar : undefined, baseUrl: deviceHttpBase() }); if (!ready.recognizerReady) throw new Error("语音模型错误"); voiceEnabled = true; nativeVoiceTextListener = await NativeAudio.addListener("voiceText", (event) => { const text = (event.text || "").trim(); if (!voiceEnabled || !event.final || !text) return; setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "电脑已断开"); return; } const frame: Record<string, unknown> = { type: "voice_text", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, text, confidence: event.confidence, final: true, source: "android_vosk_speech_service_v100" }; socket.send(JSON.stringify(frame)); }); nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => { setVoiceStatus("error", event.message || "手机语音错误"); void stopVoiceControl(false); }); setVoiceStatus("listening", "Vosk 受限语法已就绪"); } catch (error) { const message = error instanceof Error ? error.message : String(error); const denied = /未授权|permission|denied/i.test(message); await stopVoiceControl(false); // 插件报上来的话本来就是给人看的（"先连上电脑"、"电脑上没有中文语音模型"），
     // 压成一句"模型错误"等于把唯一有用的线索丢掉。
     setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : message || "错误"); } }
 

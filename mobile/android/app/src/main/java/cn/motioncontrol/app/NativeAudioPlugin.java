@@ -127,7 +127,9 @@ public class NativeAudioPlugin extends Plugin {
             }
             try {
                 model = new Model(modelDirectory.getAbsolutePath());
-                recognizer = new Recognizer(model, SAMPLE_RATE, grammarFrom(call.getArray("phrases", null)));
+                String grammar = grammarFromTokens(call.getArray("grammar", null));
+                recognizer = new Recognizer(model, SAMPLE_RATE,
+                        grammar != null ? grammar : grammarFrom(call.getArray("phrases", null)));
                 speechService = new SpeechService(recognizer, SAMPLE_RATE);
                 running = true;
                 if (!speechService.startListening(new VoiceListener())) {
@@ -154,8 +156,9 @@ public class NativeAudioPlugin extends Plugin {
      * The desktop owns the list, so a phrase added there is heard here without
      * a new build; COMMAND_GRAMMAR stays as the fallback for the first run and
      * for a phone that connects before any config arrives.  Tokens are single
-     * characters joined by spaces, matching what the small Chinese model wants
-     * and what the desktop recognizer does with the very same list.
+     * characters joined by spaces, which is what the small Chinese model wants
+     * for most phrases.  A desktop that sends the ready-split grammar is used
+     * through grammarFromTokens instead; this stays for older desktops.
      */
     private static String grammarFrom(JSArray phrases) {
         if (phrases == null) {
@@ -182,6 +185,35 @@ public class NativeAudioPlugin extends Plugin {
         }
         if (entries.isEmpty()) {
             return COMMAND_GRAMMAR;
+        }
+        entries.add(JSONObject.quote("[unk]"));
+        return "[" + android.text.TextUtils.join(",", entries) + "]";
+    }
+
+    /**
+     * 电脑已经按模型词表拆好的 grammar，照原样用，不再逐字拆。
+     *
+     * 小模型的词表里单字不全：「堡」只在「城堡」里。逐字拆成「城 堡」，那个字会被
+     * Vosk 悄悄丢掉，这句口令电脑听得到、手机永远听不到。电脑手上有同一个模型，
+     * 拆好了发过来，两边就是同一份。没有这份（电脑是旧版）时返回 null，退回 grammarFrom。
+     */
+    private static String grammarFromTokens(JSArray grammar) {
+        if (grammar == null) {
+            return null;
+        }
+        List<String> entries = new ArrayList<>();
+        try {
+            for (Object item : grammar.toList()) {
+                String entry = String.valueOf(item).trim().replaceAll("\\s+", " ");
+                if (!entry.isEmpty()) {
+                    entries.add(JSONObject.quote(entry));
+                }
+            }
+        } catch (org.json.JSONException error) {
+            return null;
+        }
+        if (entries.isEmpty()) {
+            return null;
         }
         entries.add(JSONObject.quote("[unk]"));
         return "[" + android.text.TextUtils.join(",", entries) + "]";
