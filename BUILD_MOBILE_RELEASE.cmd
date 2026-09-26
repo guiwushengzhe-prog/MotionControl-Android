@@ -80,7 +80,7 @@ if not exist "%BT%\apksigner.bat" (
 echo.
 echo [5/5] Copying APK to output...
 if not exist output mkdir output
-copy /Y "%APK%" "output\MotionControl-Android-2.0.0.apk" >nul
+copy /Y "%APK%" "output\MotionControl-Android-2.2.1.apk" >nul
 if errorlevel 1 (
   echo [FAILED] Could not copy APK.
   pause
@@ -89,7 +89,7 @@ if errorlevel 1 (
 
 echo.
 echo [OK] Signed release APK:
-echo %CD%\output\MotionControl-Android-2.0.0.apk
+echo %CD%\output\MotionControl-Android-2.2.1.apk
 echo.
 echo Keep the keystore backed up offline. Without it no future build can
 echo update an installed copy of this app.
