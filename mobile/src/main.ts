@@ -206,6 +206,11 @@ let controllerSuspendTask: Promise<void> | null = null;
 let bluetoothSystemDialog = false;
 let bluetoothState: BluetoothState | null = null;
 let bluetoothListener: PluginListenerHandle | null = null;
+let bluetoothReconnectTimer: number | null = null;
+let bluetoothReconnectAttempt = 0;
+let bluetoothConnectGeneration = -1;
+let bluetoothSelectionPending = false;
+let controllerAppActive = true;
 let tiltBaseline: number[] | null = null;
 let shooterState: ShooterControlState = { stick: { x: 0, y: 0 }, stickPressed: false, mouseButtons: 0 };
 const gyroMouse = new GyroMouse();
@@ -1431,18 +1436,76 @@ function renderControllerMode(): void {
 }
 function applyBluetoothState(state: BluetoothState): void {
   if (activeRole !== "handheld" || transportInput.value !== "bluetooth") return;
+  if (bluetoothState && state.sessionId < bluetoothState.sessionId) return;
   const changed = bluetoothState?.sessionId !== state.sessionId || bluetoothState?.connected !== state.connected;
   bluetoothState = state;
   if (changed) { clearTouches(); gyroMouse.reset(); tiltBaseline = null; }
   document.querySelector("#bluetoothStatus")!.textContent = state.message;
   controllerBadge(state.connected, state.connected ? `蓝牙已连接 ${state.deviceName || "电脑"}` : "等待蓝牙连接");
   const select = document.querySelector<HTMLSelectElement>("#bluetoothDevice")!;
-  const previous = select.value || localStorage.getItem("motionbridge-bluetooth-host") || "";
-  select.replaceChildren(...state.devices.map((device) => new Option(device.name || device.address, device.address)));
+  const saved = localStorage.getItem("motionbridge-bluetooth-host") || "";
+  const previous = bluetoothSelectionPending ? select.value : select.value || saved;
+  select.replaceChildren(new Option("请选择接收电脑", ""), ...state.devices.map((device) => new Option(device.name || device.address, device.address)));
   if (state.devices.some((device) => device.address === previous)) select.value = previous;
-  document.querySelector<HTMLButtonElement>("#bluetoothConnect")!.disabled = !state.registered || state.connected || state.connecting || !select.value;
+  document.querySelector<HTMLButtonElement>("#bluetoothConnect")!.disabled = !state.enabled || !state.registered
+    || state.connected || state.connecting || bluetoothConnectGeneration === controllerGeneration || !select.value;
   document.querySelector<HTMLButtonElement>("#bluetoothPair")!.disabled = !state.registered;
   if (state.connected) document.querySelector<HTMLDetailsElement>("#bluetoothPanel")!.open = false;
+  else if (state.enabled && state.registered && !state.devices.length) {
+    document.querySelector("#bluetoothStatus")!.textContent = "请先在电脑蓝牙设置中添加这台手机，配对后点击刷新设备。";
+  } else if (state.enabled && state.registered && saved && !state.devices.some((device) => device.address === saved)
+      && !bluetoothSelectionPending) {
+    document.querySelector("#bluetoothStatus")!.textContent = "上次选择的电脑尚未配对，请先在电脑重新配对，再刷新设备或选择另一台电脑。";
+  }
+  scheduleBluetoothReconnect();
+}
+function cancelBluetoothReconnect(): void {
+  if (bluetoothReconnectTimer != null) window.clearTimeout(bluetoothReconnectTimer);
+  bluetoothReconnectTimer = null;
+}
+function bluetoothControllerActive(): boolean {
+  return activeRole === "handheld" && transportInput.value === "bluetooth"
+    && controllerAppActive && !document.hidden && !bluetoothSystemDialog && (handheldRunning || controllerStarting);
+}
+function scheduleBluetoothReconnect(): void {
+  const state = bluetoothState;
+  if (state?.connected) bluetoothReconnectAttempt = 0;
+  const address = localStorage.getItem("motionbridge-bluetooth-host") || "";
+  if (!bluetoothControllerActive() || !state?.enabled || !state.registered || state.connected || state.connecting
+      || bluetoothConnectGeneration === controllerGeneration || bluetoothSelectionPending
+      || !address || !state.devices.some((device) => device.address === address)) {
+    cancelBluetoothReconnect();
+    return;
+  }
+  // 普通状态刷新不重置已排好的等待；失败越多，重试间隔越长。
+  if (bluetoothReconnectTimer != null) return;
+  const generation = controllerGeneration;
+  const delay = Math.min(10000, 1000 * 2 ** Math.min(bluetoothReconnectAttempt, 4));
+  document.querySelector("#bluetoothStatus")!.textContent = `${state.message} · ${delay / 1000} 秒后自动连接已选电脑`;
+  bluetoothReconnectTimer = window.setTimeout(() => {
+    bluetoothReconnectTimer = null;
+    if (generation === controllerGeneration && !bluetoothSelectionPending
+        && localStorage.getItem("motionbridge-bluetooth-host") === address) void connectBluetooth(address, true);
+  }, delay);
+}
+async function connectBluetooth(address: string, automatic = false): Promise<void> {
+  const generation = controllerGeneration;
+  const state = bluetoothState;
+  if (!bluetoothControllerActive() || !state?.enabled || !state.registered || state.connected || state.connecting
+      || bluetoothConnectGeneration === generation || !state.devices.some((device) => device.address === address)) return;
+  cancelBluetoothReconnect();
+  bluetoothConnectGeneration = generation;
+  if (automatic) bluetoothReconnectAttempt++;
+  document.querySelector<HTMLButtonElement>("#bluetoothConnect")!.disabled = true;
+  try {
+    const connected = await BluetoothController.connect({ address });
+    if (generation === controllerGeneration && bluetoothControllerActive()) applyBluetoothState(connected);
+  } catch (error) {
+    if (generation === controllerGeneration && bluetoothControllerActive()) controllerError(error);
+  } finally {
+    if (bluetoothConnectGeneration === generation) bluetoothConnectGeneration = -1;
+    if (generation === controllerGeneration && bluetoothControllerActive() && bluetoothState) applyBluetoothState(bluetoothState);
+  }
 }
 async function sendHandheldFrame(): Promise<void> {
   const bluetooth = transportInput.value === "bluetooth";
@@ -1509,10 +1572,18 @@ async function startController(): Promise<void> {
       controllerBadge(false, "正在准备蓝牙");
       document.querySelector<HTMLDetailsElement>("#bluetoothPanel")!.open = true;
       document.querySelector<HTMLButtonElement>("#bluetoothPair")!.disabled = true;
-      bluetoothListener ??= await BluetoothController.addListener("controllerState", applyBluetoothState);
+      const listener = await BluetoothController.addListener("controllerState", (state) => {
+        if (generation === controllerGeneration) applyBluetoothState(state);
+      });
+      if (generation !== controllerGeneration) { await listener.remove(); return; }
+      bluetoothListener = listener;
       bluetoothSystemDialog = true;
-      try { applyBluetoothState(await BluetoothController.start()); }
-      finally { bluetoothSystemDialog = false; }
+      try {
+        const state = await BluetoothController.start();
+        if (generation === controllerGeneration) applyBluetoothState(state);
+      } finally {
+        if (generation === controllerGeneration) { bluetoothSystemDialog = false; scheduleBluetoothReconnect(); }
+      }
     } else {
       const picked = await pickServer(handheldServerInput.value.trim() || serverInput.value.trim(), (phase) => { document.querySelector("#sensorState")!.textContent = phase; });
       if (generation !== controllerGeneration) return;
@@ -1540,6 +1611,10 @@ async function startController(): Promise<void> {
 async function suspendHandheld(): Promise<void> {
   handheldRunning = false;
   ++controllerGeneration;
+  cancelBluetoothReconnect();
+  bluetoothReconnectAttempt = 0;
+  bluetoothConnectGeneration = -1;
+  bluetoothSystemDialog = false;
   if (handheldTimer != null) window.clearInterval(handheldTimer);
   handheldTimer = null;
   clearTouches(); gyroMouse.reset(); tiltBaseline = null;
@@ -1548,6 +1623,8 @@ async function suspendHandheld(): Promise<void> {
     handheldSocket.close();
   }
   handheldSocket = null;
+  const listener = bluetoothListener; bluetoothListener = null;
+  await listener?.remove().catch(() => {});
   await BluetoothController.releaseAll().catch(() => {});
   await BluetoothController.stop().catch(() => {});
   bluetoothState = null;
@@ -1627,18 +1704,40 @@ document.querySelector("#shooterRole")!.addEventListener("click", () => {
 const restartController = async () => { await suspendHandheld(); await controllerStartTask; await startHandheld(); };
 modeInput.addEventListener("change", () => { void restartController(); });
 transportInput.addEventListener("change", () => { void restartController(); });
-document.querySelector("#bluetoothRefresh")!.addEventListener("click", () => { void BluetoothController.getStatus().then(applyBluetoothState).catch(controllerError); });
+document.querySelector("#bluetoothRefresh")!.addEventListener("click", () => {
+  const generation = controllerGeneration;
+  void BluetoothController.getStatus().then((state) => { if (generation === controllerGeneration) applyBluetoothState(state); })
+    .catch((error) => { if (generation === controllerGeneration) controllerError(error); });
+});
+document.querySelector("#bluetoothDevice")!.addEventListener("change", () => {
+  bluetoothSelectionPending = document.querySelector<HTMLSelectElement>("#bluetoothDevice")!.value
+    !== (localStorage.getItem("motionbridge-bluetooth-host") || "");
+  if (bluetoothSelectionPending) cancelBluetoothReconnect();
+  if (bluetoothState) applyBluetoothState(bluetoothState);
+});
 document.querySelector("#bluetoothPair")!.addEventListener("click", () => {
   void (async () => {
+    const generation = controllerGeneration;
+    cancelBluetoothReconnect();
     bluetoothSystemDialog = true;
-    try { clearTouches(); await BluetoothController.requestDiscoverable(); applyBluetoothState(await BluetoothController.getStatus()); }
-    catch (error) { controllerError(error); }
-    finally { bluetoothSystemDialog = false; }
+    try {
+      clearTouches(); await BluetoothController.requestDiscoverable();
+      if (generation !== controllerGeneration) return;
+      const state = await BluetoothController.getStatus();
+      if (generation === controllerGeneration) applyBluetoothState(state);
+    } catch (error) { if (generation === controllerGeneration) controllerError(error); }
+    finally {
+      if (generation === controllerGeneration) { bluetoothSystemDialog = false; scheduleBluetoothReconnect(); }
+    }
   })();
 });
 document.querySelector("#bluetoothConnect")!.addEventListener("click", () => {
   const address = document.querySelector<HTMLSelectElement>("#bluetoothDevice")!.value;
-  if (address) { localStorage.setItem("motionbridge-bluetooth-host", address); void BluetoothController.connect({ address }).then(applyBluetoothState).catch(controllerError); }
+  if (address) {
+    localStorage.setItem("motionbridge-bluetooth-host", address);
+    bluetoothSelectionPending = false; cancelBluetoothReconnect(); bluetoothReconnectAttempt = 0;
+    void connectBluetooth(address);
+  }
 });
 document.querySelector("#cameraHome")!.addEventListener("click", () => { void stop().then(() => showRole("home")); });
 document.querySelector("#startButton")!.addEventListener("click", () => void start()); document.querySelector("#stopButton")!.addEventListener("click", () => void stop());
@@ -1682,6 +1781,7 @@ let resumeCameraOnReturn = false;
 let cameraSuspending: Promise<void> | null = null;
 function onVisibilityChange(): void {
   if (document.hidden) {
+    cancelBluetoothReconnect();
     if (running && activeRole === "camera") {
       resumeCameraOnReturn = true;
       cameraSuspending = stop();
@@ -1695,6 +1795,7 @@ function onVisibilityChange(): void {
     return;
   }
   if (activeRole === "handheld" && handheldTimer == null && !bluetoothSystemDialog) void (async () => { await controllerSuspendTask; controllerSuspendTask = null; await controllerStartTask; if (activeRole === "handheld" && !document.hidden) await startHandheld(); })();
+  else if (activeRole === "handheld") scheduleBluetoothReconnect();
   if (resumeCameraOnReturn && activeRole === "camera") {
     resumeCameraOnReturn = false;
     // 等进后台时那次停止真的走完再开。停止里有几步是异步的，要是回来得快，它的
@@ -1708,7 +1809,7 @@ function onVisibilityChange(): void {
   if ((running || activeRole === "handheld") && !wakeLock) void navigator.wakeLock?.request("screen").then((lock) => { wakeLock = lock; }).catch(() => {});
 }
 document.addEventListener("visibilitychange", onVisibilityChange);
-window.addEventListener("beforeunload", () => { clearTouches(); void BluetoothController.releaseAll().catch(() => {}); void BluetoothController.stop().catch(() => {}); void stopVoiceControl(); });
+window.addEventListener("beforeunload", () => { cancelBluetoothReconnect(); ++controllerGeneration; clearTouches(); void BluetoothController.releaseAll().catch(() => {}); void BluetoothController.stop().catch(() => {}); void stopVoiceControl(); });
 void // 装的 APK 是一个版本，跑的网页可能是另一个。一半的修复走热更，APK 不会
 // 跟着变，所以只报 APK 版本的话，"我这版有没有那个修复"就只能靠猜——而反馈
 // 表单里恰好要填这个数。两个一样时只写一个，不一样才把网页那个也写出来。
@@ -1724,5 +1825,8 @@ App.addListener("backButton", () => { void handleBackButton(); });
 // 他在那边把开关打开再按返回——这一路全在 App 外面发生，不听一下的话
 // 那行字会停在"两条路都没开"，而他刚刚照做了。
 void App.addListener("appStateChange", ({ isActive }) => {
+  controllerAppActive = isActive;
+  if (!isActive) cancelBluetoothReconnect();
+  else if (activeRole === "handheld") scheduleBluetoothReconnect();
   if (isActive && !running && activeRole === "camera") void refreshLinkState();
 });

@@ -296,7 +296,8 @@ button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input
   .role-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (orientation: landscape) {
-  .handheld-card {
+  .handheld-card:not(.shooter-mode) {
+    grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr);
     grid-template-areas:
       "options   options   options"
@@ -313,6 +314,23 @@ button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input
   .handheld-profile-sync { grid-area: targets; }
   .bluetooth-actions { display: flex; flex-wrap: wrap; }
   .bluetooth-actions select { flex: 1 1 180px; }
+}
+
+/* 低高度横屏为操作圆盘留出空间；展开蓝牙设置仍由手柄容器滚动。 */
+@media (orientation: landscape) and (max-height: 480px) {
+  .handheld-card:not(.shooter-mode) { gap: 6px; }
+  .handheld-card:not(.shooter-mode) .controller-options { padding: 2px 8px; }
+  .handheld-card:not(.shooter-mode) .controller-options select { min-height: 32px; padding: 5px 8px; }
+  .handheld-card:not(.shooter-mode) .bluetooth-panel { padding: 4px 8px; }
+  .handheld-card:not(.shooter-mode) .shoulders button { min-height: 44px; font-size: 20px; }
+  .handheld-card:not(.shooter-mode) .stick,
+  .handheld-card:not(.shooter-mode) .face-buttons { width: min(48vh, 210px); }
+  .handheld-card:not(.shooter-mode) .handheld-trigger-board { padding: 4px 8px; }
+  .handheld-card:not(.shooter-mode) .trigger-board-key { font-size: 28px; }
+  .handheld-card:not(.shooter-mode) .trigger-board-name { font-size: 12px; }
+  .handheld-card:not(.shooter-mode) .handheld-connection-row { gap: 6px; padding: 2px 6px; }
+  .handheld-card:not(.shooter-mode) .handheld-connection-row button { min-height: 34px; padding: 5px 8px; }
+  .handheld-card:not(.shooter-mode) .handheld-connection-row #sensorState { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
 
 /* 射击模式单独定义网格，避免原手柄横屏的命名区域挤占鼠标操作面。 */
