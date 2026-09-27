@@ -199,6 +199,26 @@ let sensorPolling = false;
 let stickState = { x: 0, y: 0 };
 const modeInput = document.querySelector<HTMLSelectElement>("#handheldMode")!;
 const transportInput = document.querySelector<HTMLSelectElement>("#handheldTransport")!;
+const handheldSettingIds = ["handheldMode", "handheldTransport", "gyroSensitivity", "stickSensitivity", "handheldSlot"];
+for (const id of handheldSettingIds) {
+  const input = document.querySelector<HTMLInputElement | HTMLSelectElement>(`#${id}`)!;
+  const key = `motionbridge-setting-${id}`;
+  const saved = localStorage.getItem(key);
+  if (saved != null) {
+    if (input instanceof HTMLSelectElement && [...input.options].some(option => option.value === saved)) input.value = saved;
+    else if (input instanceof HTMLInputElement && Number.isFinite(Number(saved))
+        && Number(saved) >= Number(input.min) && Number(saved) <= Number(input.max)) input.value = saved;
+  }
+  const save = () => { try { localStorage.setItem(key, input.value); } catch { /* 保留本次设置。 */ } };
+  input.addEventListener("change", save);
+  if (input instanceof HTMLInputElement) input.addEventListener("input", save);
+}
+function saveHandheldSettings(): void {
+  for (const id of handheldSettingIds) {
+    try { localStorage.setItem(`motionbridge-setting-${id}`, document.querySelector<HTMLInputElement | HTMLSelectElement>(`#${id}`)!.value); }
+    catch { /* 保留本次设置。 */ }
+  }
+}
 let controllerGeneration = 0;
 let controllerStarting = false;
 let controllerStartTask: Promise<void> | null = null;
@@ -214,6 +234,20 @@ let controllerAppActive = true;
 let tiltBaseline: number[] | null = null;
 let shooterState: ShooterControlState = { stick: { x: 0, y: 0 }, stickPressed: false, mouseButtons: 0 };
 const gyroMouse = new GyroMouse();
+const gyroCalibrationKey = "motionbridge-gyro-calibration-v1";
+let savedGyroCalibration: unknown = null;
+let gyroCalibrationPending = false;
+let gyroCalibrationSaved = false;
+try { savedGyroCalibration = JSON.parse(localStorage.getItem(gyroCalibrationKey) || "null"); } catch { /* 首次使用重新校准。 */ }
+gyroCalibrationSaved = savedGyroCalibration != null;
+function resetGyroSession(): void {
+  gyroMouse.reset();
+  if (!gyroCalibrationPending && !gyroMouse.restoreCalibration(savedGyroCalibration)) {
+    savedGyroCalibration = null;
+    gyroCalibrationSaved = false;
+  }
+}
+resetGyroSession();
 const stickMouse = new StickMouse();
 const shooterControls = createShooterControls(document.querySelector<HTMLElement>("#shooterControls")!, (state) => {
   const buttonsChanged = state.mouseButtons !== shooterState.mouseButtons;
@@ -1439,7 +1473,7 @@ function applyBluetoothState(state: BluetoothState): void {
   if (bluetoothState && state.sessionId < bluetoothState.sessionId) return;
   const changed = bluetoothState?.sessionId !== state.sessionId || bluetoothState?.connected !== state.connected;
   bluetoothState = state;
-  if (changed) { clearTouches(); gyroMouse.reset(); tiltBaseline = null; }
+  if (changed) { clearTouches(); resetGyroSession(); tiltBaseline = null; }
   document.querySelector("#bluetoothStatus")!.textContent = state.message;
   controllerBadge(state.connected, state.connected ? `蓝牙已连接 ${state.deviceName || "电脑"}` : "等待蓝牙连接");
   const select = document.querySelector<HTMLSelectElement>("#bluetoothDevice")!;
@@ -1523,11 +1557,18 @@ async function sendHandheldFrame(): Promise<void> {
           sensitivity: Number(document.querySelector<HTMLInputElement>("#gyroSensitivity")!.value),
           orientation: screen.orientation?.angle ?? 0,
         });
+        if (!gyro.calibrating && (gyroCalibrationPending || !savedGyroCalibration)) {
+          savedGyroCalibration = gyroMouse.getCalibration();
+          gyroCalibrationPending = false;
+          gyroCalibrationSaved = false;
+          try { localStorage.setItem(gyroCalibrationKey, JSON.stringify(savedGyroCalibration)); gyroCalibrationSaved = true; }
+          catch { /* 当前校准仍可使用。 */ }
+        }
         const coarse = stickMouse.update(shooterState.stick, shooterState.stickPressed, performance.now(), Number(document.querySelector<HTMLInputElement>("#stickSensitivity")!.value));
-        // 陀螺仪默认反向 X、Y 两轴，浮动摇杆保持原方向。
-        const result = await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx: coarse.dx - gyro.dx, dy: coarse.dy - gyro.dy, sessionId });
+        // 竖屏向左转时鼠标向左；屏幕抬向上时鼠标向上。
+        const result = await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx: coarse.dx + gyro.dx, dy: coarse.dy - gyro.dy, sessionId });
         if (!result.sent) throw new Error("蓝牙鼠标输出未送达，请检查连接");
-        document.querySelector("#sensorState")!.textContent = shooterState.stickPressed ? "摇杆大移动 · 陀螺仪暂停" : gyro.calibrating ? "请静握 1 秒，校准陀螺仪" : "陀螺仪微调";
+        document.querySelector("#sensorState")!.textContent = shooterState.stickPressed ? "摇杆大移动 · 陀螺仪暂停" : gyro.calibrating ? "请静握 1 秒，校准陀螺仪" : gyroCalibrationSaved ? "陀螺仪微调 · 沿用已保存校准" : "陀螺仪微调";
       } else {
         const quaternion = [sample.qx, sample.qy, sample.qz, sample.qw];
         if (!tiltBaseline || handheldRecenter) tiltBaseline = quaternion;
@@ -1563,7 +1604,7 @@ async function startController(): Promise<void> {
   controllerStarting = true;
   modeInput.disabled = transportInput.disabled = true;
   const generation = ++controllerGeneration;
-  showRole("handheld"); renderControllerMode(); gyroMouse.reset(); tiltBaseline = null;
+  showRole("handheld"); renderControllerMode(); saveHandheldSettings(); resetGyroSession(); tiltBaseline = null;
   try {
     await SensorBridge.start({ mode: modeInput.value });
     if (generation !== controllerGeneration) return;
@@ -1618,7 +1659,7 @@ async function suspendHandheld(): Promise<void> {
   bluetoothSystemDialog = false;
   if (handheldTimer != null) window.clearInterval(handheldTimer);
   handheldTimer = null;
-  clearTouches(); gyroMouse.reset(); tiltBaseline = null;
+  clearTouches(); resetGyroSession(); tiltBaseline = null;
   if (handheldSocket && handheldSocket.readyState <= WebSocket.OPEN) {
     // 断线由电脑收回该来源，尚未建立的连接也要取消。
     handheldSocket.close();
@@ -1767,7 +1808,7 @@ voiceRecognitionSelect.addEventListener("change", () => {
   if (voiceEnabled) void (async () => { await stopVoiceControl(false); await startVoiceControl(); })();
 });
 frontCameraButton.addEventListener("click", () => void chooseFacing("user")); backCameraButton.addEventListener("click", () => void chooseFacing("environment")); voiceToggle.addEventListener("change", () => { localStorage.setItem("motionbridge-voice-auto", voiceToggle.checked ? "1" : "0"); void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()); });
-document.querySelector("#centerSensor")!.addEventListener("click", () => { handheldRecenter = true; gyroMouse.reset(); document.querySelector("#sensorState")!.textContent = modeInput.value === "shooter" ? "请静握 1 秒，校准陀螺仪" : "正在居中"; }); document.querySelector("#stopHandheld")!.addEventListener("click", () => void stopHandheld());
+document.querySelector("#centerSensor")!.addEventListener("click", () => { handheldRecenter = true; gyroCalibrationPending = modeInput.value === "shooter"; gyroMouse.reset(); document.querySelector("#sensorState")!.textContent = modeInput.value === "shooter" ? "请静握 1 秒，校准陀螺仪" : "正在居中"; }); document.querySelector("#stopHandheld")!.addEventListener("click", () => void stopHandheld());
 document.querySelectorAll<HTMLElement>("[data-pad]").forEach((button) => { button.addEventListener("pointerdown", (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); padState.add(button.dataset.pad!); button.classList.add("pressed"); }); const release = () => { padState.delete(button.dataset.pad!); button.classList.remove("pressed"); }; button.addEventListener("pointerup", release); button.addEventListener("pointercancel", release); button.addEventListener("lostpointercapture", release); });
 const stick = document.querySelector<HTMLElement>("#stick")!; stick.addEventListener("pointerdown", (event) => { stick.setPointerCapture(event.pointerId); updateStick(event); }); stick.addEventListener("pointermove", (event) => { if (stick.hasPointerCapture(event.pointerId)) updateStick(event); }); const releaseStick = () => { stickState = { x: 0, y: 0 }; stick.querySelector<HTMLElement>("i")!.style.transform = "translate(0,0)"; }; stick.addEventListener("pointerup", releaseStick); stick.addEventListener("pointercancel", releaseStick);
 window.addEventListener("resize", resizeCanvas);

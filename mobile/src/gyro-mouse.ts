@@ -25,6 +25,12 @@ export interface GyroMouseMovement {
   calibrating: boolean
 }
 
+export interface GyroMouseCalibration {
+  version: 1
+  bias: number[]
+  gravity: number[]
+}
+
 const CALIBRATION_SECONDS = 1
 const CALIBRATION_MIN_SAMPLES = 20
 const CALIBRATION_MAX_RATE = 0.035
@@ -71,6 +77,24 @@ export class GyroMouse {
     this.stillSeconds = 0
     this.clearCalibration()
     this.clearMovement()
+  }
+
+  getCalibration(): GyroMouseCalibration | null {
+    return this.calibrated ? { version: 1, bias: [...this.bias], gravity: [...this.gravity] } : null
+  }
+
+  restoreCalibration(value: unknown): boolean {
+    if (!value || typeof value !== 'object') return false
+    const saved = value as Partial<GyroMouseCalibration>
+    if (saved.version !== 1 || !Array.isArray(saved.bias) || !Array.isArray(saved.gravity)
+      || saved.bias.length !== 3 || saved.gravity.length !== 3
+      || ![...saved.bias, ...saved.gravity].every(Number.isFinite)
+      || Math.abs(Math.hypot(...saved.gravity) - 1) > 1e-6) return false
+    this.reset()
+    this.bias = [...saved.bias]
+    this.gravity = [...saved.gravity]
+    this.calibrated = true
+    return true
   }
 
   /** 触摸按下立即暂停；即使松手早于下次轮询，也不追补触摸期间的运动。 */

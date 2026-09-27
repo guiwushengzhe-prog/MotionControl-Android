@@ -21,6 +21,25 @@ function calibratedMouse(bias: Partial<GyroMouseSample> = {}) {
   return { mouse, timestamp }
 }
 
+test('导出校准后新实例恢复零偏和重力，首帧无旧位移并拒绝非法缓存', () => {
+  const bias = { gx: 0.004, gy: -0.003, gz: 0.005 }
+  const { mouse, timestamp } = calibratedMouse({ ...bias, ax: 0, ay: 0, az: 9.80665 })
+  mouse.update(sample(timestamp + STEP_NS, { ...bias, gz: bias.gz + 0.025 }), true)
+  const saved = mouse.getCalibration()
+  assert.deepEqual(saved, { version: 1, bias: [bias.gx, bias.gy, bias.gz], gravity: [0, 0, 1] })
+  const restored = new GyroMouse()
+  assert.equal(restored.getCalibration(), null)
+  assert.equal(restored.restoreCalibration(saved), true)
+  assert.deepEqual(restored.update(sample(8_000_000_000, { ...bias, gx: 1, gz: 1 }), true), { dx: 0, dy: 0, calibrating: false })
+  assert.deepEqual(restored.update(sample(8_000_000_000 + STEP_NS, bias), true), { dx: 0, dy: 0, calibrating: false })
+  for (const invalid of [null, { ...saved, version: 2 }, { ...saved, bias: [0, 0] }, { ...saved, bias: [0, NaN, 0] }, { ...saved, gravity: [0, 0, Infinity] }, { ...saved, gravity: [0, 0, 2] }]) {
+    assert.equal(restored.restoreCalibration(invalid), false)
+    assert.deepEqual(restored.getCalibration(), saved)
+  }
+  restored.reset()
+  assert.equal(restored.getCalibration(), null)
+})
+
 test('只接受运行后的有效时间，稳定握持一秒后去除零偏，重新校准清空状态', () => {
   const mouse = new GyroMouse()
   assert.deepEqual(mouse.update(sample(0), true), { dx: 0, dy: 0, calibrating: true })

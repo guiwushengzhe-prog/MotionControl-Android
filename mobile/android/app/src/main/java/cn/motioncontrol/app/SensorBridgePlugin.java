@@ -1,7 +1,6 @@
 package cn.motioncontrol.app;
 
 import android.content.Context;
-import android.content.pm.ActivityInfo;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -52,7 +51,6 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
         boolean accelerationRegistered = accelerationSensor != null && manager.registerListener(this, accelerationSensor, SensorManager.SENSOR_DELAY_GAME);
         accelerationIncludesGravity = accelerationRegistered && accelerationSensor.getType() == Sensor.TYPE_ACCELEROMETER;
         running = true;
-        getActivity().setRequestedOrientation(shooter ? ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         call.resolve();
     }
 
@@ -73,7 +71,6 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
     @PluginMethod
     public void stop(PluginCall call) {
         stopSensors();
-        getActivity().setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
         call.resolve();
     }
 
