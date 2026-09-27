@@ -10,6 +10,11 @@ export interface GyroMouseSample {
   ax?: number
   ay?: number
   az?: number
+  /** 可选手机坐标到世界坐标的姿态四元数，分量顺序为 x、y、z、w。 */
+  qx?: number
+  qy?: number
+  qz?: number
+  qw?: number
 }
 
 export interface GyroMouseOptions {
@@ -26,9 +31,10 @@ export interface GyroMouseMovement {
 }
 
 export interface GyroMouseCalibration {
-  version: 1
+  version: 2
   bias: number[]
   gravity: number[]
+  referenceQuaternion: number[] | null
 }
 
 const CALIBRATION_SECONDS = 1
@@ -47,7 +53,7 @@ const COUNTS_PER_RADIAN = 64 * 180 / Math.PI
 /**
  * 移植 sketch_sep27b 的零偏、静止追踪、低通、死区和小数累积。
  * 手机使用真实事件时间：不沿用 ESP32 的 960 Hz 或按样本数计时。
- * 移植草图的角速度积分算法，水平轴适配手机握持时的重力方向。
+ * 移植草图的角速度积分算法，横纵方向均使用校准握持的坐标参考。
  * 横向为角速度在重力轴上的负投影；无重力数据时默认 -GZ。
  */
 export class GyroMouse {
@@ -57,6 +63,7 @@ export class GyroMouse {
   private orientation = 0
   private bias = [0, 0, 0]
   private gravity = [0, 0, 1]
+  private referenceQuaternion: number[] | null = null
   private calibrationStart = 0
   private calibrationCount = 0
   private calibrationMean = [0, 0, 0]
@@ -75,25 +82,33 @@ export class GyroMouse {
     this.orientation = 0
     this.bias = [0, 0, 0]
     this.gravity = [0, 0, 1]
+    this.referenceQuaternion = null
     this.stillSeconds = 0
     this.clearCalibration()
     this.clearMovement()
   }
 
   getCalibration(): GyroMouseCalibration | null {
-    return this.calibrated ? { version: 1, bias: [...this.bias], gravity: [...this.gravity] } : null
+    return this.calibrated ? {
+      version: 2, bias: [...this.bias], gravity: [...this.gravity],
+      referenceQuaternion: this.referenceQuaternion ? [...this.referenceQuaternion] : null,
+    } : null
   }
 
   restoreCalibration(value: unknown): boolean {
     if (!value || typeof value !== 'object') return false
     const saved = value as Partial<GyroMouseCalibration>
-    if (saved.version !== 1 || !Array.isArray(saved.bias) || !Array.isArray(saved.gravity)
+    if (saved.version !== 2 || !Array.isArray(saved.bias) || !Array.isArray(saved.gravity)
       || saved.bias.length !== 3 || saved.gravity.length !== 3
       || ![...saved.bias, ...saved.gravity].every(Number.isFinite)
       || Math.abs(Math.hypot(...saved.gravity) - 1) > 1e-6) return false
+    const reference = saved.referenceQuaternion
+    if (reference !== null && (!Array.isArray(reference) || reference.length !== 4
+      || ![...reference].every(Number.isFinite) || Math.abs(Math.hypot(...reference) - 1) > 1e-6)) return false
     this.reset()
     this.bias = [...saved.bias]
     this.gravity = [...saved.gravity]
+    this.referenceQuaternion = reference ? [...reference] : null
     this.calibrated = true
     return true
   }
@@ -114,7 +129,7 @@ export class GyroMouse {
       this.clearMovement()
       return this.result()
     }
-    if (sample.ax !== undefined && sample.ay !== undefined && sample.az !== undefined) {
+    if (!this.calibrated && sample.ax !== undefined && sample.ay !== undefined && sample.az !== undefined) {
       const magnitude = Math.hypot(sample.ax, sample.ay, sample.az)
       if (Math.abs(magnitude - 9.80665) < 0.5) {
         this.gravity[0] = sample.ax / magnitude
@@ -161,6 +176,23 @@ export class GyroMouse {
       return this.result()
     }
     this.wasEnabled = true
+
+    const currentQuaternion = this.quaternion(sample)
+    if (this.referenceQuaternion && currentQuaternion) {
+      const [rx, ry, rz, rw] = this.referenceQuaternion
+      const [cx, cy, cz, cw] = currentQuaternion
+      // inverse(qRef) * qNow 将当前手机轴上的角速度转回校准时的手机轴。
+      const x = rw * cx - rx * cw - ry * cz + rz * cy
+      const y = rw * cy + rx * cz - ry * cw - rz * cx
+      const z = rw * cz - rx * cy + ry * cx - rz * cw
+      const w = rw * cw + rx * cx + ry * cy + rz * cz
+      const tx = 2 * (y * gz - z * gy)
+      const ty = 2 * (z * gx - x * gz)
+      const tz = 2 * (x * gy - y * gx)
+      gx += w * tx + y * tz - z * ty
+      gy += w * ty + z * tx - x * tz
+      gz += w * tz + x * ty - y * tx
+    }
 
     const requestedOrientation = options?.orientation ?? 0
     const orientation = Number.isFinite(requestedOrientation) ? ((requestedOrientation % 360) + 360) % 360 : 0
@@ -211,6 +243,7 @@ export class GyroMouse {
       && this.calibrationM2.every(value => Math.sqrt(value / this.calibrationCount) <= CALIBRATION_MAX_STD)
     if (stable) {
       this.bias = [...this.calibrationMean]
+      this.referenceQuaternion = this.quaternion(sample)
       this.calibrated = true
     }
     this.clearCalibration()
@@ -219,6 +252,14 @@ export class GyroMouse {
   private accelerationIsStill(sample: GyroMouseSample): boolean {
     if (sample.ax === undefined || sample.ay === undefined || sample.az === undefined) return true
     return Math.abs(Math.hypot(sample.ax, sample.ay, sample.az) - 9.80665) < 0.5
+  }
+
+  private quaternion(sample: GyroMouseSample): number[] | null {
+    const values = [sample.qx, sample.qy, sample.qz, sample.qw]
+    if (!values.every(value => typeof value === 'number' && Number.isFinite(value))) return null
+    const quaternion = values as number[]
+    const magnitude = Math.hypot(...quaternion)
+    return Number.isFinite(magnitude) && magnitude > 1e-6 ? quaternion.map(value => value / magnitude) : null
   }
 
   private deadzone(rate: number): number {

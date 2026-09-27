@@ -40,7 +40,7 @@ type ControlConfigV1 = {
   // Every address the desktop can be reached at, best link first.
   server_candidates?: { host?: string; port?: number; kind?: string }[];
 };
-type SensorSample = { qx: number; qy: number; qz: number; qw: number; gx: number; gy: number; gz: number; ax: number; ay: number; az: number; timestamp: number; running: boolean; accelerationIncludesGravity?: boolean };
+type SensorSample = { qx: number; qy: number; qz: number; qw: number; gx: number; gy: number; gz: number; ax: number; ay: number; az: number; timestamp: number; running: boolean; accelerationIncludesGravity?: boolean; rotationAvailable?: boolean };
 type MotionDebug = {
   videoReady: boolean;
   videoWidth: number;
@@ -1552,7 +1552,16 @@ async function sendHandheldFrame(): Promise<void> {
     if (bluetooth && bluetoothState?.connected) {
       const sessionId = bluetoothState.sessionId;
       if (modeInput.value === "shooter") {
-        const gyroSample = sample.accelerationIncludesGravity ? sample : { ...sample, ax: undefined, ay: undefined, az: undefined };
+        const gyroSample = {
+          ...sample,
+          ax: sample.accelerationIncludesGravity ? sample.ax : undefined,
+          ay: sample.accelerationIncludesGravity ? sample.ay : undefined,
+          az: sample.accelerationIncludesGravity ? sample.az : undefined,
+          qx: sample.rotationAvailable ? sample.qx : undefined,
+          qy: sample.rotationAvailable ? sample.qy : undefined,
+          qz: sample.rotationAvailable ? sample.qz : undefined,
+          qw: sample.rotationAvailable ? sample.qw : undefined,
+        };
         const gyro = gyroMouse.update(gyroSample, !shooterState.stickPressed, {
           sensitivity: Number(document.querySelector<HTMLInputElement>("#gyroSensitivity")!.value),
           orientation: screen.orientation?.angle ?? 0,

@@ -26,13 +26,13 @@ test('导出校准后新实例恢复零偏和重力，首帧无旧位移并拒�
   const { mouse, timestamp } = calibratedMouse({ ...bias, ax: 0, ay: 0, az: 9.80665 })
   mouse.update(sample(timestamp + STEP_NS, { ...bias, gz: bias.gz + 0.025 }), true)
   const saved = mouse.getCalibration()
-  assert.deepEqual(saved, { version: 1, bias: [bias.gx, bias.gy, bias.gz], gravity: [0, 0, 1] })
+  assert.deepEqual(saved, { version: 2, bias: [bias.gx, bias.gy, bias.gz], gravity: [0, 0, 1], referenceQuaternion: null })
   const restored = new GyroMouse()
   assert.equal(restored.getCalibration(), null)
   assert.equal(restored.restoreCalibration(saved), true)
   assert.deepEqual(restored.update(sample(8_000_000_000, { ...bias, gx: 1, gz: 1 }), true), { dx: 0, dy: 0, calibrating: false })
   assert.deepEqual(restored.update(sample(8_000_000_000 + STEP_NS, bias), true), { dx: 0, dy: 0, calibrating: false })
-  for (const invalid of [null, { ...saved, version: 2 }, { ...saved, bias: [0, 0] }, { ...saved, bias: [0, NaN, 0] }, { ...saved, gravity: [0, 0, Infinity] }, { ...saved, gravity: [0, 0, 2] }]) {
+  for (const invalid of [null, { ...saved, version: 1 }, { ...saved, bias: [0, 0] }, { ...saved, bias: [0, NaN, 0] }, { ...saved, gravity: [0, 0, Infinity] }, { ...saved, gravity: [0, 0, 2] }, { ...saved, referenceQuaternion: [0, 0, 0, 2] }]) {
     assert.equal(restored.restoreCalibration(invalid), false)
     assert.deepEqual(restored.getCalibration(), saved)
   }
@@ -218,14 +218,39 @@ test('平放、竖握和横握沿重力轴转动产生水平位移，其他轴�
     { gravity: { ax: 9.80665, ay: 0, az: 0 }, yaw: { gx: 0.2 }, other: { gz: 0.2 } },
   ]
   for (const { gravity, yaw, other } of poses) {
-    const horizontal = calibratedMouse()
+    const horizontal = calibratedMouse(gravity)
     const movement = horizontal.mouse.update(sample(horizontal.timestamp + STEP_NS, { ...gravity, ...yaw }), true)
     assert.ok(movement.dx < 0)
     assert.equal(movement.calibrating, false)
     // 加速度暂时缺失或异常时沿用上次方向，不把握持轴误改回 Z。
     assert.ok(horizontal.mouse.update(sample(horizontal.timestamp + 2 * STEP_NS, yaw), true).dx < 0)
     assert.ok(horizontal.mouse.update(sample(horizontal.timestamp + 3 * STEP_NS, { ...yaw, ax: 0, ay: 0, az: 12 }), true).dx < 0)
-    const orthogonal = calibratedMouse()
+    const orthogonal = calibratedMouse(gravity)
     assert.equal(orthogonal.mouse.update(sample(orthogonal.timestamp + STEP_NS, { ...gravity, ...other }), true).dx, 0)
+  }
+})
+
+test('姿态改变后横向和纵向仍以校准握持为参考，导出恢复保持同一参考', () => {
+  const reference = { qx: 0, qy: 0, qz: Math.SQRT1_2, qw: Math.SQRT1_2, ax: 0, ay: 0, az: 9.80665 }
+  // 当前姿态 = 校准姿态 * 绕校准 Y 轴旋转 90°；当前手机 X 对应校准 -Z，Z 对应校准 X。
+  const rotated = { qx: -0.5, qy: 0.5, qz: 0.5, qw: 0.5, ax: -9.80665, ay: 0, az: 0 }
+  for (const direction of [
+    { referenceRate: { gz: 0.2 }, currentRate: { gx: -0.2 }, axis: 'dx' as const },
+    { referenceRate: { gx: 0.2 }, currentRate: { gz: 0.2 }, axis: 'dy' as const },
+  ]) {
+    const original = calibratedMouse(reference)
+    const changed = calibratedMouse(reference)
+    const saved = original.mouse.getCalibration()!
+    const restored = new GyroMouse()
+    assert.equal(restored.restoreCalibration(saved), true)
+    assert.deepEqual(restored.update(sample(original.timestamp, reference), true), { dx: 0, dy: 0, calibrating: false })
+    const next = original.timestamp + STEP_NS
+    const expected = original.mouse.update(sample(next, { ...reference, ...direction.referenceRate }), true)
+    assert.ok(expected[direction.axis] < 0)
+    const actual = changed.mouse.update(sample(next, { ...rotated, ...direction.currentRate }), true)
+    assert.deepEqual(actual, expected)
+    assert.deepEqual(restored.update(sample(next, { ...rotated, ...direction.currentRate }), true), expected)
+    assert.deepEqual(changed.mouse.getCalibration(), saved)
+    assert.deepEqual(restored.getCalibration(), saved)
   }
 })

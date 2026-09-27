@@ -21,6 +21,7 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
     private long latestTimestamp = 0;
     private boolean running = false;
     private boolean accelerationIncludesGravity = false;
+    private boolean rotationAvailable = false;
 
     @PluginMethod
     public void start(PluginCall call) {
@@ -64,6 +65,7 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
             result.put("ax", acceleration[0]); result.put("ay", acceleration[1]); result.put("az", acceleration[2]);
             result.put("timestamp", latestTimestamp); result.put("running", running);
             result.put("accelerationIncludesGravity", accelerationIncludesGravity);
+            result.put("rotationAvailable", rotationAvailable);
         }
         call.resolve(result);
     }
@@ -76,7 +78,10 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
 
     private void stopSensors() {
         if (manager != null) manager.unregisterListener(this);
-        running = false;
+        synchronized (this) {
+            running = false;
+            rotationAvailable = false;
+        }
     }
 
     @Override
@@ -86,6 +91,7 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
                 float[] q = new float[4];
                 SensorManager.getQuaternionFromVector(q, event.values);
                 quaternion[0] = q[1]; quaternion[1] = q[2]; quaternion[2] = q[3]; quaternion[3] = q[0];
+                rotationAvailable = true;
             } else if (event.sensor.getType() == Sensor.TYPE_GYROSCOPE) {
                 System.arraycopy(event.values, 0, gyro, 0, 3);
                 // 鼠标积分只使用陀螺仪采样的时间，避免其他传感器重复计入同一角速度。
