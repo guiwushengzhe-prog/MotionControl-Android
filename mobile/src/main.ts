@@ -1,10 +1,13 @@
 import { DrawingUtils, FilesetResolver, HandLandmarker, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import { App } from "@capacitor/app";
-import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
+import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import {
   candidatesOf, dedupeServers, forgetFailures, lastOctetHint, mergeCandidates,
   pickBest, rankCandidates, type Discovered, type ProbeResult, type ServerCandidate,
 } from "./discovery";
+import { BluetoothController, bluetoothButtons, relativeTilt, StickMouse, type BluetoothState } from "./bluetooth-controller";
+import { GyroMouse } from "./gyro-mouse";
+import { SHOOTER_CONTROLS_HTML, createShooterControls, type ShooterControlState } from "./shooter-controls";
 import "./style.css";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
@@ -37,7 +40,7 @@ type ControlConfigV1 = {
   // Every address the desktop can be reached at, best link first.
   server_candidates?: { host?: string; port?: number; kind?: string }[];
 };
-type SensorSample = { qx: number; qy: number; qz: number; qw: number; gx: number; gy: number; gz: number; ax: number; ay: number; az: number; timestamp: number; running: boolean };
+type SensorSample = { qx: number; qy: number; qz: number; qw: number; gx: number; gy: number; gz: number; ax: number; ay: number; az: number; timestamp: number; running: boolean; accelerationIncludesGravity?: boolean };
 type MotionDebug = {
   videoReady: boolean;
   videoWidth: number;
@@ -64,7 +67,7 @@ type NativeAudioApi = {
   addListener(eventName: "audioError", listener: (event: { message: string }) => void): Promise<PluginListenerHandle>;
 };
 const NativeAudio = registerPlugin<NativeAudioApi>("NativeAudio");
-const SensorBridge = registerPlugin<{ start(): Promise<void>; getLatest(): Promise<SensorSample>; stop(): Promise<void> }>("SensorBridge");
+const SensorBridge = registerPlugin<{ start(options?: { mode: string }): Promise<void>; getLatest(): Promise<SensorSample>; stop(): Promise<void> }>("SensorBridge");
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -73,7 +76,7 @@ app.innerHTML = `
   <main>
     <section class="setup-card role-card" id="roleCard">
       <span class="eyebrow">开始</span><h2>这台手机要做什么？</h2><p class="role-lead">固定在玩家前方时选“摄像头”；拿在手里时选“手持手柄”。</p>
-      <div class="role-grid"><button id="cameraRole" class="role-option recommended"><span class="role-symbol">●</span><strong>固定摄像头</strong><small>推荐 · 识别人和动作</small></button><button id="handheldRole" class="role-option"><span class="role-symbol">◆</span><strong>手持手柄</strong><small>陀螺仪 + 虚拟按键</small></button></div>
+      <div class="role-grid"><button id="cameraRole" class="role-option recommended"><span class="role-symbol">●</span><strong>固定摄像头</strong><small>推荐 · 识别人和动作</small></button><button id="handheldRole" class="role-option"><span class="role-symbol">◆</span><strong>手持手柄</strong><small>陀螺仪 + 虚拟按键</small></button><button id="shooterRole" class="role-option"><span class="role-symbol">＋</span><strong>鼠标射击游戏</strong><small>蓝牙直连 · 摇杆大移动 · 陀螺仪微调</small></button></div>
     </section>
     <section class="setup-card hidden" id="setupCard">
       <div class="card-head"><div><span class="eyebrow">摄像头模式</span><h2>连接电脑</h2></div><button id="cameraHome" class="text-button">返回</button></div>
@@ -94,9 +97,13 @@ app.innerHTML = `
     <div class="trigger-board camera-trigger-board hidden" id="cameraTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
     <button id="showStatus" class="status-show hidden" type="button">显示控制</button>
     <section class="handheld-card hidden" id="handheldCard">
+      <div class="handheld-top controller-options"><label>模式<select id="handheldMode"><option value="gamepad">手持手柄</option><option value="shooter">鼠标射击游戏</option></select></label><label>连接<select id="handheldTransport"><option value="network">网络连接</option><option value="bluetooth">蓝牙直连</option></select></label></div>
+      <details id="bluetoothPanel" class="bluetooth-panel hidden" open><summary>蓝牙连接设置</summary><p id="bluetoothStatus">在电脑蓝牙设置中添加这台手机，再选择电脑连接。</p><div class="bluetooth-actions"><button id="bluetoothPair">允许电脑配对</button><button id="bluetoothRefresh">刷新设备</button><select id="bluetoothDevice" aria-label="已配对电脑"></select><button id="bluetoothConnect">连接电脑</button></div><small>蓝牙手柄为通用手柄；只接受 Xbox 手柄的游戏仍使用网络连接。</small></details>
       <div class="trigger-board handheld-trigger-board" id="handheldTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
       <div class="handheld-top handheld-connection-row"><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><label class="hidden" id="handheldAddressField">电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label><small id="sensorState">等待传感器</small><button id="centerSensor">重新居中</button><button id="stopHandheld" class="stop">停止</button></div>
       <div class="shoulders"><button data-pad="l">LB</button><button data-pad="zl">LT</button><button data-pad="zr">RT</button><button data-pad="r">RB</button></div><div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div></div>
+      ${SHOOTER_CONTROLS_HTML}
+      <details id="shooterSettings" class="shooter-settings hidden"><summary>鼠标灵敏度</summary><label>陀螺仪微调<input id="gyroSensitivity" type="range" min="0.1" max="2" step="0.1" value="0.5"></label><label>摇杆大移动<input id="stickSensitivity" type="range" min="400" max="3600" step="200" value="1800"></label></details>
       <details class="handheld-more"><summary>更多</summary><div class="handheld-more-body"><label>玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span>传感器 <b id="sensorFps">0 FPS</b></span></div></details>
     </section>
   </main>
@@ -190,6 +197,29 @@ let handheldFrames = 0;
 let handheldFpsStarted = performance.now();
 let sensorPolling = false;
 let stickState = { x: 0, y: 0 };
+const modeInput = document.querySelector<HTMLSelectElement>("#handheldMode")!;
+const transportInput = document.querySelector<HTMLSelectElement>("#handheldTransport")!;
+let controllerGeneration = 0;
+let controllerStarting = false;
+let controllerStartTask: Promise<void> | null = null;
+let controllerSuspendTask: Promise<void> | null = null;
+let bluetoothSystemDialog = false;
+let bluetoothState: BluetoothState | null = null;
+let bluetoothListener: PluginListenerHandle | null = null;
+let tiltBaseline: number[] | null = null;
+let shooterState: ShooterControlState = { stick: { x: 0, y: 0 }, stickPressed: false, mouseButtons: 0 };
+const gyroMouse = new GyroMouse();
+const stickMouse = new StickMouse();
+const shooterControls = createShooterControls(document.querySelector<HTMLElement>("#shooterControls")!, (state) => {
+  const buttonsChanged = state.mouseButtons !== shooterState.mouseButtons;
+  if (state.stickPressed && !shooterState.stickPressed) gyroMouse.pause();
+  shooterState = state;
+  if (!state.stickPressed) stickMouse.reset();
+  // 按键变化直接发送，短点击也不必等下一次传感器轮询。
+  if (buttonsChanged && modeInput.value === "shooter" && bluetoothState?.connected) {
+    void BluetoothController.sendMouse({ buttons: state.mouseButtons, dx: 0, dy: 0, sessionId: bluetoothState.sessionId }).catch(controllerError);
+  }
+});
 const CONTROL_CONFIG_STORAGE_KEY = "motionbridge-control-config-v1";
 let syncedControlConfig: ControlConfigV1 | null = loadCachedControlConfig();
 let controlConfigFresh = false;
@@ -1376,27 +1406,156 @@ function showRole(role: "home" | "camera" | "handheld"): void { activeRole = rol
   document.querySelector<HTMLElement>("header")?.classList.toggle("hidden", role === "handheld");
   renderControlConfig(); }
 
-async function sendHandheldFrame(): Promise<void> { if (sensorPolling || handheldSocket?.readyState !== WebSocket.OPEN) return; sensorPolling = true; try { const sample = await SensorBridge.getLatest(); const touches: Record<string, unknown>[] = [...padState].map((control) => ({ control, pressed: true })); if (Math.abs(stickState.x) > 0.02 || Math.abs(stickState.y) > 0.02) touches.push({ control: "stick", x: stickState.x, y: stickState.y }); handheldSocket.send(JSON.stringify({ type: "sensor_frame", role: "sensor", device_id: deviceId, sequence: handheldSequence++, captured_at_ms: Date.now(), player_slot: Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value), quaternion: { x: sample.qx, y: sample.qy, z: sample.qz, w: sample.qw }, orientation: {}, rotation_rate: { x: sample.gx, y: sample.gy, z: sample.gz }, acceleration: { x: sample.ax, y: sample.ay, z: sample.az }, touches, recenter: handheldRecenter })); if (handheldRecenter) { handheldRecenter = false; document.querySelector("#sensorState")!.textContent = "已居中"; } handheldFrames++; const now = performance.now(); if (now - handheldFpsStarted >= 1000) { document.querySelector("#sensorFps")!.textContent = `${Math.round(handheldFrames * 1000 / (now - handheldFpsStarted))} FPS`; handheldFrames = 0; handheldFpsStarted = now; } } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器异常"; } finally { sensorPolling = false; } }
-function clearTouches(): void { padState.clear(); stickState = { x: 0, y: 0 }; document.querySelector<HTMLElement>("#stick i")!.style.transform = "translate(0,0)"; document.querySelectorAll("[data-pad]").forEach((element) => element.classList.remove("pressed")); void sendHandheldFrame(); }
-async function startHandheld(): Promise<void> { showRole("handheld");
-  // 重连会再走一遍这里，旧的定时器不清就会越攒越多。
-  if (handheldTimer != null) { window.clearInterval(handheldTimer); handheldTimer = null; }
-  try { await SensorBridge.start(); wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; const sensorLine = document.querySelector("#sensorState")!;
-    // 原来这里只认输入框里的地址，填错或者换了网段就直接报「请填写电脑服务器地址」。
-    // 手柄模式其实比摄像头模式更需要自动发现：握着手柄的人眼睛在电视上。
-    const picked = await pickServer(handheldServerInput.value.trim() || serverInput.value.trim(),
-                                    (phase) => { sensorLine.textContent = phase; });
-    if (!picked.found) throw new Error("没找到电脑");
-    const address = picked.url; serverInput.value = address; handheldServerInput.value = address;
-    localStorage.setItem("motionbridge-server", address); handheldRunning = true;
-    handheldSocket = new WebSocket(normalizeSocketUrl(address)); handheldSocket.addEventListener("open", () => { document.querySelector("#handheldConnection")!.className = "badge online"; document.querySelector("#handheldConnection b")!.textContent = "已连接电脑"; document.querySelector("#sensorState")!.textContent = "自然持握 1 秒"; window.setTimeout(() => { handheldRecenter = true; }, 1000); }); handheldSocket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* ignore malformed bridge messages */ } }); handheldSocket.addEventListener("close", () => { markControlConfigCached(); clearTriggerState(); clearTouches(); document.querySelector("#handheldConnection")!.className = "badge error"; document.querySelector("#handheldConnection b")!.textContent = "电脑已断开";
-      // 摄像头模式早就这么做了，手柄模式一直没有：断了就是断了，要人再来一次。
-      if (handheldRunning) window.setTimeout(() => { if (handheldRunning) void startHandheld(); }, 1500); }); handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); } catch (error) { document.querySelector("#sensorState")!.textContent = error instanceof Error ? error.message : "传感器不可用";
-    // 地址框平时收着——自动找得到的话它一辈子用不上。只有真找不到时才露出来，
-    // 这时它从"一个要填的空"变成"最后一条出路"。
-    document.querySelector("#handheldAddressField")?.classList.remove("hidden"); } }
-async function stopHandheld(): Promise<void> { handheldRunning = false; clearTouches(); if (handheldTimer != null) window.clearInterval(handheldTimer); handheldTimer = null; await new Promise((resolve) => setTimeout(resolve, 35)); handheldSocket?.close(); handheldSocket = null; await SensorBridge.stop().catch(() => {}); await wakeLock?.release().catch(() => {}); wakeLock = null; showRole("home"); setConnection("offline"); }
-async function suspendHandheld(): Promise<void> { handheldRunning = false; clearTouches(); if (handheldTimer != null) window.clearInterval(handheldTimer); handheldTimer = null; await new Promise((resolve) => setTimeout(resolve, 35)); handheldSocket?.close(); handheldSocket = null; await SensorBridge.stop().catch(() => {}); document.querySelector("#sensorState")!.textContent = "已暂停"; }
+function controllerError(error: unknown): void {
+  document.querySelector("#sensorState")!.textContent = Capacitor.isNativePlatform() ? (error instanceof Error ? error.message : "控制器异常") : "手持控制请使用安卓安装包";
+}
+function controllerBadge(online: boolean, text: string): void {
+  document.querySelector("#handheldConnection")!.className = `badge ${online ? "online" : "connecting"}`;
+  document.querySelector("#handheldConnection b")!.textContent = text;
+}
+function renderControllerMode(): void {
+  const shooter = modeInput.value === "shooter";
+  if (shooter) transportInput.value = "bluetooth";
+  transportInput.querySelector<HTMLOptionElement>('[value="network"]')!.disabled = shooter;
+  const bluetooth = transportInput.value === "bluetooth";
+  handheldCard.classList.toggle("shooter-mode", shooter);
+  document.querySelector("#shooterControls")!.classList.toggle("hidden", !shooter);
+  document.querySelector("#shooterSettings")!.classList.toggle("hidden", !shooter);
+  document.querySelector("#bluetoothPanel")!.classList.toggle("hidden", !bluetooth);
+  document.querySelector("#handheldProfileSync")?.classList.toggle("hidden", bluetooth);
+  document.querySelectorAll(".shoulders,.gamepad").forEach((el) => el.classList.toggle("hidden", shooter));
+  handheldServerInput.closest("label")!.classList.toggle("hidden", bluetooth);
+  document.querySelector<HTMLButtonElement>("#centerSensor")!.textContent = shooter ? "校准陀螺仪" : "重新居中";
+  document.querySelector<HTMLSelectElement>("#handheldSlot")!.closest("label")!.classList.toggle("hidden", bluetooth);
+  document.querySelector<HTMLElement>("header")!.classList.toggle("hidden", activeRole === "handheld");
+}
+function applyBluetoothState(state: BluetoothState): void {
+  if (activeRole !== "handheld" || transportInput.value !== "bluetooth") return;
+  const changed = bluetoothState?.sessionId !== state.sessionId || bluetoothState?.connected !== state.connected;
+  bluetoothState = state;
+  if (changed) { clearTouches(); gyroMouse.reset(); tiltBaseline = null; }
+  document.querySelector("#bluetoothStatus")!.textContent = state.message;
+  controllerBadge(state.connected, state.connected ? `蓝牙已连接 ${state.deviceName || "电脑"}` : "等待蓝牙连接");
+  const select = document.querySelector<HTMLSelectElement>("#bluetoothDevice")!;
+  const previous = select.value || localStorage.getItem("motionbridge-bluetooth-host") || "";
+  select.replaceChildren(...state.devices.map((device) => new Option(device.name || device.address, device.address)));
+  if (state.devices.some((device) => device.address === previous)) select.value = previous;
+  document.querySelector<HTMLButtonElement>("#bluetoothConnect")!.disabled = !state.registered || state.connected || state.connecting || !select.value;
+  document.querySelector<HTMLButtonElement>("#bluetoothPair")!.disabled = !state.registered;
+  if (state.connected) document.querySelector<HTMLDetailsElement>("#bluetoothPanel")!.open = false;
+}
+async function sendHandheldFrame(): Promise<void> {
+  const bluetooth = transportInput.value === "bluetooth";
+  if (document.hidden || bluetoothSystemDialog || sensorPolling || handheldTimer == null || (bluetooth ? !bluetoothState?.connected : handheldSocket?.readyState !== WebSocket.OPEN)) return;
+  sensorPolling = true;
+  const generation = controllerGeneration;
+  try {
+    const sample = await SensorBridge.getLatest();
+    if (generation !== controllerGeneration || handheldTimer == null) return;
+    if (bluetooth && bluetoothState?.connected) {
+      const sessionId = bluetoothState.sessionId;
+      if (modeInput.value === "shooter") {
+        const gyroSample = sample.accelerationIncludesGravity ? sample : { ...sample, ax: undefined, ay: undefined, az: undefined };
+        const gyro = gyroMouse.update(gyroSample, !shooterState.stickPressed, {
+          sensitivity: Number(document.querySelector<HTMLInputElement>("#gyroSensitivity")!.value),
+          orientation: screen.orientation?.angle ?? 0,
+        });
+        const coarse = stickMouse.update(shooterState.stick, shooterState.stickPressed, performance.now(), Number(document.querySelector<HTMLInputElement>("#stickSensitivity")!.value));
+        const result = await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx: gyro.dx + coarse.dx, dy: gyro.dy + coarse.dy, sessionId });
+        if (!result.sent) throw new Error("蓝牙鼠标输出未送达，请检查连接");
+        document.querySelector("#sensorState")!.textContent = shooterState.stickPressed ? "摇杆大移动 · 陀螺仪暂停" : gyro.calibrating ? "请静握 1 秒，校准陀螺仪" : "陀螺仪微调";
+      } else {
+        const quaternion = [sample.qx, sample.qy, sample.qz, sample.qw];
+        if (!tiltBaseline || handheldRecenter) tiltBaseline = quaternion;
+        const tilt = relativeTilt(tiltBaseline, quaternion);
+        const result = await BluetoothController.sendGamepad({ buttons: bluetoothButtons(padState), x: stickState.x, y: stickState.y, ...tilt, lt: padState.has("zl") ? 1 : 0, rt: padState.has("zr") ? 1 : 0, sessionId });
+        if (!result.sent) throw new Error("蓝牙手柄输出未送达，请检查连接");
+        document.querySelector("#sensorState")!.textContent = "触摸控制左摇杆 · 转动控制右摇杆";
+      }
+    } else if (!bluetooth && handheldSocket?.readyState === WebSocket.OPEN) {
+      const touches: Record<string, unknown>[] = [...padState].map((control) => ({ control, pressed: true }));
+      if (Math.abs(stickState.x) > 0.02 || Math.abs(stickState.y) > 0.02) touches.push({ control: "stick", x: stickState.x, y: stickState.y });
+      handheldSocket.send(JSON.stringify({ type: "sensor_frame", role: "sensor", device_id: deviceId, sequence: handheldSequence++, captured_at_ms: Date.now(), player_slot: Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value), quaternion: { x: sample.qx, y: sample.qy, z: sample.qz, w: sample.qw }, orientation: {}, rotation_rate: { x: sample.gx, y: sample.gy, z: sample.gz }, acceleration: { x: sample.ax, y: sample.ay, z: sample.az }, touches, recenter: handheldRecenter }));
+    }
+    handheldRecenter = false;
+    handheldFrames++;
+    const now = performance.now();
+    if (now - handheldFpsStarted >= 1000) { document.querySelector("#sensorFps")!.textContent = `${Math.round(handheldFrames * 1000 / (now - handheldFpsStarted))} 次/秒`; handheldFrames = 0; handheldFpsStarted = now; }
+  } catch (error) { if (generation === controllerGeneration) controllerError(error); }
+  finally { sensorPolling = false; }
+}
+function clearTouches(): void {
+  padState.clear(); stickState = { x: 0, y: 0 }; shooterControls.reset(); stickMouse.reset();
+  document.querySelector<HTMLElement>("#stick i")!.style.transform = "translate(0,0)";
+  document.querySelectorAll("[data-pad]").forEach((element) => element.classList.remove("pressed"));
+}
+async function startHandheld(): Promise<void> {
+  if (controllerStartTask) return controllerStartTask;
+  controllerStartTask = startController();
+  try { await controllerStartTask; } finally { controllerStartTask = null; }
+}
+async function startController(): Promise<void> {
+  if (controllerStarting || handheldTimer != null) return;
+  controllerStarting = true;
+  modeInput.disabled = transportInput.disabled = true;
+  const generation = ++controllerGeneration;
+  showRole("handheld"); renderControllerMode(); gyroMouse.reset(); tiltBaseline = null;
+  try {
+    await SensorBridge.start({ mode: modeInput.value });
+    if (generation !== controllerGeneration) return;
+    wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null;
+    if (generation !== controllerGeneration) return;
+    if (transportInput.value === "bluetooth") {
+      controllerBadge(false, "正在准备蓝牙");
+      document.querySelector<HTMLDetailsElement>("#bluetoothPanel")!.open = true;
+      document.querySelector<HTMLButtonElement>("#bluetoothPair")!.disabled = true;
+      bluetoothListener ??= await BluetoothController.addListener("controllerState", applyBluetoothState);
+      bluetoothSystemDialog = true;
+      try { applyBluetoothState(await BluetoothController.start()); }
+      finally { bluetoothSystemDialog = false; }
+    } else {
+      const picked = await pickServer(handheldServerInput.value.trim() || serverInput.value.trim(), (phase) => { document.querySelector("#sensorState")!.textContent = phase; });
+      if (generation !== controllerGeneration) return;
+      if (!picked.found) throw new Error("没找到电脑");
+      const address = picked.url; handheldServerInput.value = address;
+      serverInput.value = address; localStorage.setItem("motionbridge-server", address);
+      const ws = new WebSocket(normalizeSocketUrl(address)); handheldSocket = ws;
+      ws.addEventListener("open", () => {
+        if (generation !== controllerGeneration) return;
+        controllerBadge(true, "已连接电脑"); document.querySelector("#sensorState")!.textContent = "自然持握 1 秒";
+        window.setTimeout(() => { if (generation === controllerGeneration) handheldRecenter = true; }, 1000);
+      });
+      ws.addEventListener("message", (event) => {
+        if (generation !== controllerGeneration) return;
+        try { const message = JSON.parse(event.data); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* 忽略无法解析的消息 */ }
+      });
+      ws.addEventListener("close", () => { if (generation === controllerGeneration) { markControlConfigCached(); clearTouches(); controllerBadge(false, "电脑已断开");
+        if (handheldRunning) window.setTimeout(() => { if (handheldRunning && generation === controllerGeneration) void (async () => { await suspendHandheld(); await startHandheld(); })(); }, 1500);
+      } });
+    }
+    if (generation === controllerGeneration) { handheldRunning = true; handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); }
+  } catch (error) { controllerError(error); await SensorBridge.stop().catch(() => {}); }
+  finally { controllerStarting = false; modeInput.disabled = transportInput.disabled = false; }
+}
+async function suspendHandheld(): Promise<void> {
+  handheldRunning = false;
+  ++controllerGeneration;
+  if (handheldTimer != null) window.clearInterval(handheldTimer);
+  handheldTimer = null;
+  clearTouches(); gyroMouse.reset(); tiltBaseline = null;
+  if (handheldSocket && handheldSocket.readyState <= WebSocket.OPEN) {
+    // 断线由电脑收回该来源，尚未建立的连接也要取消。
+    handheldSocket.close();
+  }
+  handheldSocket = null;
+  await BluetoothController.releaseAll().catch(() => {});
+  await BluetoothController.stop().catch(() => {});
+  bluetoothState = null;
+  await SensorBridge.stop().catch(() => {});
+  await wakeLock?.release().catch(() => {}); wakeLock = null;
+  document.querySelector("#sensorState")!.textContent = "已暂停";
+}
+async function stopHandheld(): Promise<void> { await suspendHandheld(); showRole("home"); document.querySelector<HTMLElement>("header")!.classList.remove("hidden"); setConnection("offline"); }
 async function handleBackButton(): Promise<void> { if (activeRole === "home") { await App.exitApp(); return; } if (activeRole === "camera") { await stop(); showRole("home"); return; } await stopHandheld(); }
 function updateStick(event: PointerEvent): void { const stick = document.querySelector<HTMLElement>("#stick")!; const rect = stick.getBoundingClientRect(); const x = Math.max(-1, Math.min(1, (event.clientX - (rect.left + rect.width / 2)) / (rect.width * 0.38))); const y = Math.max(-1, Math.min(1, (event.clientY - (rect.top + rect.height / 2)) / (rect.height * 0.38))); stickState = { x, y }; stick.querySelector<HTMLElement>("i")!.style.transform = `translate(${x * 34}px,${y * 34}px)`; }
 
@@ -1460,7 +1619,27 @@ async function refreshLinkState(failed = false): Promise<void> {
 
 renderControlConfig();
 document.querySelector("#cameraRole")!.addEventListener("click", () => { void (running ? stop() : Promise.resolve()).then(() => { showRole("camera"); void refreshLinkState(); return refreshCameraDevices(); }).catch((error) => { document.querySelector("#securityWarning")!.textContent = error instanceof Error ? error.message : String(error); }); });
-document.querySelector("#handheldRole")!.addEventListener("click", () => { void (running || voiceEnabled ? stop() : Promise.resolve()).then(() => startHandheld()); });
+document.querySelector("#handheldRole")!.addEventListener("click", () => { modeInput.value = "gamepad"; void (running || voiceEnabled ? stop() : Promise.resolve()).then(() => startHandheld()); });
+document.querySelector("#shooterRole")!.addEventListener("click", () => {
+  modeInput.value = "shooter"; transportInput.value = "bluetooth";
+  void (running || voiceEnabled ? stop() : Promise.resolve()).then(() => startHandheld());
+});
+const restartController = async () => { await suspendHandheld(); await controllerStartTask; await startHandheld(); };
+modeInput.addEventListener("change", () => { void restartController(); });
+transportInput.addEventListener("change", () => { void restartController(); });
+document.querySelector("#bluetoothRefresh")!.addEventListener("click", () => { void BluetoothController.getStatus().then(applyBluetoothState).catch(controllerError); });
+document.querySelector("#bluetoothPair")!.addEventListener("click", () => {
+  void (async () => {
+    bluetoothSystemDialog = true;
+    try { clearTouches(); await BluetoothController.requestDiscoverable(); applyBluetoothState(await BluetoothController.getStatus()); }
+    catch (error) { controllerError(error); }
+    finally { bluetoothSystemDialog = false; }
+  })();
+});
+document.querySelector("#bluetoothConnect")!.addEventListener("click", () => {
+  const address = document.querySelector<HTMLSelectElement>("#bluetoothDevice")!.value;
+  if (address) { localStorage.setItem("motionbridge-bluetooth-host", address); void BluetoothController.connect({ address }).then(applyBluetoothState).catch(controllerError); }
+});
 document.querySelector("#cameraHome")!.addEventListener("click", () => { void stop().then(() => showRole("home")); });
 document.querySelector("#startButton")!.addEventListener("click", () => void start()); document.querySelector("#stopButton")!.addEventListener("click", () => void stop());
 gameControlButton.addEventListener("click", () => { if (gameOutputEnabled !== null) requestGameOutput(!gameOutputEnabled); });
@@ -1488,7 +1667,7 @@ voiceRecognitionSelect.addEventListener("change", () => {
   if (voiceEnabled) void (async () => { await stopVoiceControl(false); await startVoiceControl(); })();
 });
 frontCameraButton.addEventListener("click", () => void chooseFacing("user")); backCameraButton.addEventListener("click", () => void chooseFacing("environment")); voiceToggle.addEventListener("change", () => { localStorage.setItem("motionbridge-voice-auto", voiceToggle.checked ? "1" : "0"); void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()); });
-document.querySelector("#centerSensor")!.addEventListener("click", () => { handheldRecenter = true; document.querySelector("#sensorState")!.textContent = "正在居中"; }); document.querySelector("#stopHandheld")!.addEventListener("click", () => void stopHandheld());
+document.querySelector("#centerSensor")!.addEventListener("click", () => { handheldRecenter = true; gyroMouse.reset(); document.querySelector("#sensorState")!.textContent = modeInput.value === "shooter" ? "请静握 1 秒，校准陀螺仪" : "正在居中"; }); document.querySelector("#stopHandheld")!.addEventListener("click", () => void stopHandheld());
 document.querySelectorAll<HTMLElement>("[data-pad]").forEach((button) => { button.addEventListener("pointerdown", (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); padState.add(button.dataset.pad!); button.classList.add("pressed"); }); const release = () => { padState.delete(button.dataset.pad!); button.classList.remove("pressed"); }; button.addEventListener("pointerup", release); button.addEventListener("pointercancel", release); button.addEventListener("lostpointercapture", release); });
 const stick = document.querySelector<HTMLElement>("#stick")!; stick.addEventListener("pointerdown", (event) => { stick.setPointerCapture(event.pointerId); updateStick(event); }); stick.addEventListener("pointermove", (event) => { if (stick.hasPointerCapture(event.pointerId)) updateStick(event); }); const releaseStick = () => { stickState = { x: 0, y: 0 }; stick.querySelector<HTMLElement>("i")!.style.transform = "translate(0,0)"; }; stick.addEventListener("pointerup", releaseStick); stick.addEventListener("pointercancel", releaseStick);
 window.addEventListener("resize", resizeCanvas);
@@ -1509,10 +1688,13 @@ function onVisibilityChange(): void {
     } else if (voiceEnabled) {
       void stopVoiceControl(false);
     }
-    if (activeRole === "handheld") void suspendHandheld();
+    if (activeRole === "handheld") {
+      if (bluetoothSystemDialog) { clearTouches(); void BluetoothController.releaseAll().catch(() => {}); }
+      else controllerSuspendTask = suspendHandheld();
+    }
     return;
   }
-  if (activeRole === "handheld" && handheldTimer == null) void startHandheld();
+  if (activeRole === "handheld" && handheldTimer == null && !bluetoothSystemDialog) void (async () => { await controllerSuspendTask; controllerSuspendTask = null; await controllerStartTask; if (activeRole === "handheld" && !document.hidden) await startHandheld(); })();
   if (resumeCameraOnReturn && activeRole === "camera") {
     resumeCameraOnReturn = false;
     // 等进后台时那次停止真的走完再开。停止里有几步是异步的，要是回来得快，它的
@@ -1526,7 +1708,7 @@ function onVisibilityChange(): void {
   if ((running || activeRole === "handheld") && !wakeLock) void navigator.wakeLock?.request("screen").then((lock) => { wakeLock = lock; }).catch(() => {});
 }
 document.addEventListener("visibilitychange", onVisibilityChange);
-window.addEventListener("beforeunload", () => { clearTouches(); void stopVoiceControl(); });
+window.addEventListener("beforeunload", () => { clearTouches(); void BluetoothController.releaseAll().catch(() => {}); void BluetoothController.stop().catch(() => {}); void stopVoiceControl(); });
 void // 装的 APK 是一个版本，跑的网页可能是另一个。一半的修复走热更，APK 不会
 // 跟着变，所以只报 APK 版本的话，"我这版有没有那个修复"就只能靠猜——而反馈
 // 表单里恰好要填这个数。两个一样时只写一个，不一样才把网页那个也写出来。

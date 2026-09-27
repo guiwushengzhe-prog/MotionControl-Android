@@ -1,7 +1,7 @@
 {
   "name": "motioncontrol-mobile",
   "private": true,
-  "version": "2.2.0",
+  "version": "2.2.2",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
@@ -11,7 +11,8 @@
     "android:add": "cap add android",
     "android:sync": "npm run build && cap sync android && node scripts/fix-capacitor-java.mjs",
     "android:open": "cap open android",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:controller": "node --test src/gyro-mouse.node-test.ts src/shooter-controls.node-test.ts src/bluetooth-controller.node-test.ts"
   },
   "dependencies": {
     "@capacitor/app": "6.0.3",

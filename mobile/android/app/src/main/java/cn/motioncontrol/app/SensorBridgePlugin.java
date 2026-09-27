@@ -21,23 +21,38 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
     private final float[] acceleration = new float[]{0f, 0f, 1f};
     private long latestTimestamp = 0;
     private boolean running = false;
+    private boolean accelerationIncludesGravity = false;
 
     @PluginMethod
     public void start(PluginCall call) {
+        stopSensors();
         manager = (SensorManager) getContext().getSystemService(Context.SENSOR_SERVICE);
+        if (manager == null) {
+            call.reject("当前手机没有传感器服务");
+            return;
+        }
+        boolean shooter = "shooter".equals(call.getString("mode", "gamepad"));
         Sensor rotation = manager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
         Sensor gyroscope = manager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
         Sensor linear = manager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
         Sensor accelerometer = manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
-        if (rotation == null || gyroscope == null || (linear == null && accelerometer == null)) {
+        if (gyroscope == null || (!shooter && (rotation == null || (linear == null && accelerometer == null)))) {
             call.reject("当前手机缺少手持体感所需传感器");
             return;
         }
-        manager.registerListener(this, rotation, SensorManager.SENSOR_DELAY_GAME);
-        manager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_GAME);
-        manager.registerListener(this, linear != null ? linear : accelerometer, SensorManager.SENSOR_DELAY_GAME);
+        synchronized (this) { latestTimestamp = 0; }
+        if (rotation != null) manager.registerListener(this, rotation, SensorManager.SENSOR_DELAY_GAME);
+        if (!manager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_GAME)) {
+            stopSensors();
+            call.reject("无法启动手机陀螺仪");
+            return;
+        }
+        // 射击校准使用含重力的加速度；原网络手柄继续使用去重力的加速度。
+        Sensor accelerationSensor = shooter ? accelerometer : (linear != null ? linear : accelerometer);
+        boolean accelerationRegistered = accelerationSensor != null && manager.registerListener(this, accelerationSensor, SensorManager.SENSOR_DELAY_GAME);
+        accelerationIncludesGravity = accelerationRegistered && accelerationSensor.getType() == Sensor.TYPE_ACCELEROMETER;
         running = true;
-        getActivity().setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        getActivity().setRequestedOrientation(shooter ? ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         call.resolve();
     }
 
@@ -50,6 +65,7 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
             result.put("gx", gyro[0]); result.put("gy", gyro[1]); result.put("gz", gyro[2]);
             result.put("ax", acceleration[0]); result.put("ay", acceleration[1]); result.put("az", acceleration[2]);
             result.put("timestamp", latestTimestamp); result.put("running", running);
+            result.put("accelerationIncludesGravity", accelerationIncludesGravity);
         }
         call.resolve(result);
     }
@@ -75,10 +91,11 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
                 quaternion[0] = q[1]; quaternion[1] = q[2]; quaternion[2] = q[3]; quaternion[3] = q[0];
             } else if (event.sensor.getType() == Sensor.TYPE_GYROSCOPE) {
                 System.arraycopy(event.values, 0, gyro, 0, 3);
+                // 鼠标积分只使用陀螺仪采样的时间，避免其他传感器重复计入同一角速度。
+                latestTimestamp = event.timestamp;
             } else {
                 System.arraycopy(event.values, 0, acceleration, 0, 3);
             }
-            latestTimestamp = event.timestamp;
         }
     }
 

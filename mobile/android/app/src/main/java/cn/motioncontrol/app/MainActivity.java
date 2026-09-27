@@ -15,6 +15,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(SensorBridgePlugin.class);
+        registerPlugin(BluetoothControllerPlugin.class);
         registerPlugin(NativeAudioPlugin.class);
         registerPlugin(LocalNetworkPlugin.class);
         registerPlugin(WebUpdatePlugin.class);

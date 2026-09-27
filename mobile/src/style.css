@@ -244,3 +244,98 @@ button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input
 .zone-toggle { min-height: 38px; padding: 8px 11px; border: 1px solid var(--mc-line); border-radius: 9px; background: #151f29; color: #d7e0e6; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .zone-toggle.selected { border-color: #4785ce; background: #244b78; color: #eaf4ff; }
 @media (max-width: 600px) { .runtime-camera-choice { grid-template-columns: 1fr; } }
+
+/* 射击模式：两颗鼠标键以外的区域都可作为浮动摇杆。 */
+.shooter-controls { position: relative; min-height: 150px; height: 100%; overflow: hidden; border: 1px solid var(--mc-line); border-radius: 20px; background: radial-gradient(ellipse at 28% 44%, #172a3c, #0c131d 72%); touch-action: none; user-select: none; -webkit-user-select: none; }
+.shooter-stick-area { position: absolute; inset: 0; touch-action: none; }
+.shooter-instructions { position: absolute; left: 24px; top: 24px; right: 160px; display: grid; gap: 7px; pointer-events: none; }
+.shooter-instructions strong { color: #d2e6fa; font-size: 18px; font-weight: 700; }
+.shooter-instructions span { color: #8facc6; font-size: 11px; line-height: 1.7; }
+.shooter-gyro-state { position: absolute; left: 20px; bottom: 18px; right: 160px; color: #86bcff; font-size: 11px; pointer-events: none; }
+.shooter-controls.stick-pressed .shooter-gyro-state { color: #ddb25c; }
+.shooter-stick-ring { position: absolute; display: grid; place-items: center; border: 2px solid rgba(128, 182, 249, .7); border-radius: 50%; background: rgba(25, 45, 67, .72); transform: translate(-50%, -50%); pointer-events: none; }
+.shooter-stick-knob { display: block; width: 42%; aspect-ratio: 1; border: 1px solid #add3ff; border-radius: 50%; background: #6ba8ff; box-shadow: 0 5px 24px rgba(0, 0, 0, .3); }
+.shooter-mouse-buttons { position: absolute; z-index: 1; right: 16px; bottom: 16px; top: 16px; width: clamp(92px, 16vw, 132px); display: grid; grid-template-rows: 1fr 1fr; gap: 12px; pointer-events: none; }
+.shooter-mouse-buttons button { display: grid; align-content: center; justify-items: center; gap: 7px; padding: 14px 8px; border: 1px solid #43627d; border-radius: 22px; background: #152b40; color: #eef4f8; touch-action: none; pointer-events: auto; -webkit-tap-highlight-color: transparent; }
+.shooter-mouse-buttons button strong { font-size: 22px; }
+.shooter-mouse-buttons button small { font-size: 11px; font-weight: 400; color: #9fbbd4; }
+.shooter-mouse-buttons button.pressed { border-color: #91c1ff; background: #3f84e8; }
+.shooter-mouse-buttons button.pressed small { color: #edf5ff; }
+@media (orientation: portrait) {
+  .shooter-controls { min-height: 240px; }
+  .shooter-instructions { left: 20px; right: 20px; }
+  .shooter-mouse-buttons { top: auto; width: clamp(92px, 27vw, 126px); height: min(46%, 264px); }
+  .shooter-gyro-state { right: 140px; }
+}
+
+/* 模式和连接方式放在操作区上方，蓝牙设置展开时允许纵向查看。 */
+.handheld-card { overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto auto auto auto minmax(0, 1fr) auto; grid-template-areas: "options" "bluetooth" "board" "targets" "status" "shoulders" "pad" "more"; }
+.controller-options { grid-area: options; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 6px 10px; }
+.bluetooth-panel { grid-area: bluetooth; }
+.handheld-trigger-board { grid-area: board; }
+.handheld-targets, .handheld-profile-sync { grid-area: targets; }
+.handheld-connection-row { grid-area: status; }
+.shoulders { grid-area: shoulders; }
+.gamepad { grid-area: pad; min-height: 0; }
+.handheld-more { grid-area: more; }
+.controller-options label { display: grid; grid-template-columns: auto minmax(0, 1fr); min-width: 0; gap: 8px; }
+.controller-options select { min-height: 38px; padding: 7px 9px; font-size: 12px; }
+.bluetooth-panel, .shooter-settings { padding: 8px 10px; border: 1px solid var(--mc-line); border-radius: 12px; background: rgba(12, 18, 24, .94); color: #a6b8c9; font-size: 11px; }
+.bluetooth-panel summary, .shooter-settings summary { cursor: pointer; padding: 2px 0; color: #d2e6fa; font-size: 12px; }
+.bluetooth-panel p { margin: 7px 0; line-height: 1.6; }
+.bluetooth-panel small { display: block; margin-top: 7px; color: #8d9ba7; font-size: 10px; line-height: 1.6; }
+.bluetooth-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.bluetooth-actions button { min-height: 36px; padding: 7px 10px; border: 1px solid #355679; background: #17344f; font-size: 11px; }
+.bluetooth-actions select { grid-column: 1 / -1; min-width: 0; min-height: 36px; padding: 7px 9px; }
+.bluetooth-actions button:disabled { opacity: .45; }
+.shooter-settings[open] summary { margin-bottom: 8px; }
+.shooter-settings label { display: inline-grid; width: calc(50% - 6px); gap: 4px; }
+.shooter-settings label + label { margin-left: 12px; }
+.shooter-settings input[type="range"] { min-height: 24px; margin: 0; padding: 0; accent-color: #6ba8ff; }
+@media (min-width: 601px) {
+  .role-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (orientation: landscape) {
+  .handheld-card {
+    grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "options   options   options"
+      "bluetooth bluetooth bluetooth"
+      "shoulders shoulders shoulders"
+      "stick     board     face"
+      "stick     targets   face"
+      "stick     status    face"
+      "stick     middle    face"
+      "stick     more      face";
+  }
+  .controller-options { grid-area: options; }
+  .bluetooth-panel { grid-area: bluetooth; }
+  .handheld-profile-sync { grid-area: targets; }
+  .bluetooth-actions { display: flex; flex-wrap: wrap; }
+  .bluetooth-actions select { flex: 1 1 180px; }
+}
+
+/* 射击模式单独定义网格，避免原手柄横屏的命名区域挤占鼠标操作面。 */
+.handheld-card.shooter-mode {
+  inset: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(150px, 1fr) auto;
+  grid-template-areas: "options" "bluetooth" "status" "shooter" "settings";
+  gap: 8px;
+}
+.handheld-card.shooter-mode .controller-options { grid-area: options; }
+.handheld-card.shooter-mode .bluetooth-panel { grid-area: bluetooth; }
+.handheld-card.shooter-mode .handheld-connection-row { grid-area: status; }
+.handheld-card.shooter-mode .shooter-controls { grid-area: shooter; min-height: 0; height: 100%; }
+.handheld-card.shooter-mode .shooter-settings { grid-area: settings; }
+.handheld-card.shooter-mode .handheld-trigger-board,
+.handheld-card.shooter-mode .handheld-targets,
+.handheld-card.shooter-mode .handheld-profile-sync,
+.handheld-card.shooter-mode .shoulders,
+.handheld-card.shooter-mode .gamepad,
+.handheld-card.shooter-mode .handheld-more { display: none; }
+@media (orientation: portrait) {
+  .handheld-card.shooter-mode { grid-template-rows: auto auto auto minmax(240px, 1fr) auto; }
+  .handheld-card.shooter-mode .handheld-connection-row { flex-wrap: wrap; gap: 7px; }
+  .handheld-card.shooter-mode .handheld-connection-row #sensorState { flex-basis: calc(100% - 90px); }
+}
