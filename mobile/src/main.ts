@@ -1565,8 +1565,8 @@ async function sendHandheldFrame(): Promise<void> {
           catch { /* 当前校准仍可使用。 */ }
         }
         const coarse = stickMouse.update(shooterState.stick, shooterState.stickPressed, performance.now(), Number(document.querySelector<HTMLInputElement>("#stickSensitivity")!.value));
-        // 竖屏向左转时鼠标向左；屏幕抬向上时鼠标向上。
-        const result = await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx: coarse.dx + gyro.dx, dy: coarse.dy - gyro.dy, sessionId });
+        // 按实际握持反馈，两轴沿用陀螺仪计算方向。
+        const result = await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx: coarse.dx + gyro.dx, dy: coarse.dy + gyro.dy, sessionId });
         if (!result.sent) throw new Error("蓝牙鼠标输出未送达，请检查连接");
         document.querySelector("#sensorState")!.textContent = shooterState.stickPressed ? "摇杆大移动 · 陀螺仪暂停" : gyro.calibrating ? "请静握 1 秒，校准陀螺仪" : gyroCalibrationSaved ? "陀螺仪微调 · 沿用已保存校准" : "陀螺仪微调";
       } else {

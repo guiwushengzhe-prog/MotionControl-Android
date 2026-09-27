@@ -75,6 +75,36 @@ test('运动或加速度不稳定时不能校准；之后稳定一秒可恢复',
   assert.equal(mouse.update(sample(timestamp), true).calibrating, false)
 })
 
+test('自然握持的往复抖动可校准，持续转动和大动作仍不能混入零偏', () => {
+  const held = new GyroMouse()
+  const start = 1_000_000_000
+  let result
+  for (let step = 0; step <= 100; step++) {
+    const phase = 2 * Math.PI * step / 10
+    result = held.update(sample(start + step * STEP_NS, {
+      gx: 0.004 + 0.018 * Math.sin(phase) + (step === 25 || step === 75 ? 0.06 : 0),
+      gy: -0.003 + 0.012 * Math.cos(phase), gz: 0.005 + 0.008 * Math.sin(phase),
+      ax: 0, ay: 0, az: 9.80665,
+    }), true)
+    assert.equal(result.dx, 0)
+    assert.equal(result.dy, 0)
+  }
+  assert.equal(result!.calibrating, false)
+  assert.ok(Math.hypot(...held.getCalibration()!.bias) < 0.01)
+
+  const turning = new GyroMouse()
+  for (let step = 0; step <= 200; step++) {
+    assert.equal(turning.update(sample(start + step * STEP_NS, { gz: 0.05 }), true).calibrating, true)
+  }
+  const interrupted = new GyroMouse()
+  for (let step = 0; step <= 50; step++) interrupted.update(sample(start + step * STEP_NS), true)
+  assert.equal(interrupted.update(sample(start + 51 * STEP_NS, { gx: 0.2 }), true).calibrating, true)
+  for (let step = 52; step < 152; step++) {
+    assert.equal(interrupted.update(sample(start + step * STEP_NS), true).calibrating, true)
+  }
+  assert.equal(interrupted.update(sample(start + 152 * STEP_NS), true).calibrating, false)
+})
+
 test('按住和搓动期间无位移，松手不追补，也不残留低通和小数', () => {
   const { mouse, timestamp: start } = calibratedMouse()
   let timestamp = start + STEP_NS

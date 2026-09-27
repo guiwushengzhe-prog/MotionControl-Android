@@ -33,8 +33,9 @@ export interface GyroMouseCalibration {
 
 const CALIBRATION_SECONDS = 1
 const CALIBRATION_MIN_SAMPLES = 20
-const CALIBRATION_MAX_RATE = 0.035
-const CALIBRATION_MAX_STD = 0.0035
+const CALIBRATION_MAX_RATE = 0.15
+const CALIBRATION_MAX_MEAN_RATE = 0.035
+const CALIBRATION_MAX_STD = 0.02
 const MAX_GAP_SECONDS = 0.25
 const STILL_RATE = 0.002
 const STILL_CONFIRM_SECONDS = 0.15
@@ -205,7 +206,9 @@ export class GyroMouse {
       this.calibrationM2[axis] += delta * (rates[axis] - this.calibrationMean[axis])
     }
     if ((sample.timestamp - this.calibrationStart) / 1e9 < CALIBRATION_SECONDS || this.calibrationCount < CALIBRATION_MIN_SAMPLES) return
-    const stable = this.calibrationM2.every(value => Math.sqrt(value / this.calibrationCount) <= CALIBRATION_MAX_STD)
+    // 自然握持允许小幅往复抖动；用整秒平均值排除持续转动，避免每次轻微抖动都重新计时。
+    const stable = Math.hypot(...this.calibrationMean) <= CALIBRATION_MAX_MEAN_RATE
+      && this.calibrationM2.every(value => Math.sqrt(value / this.calibrationCount) <= CALIBRATION_MAX_STD)
     if (stable) {
       this.bias = [...this.calibrationMean]
       this.calibrated = true
