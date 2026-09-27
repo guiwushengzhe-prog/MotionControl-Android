@@ -10,6 +10,7 @@ import "./style.css";
 type ConnectionState = "offline" | "connecting" | "online" | "error";
 type VoiceStatus = "off" | "connecting" | "listening" | "error" | "unauthorized";
 type ModelChoice = "full" | "lite";
+type VoiceRecognitionMode = "computer" | "phone";
 type SyncedAction = { type?: string; target?: string; behavior?: string };
 type SyncedBinding = { label?: string; action?: SyncedAction; disabled?: boolean };
 type ControlConfigV1 = {
@@ -32,7 +33,7 @@ type ControlConfigV1 = {
   voice_grammar?: string[];
   // Whether to run the hand model, and on which hand.  The desktop asks only
   // while it is actually steering with a hand -- see the hand joint section.
-  hand_tracking?: { enabled?: boolean; hand?: string };
+  hand_tracking?: { enabled?: boolean; hand?: string; hands?: string[] };
   // Every address the desktop can be reached at, best link first.
   server_candidates?: { host?: string; port?: number; kind?: string }[];
 };
@@ -55,10 +56,11 @@ type MotionDebug = {
 declare global { interface Window { __motionDebug: MotionDebug; } }
 type LocalVoiceText = { text: string; confidence?: number; final: boolean; recognizer: string; recognizedAtMs: number };
 type NativeAudioApi = {
-  start(options?: { phrases?: string[]; grammar?: string[]; baseUrl?: string }): Promise<{ sampleRate: number; channels: number; format: string; source: string; recognizerReady: boolean; audioReady: boolean }>;
+  start(options?: { remote?: boolean; phrases?: string[]; grammar?: string[]; baseUrl?: string }): Promise<{ sampleRate: number; channels: number; format: string; source: string; recognizerReady: boolean; audioReady: boolean }>;
   stop(): Promise<void>;
   addListener(eventName: "voiceText", listener: (event: LocalVoiceText) => void): Promise<PluginListenerHandle>;
   addListener(eventName: "voiceState", listener: (event: { state: string; message: string }) => void): Promise<PluginListenerHandle>;
+  addListener(eventName: "audioChunk", listener: (event: { audio_base64: string; sample_rate: number; channels: number; format: string; captured_at_ms: number }) => void): Promise<PluginListenerHandle>;
   addListener(eventName: "audioError", listener: (event: { message: string }) => void): Promise<PluginListenerHandle>;
 };
 const NativeAudio = registerPlugin<NativeAudioApi>("NativeAudio");
@@ -79,6 +81,7 @@ app.innerHTML = `
       <div class="link-state" id="linkState" hidden><p id="linkLine"></p><div class="link-actions" id="linkActions"></div></div>
       <label>电脑地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label>
       <label>使用镜头<select id="cameraDeviceSelect"><option value="__auto__">自动选择</option></select></label>
+      <label>语音识别位置<select id="voiceRecognitionLocation"><option value="computer">电脑识别（使用手机麦克风）</option><option value="phone">手机识别</option></select></label>
       <label class="technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option></select></label>
       <div class="actions"><button id="startButton" class="start-primary">连接并开始</button></div><p class="warning" id="securityWarning"></p>
     </section>
@@ -116,6 +119,7 @@ const handheldCard = document.querySelector<HTMLElement>("#handheldCard")!;
 const badge = document.querySelector<HTMLElement>("#connectionBadge")!;
 const voiceControl = document.querySelector<HTMLElement>("#voiceControl")!;
 const voiceToggle = document.querySelector<HTMLInputElement>("#voiceToggle")!;
+const voiceRecognitionSelect = document.querySelector<HTMLSelectElement>("#voiceRecognitionLocation")!;
 voiceToggle.checked = localStorage.getItem("motionbridge-voice-auto") !== "0";
 const voiceStateLabel = document.querySelector<HTMLElement>("#voiceState")!;
 const hideStatus = document.querySelector<HTMLButtonElement>("#hideStatus")!;
@@ -148,6 +152,7 @@ let handheldTimer: number | null = null;
 let wakeLock: WakeLockSentinel | null = null;
 let nativeVoiceTextListener: PluginListenerHandle | null = null;
 let nativeVoiceStateListener: PluginListenerHandle | null = null;
+let nativeAudioChunkListener: PluginListenerHandle | null = null;
 let nativeAudioErrorListener: PluginListenerHandle | null = null;
 let running = false;
 let activeRole: "home" | "camera" | "handheld" = "home";
@@ -163,8 +168,11 @@ let selectedCameraDeviceId = "__auto__";
 let modelChoice: ModelChoice = "full";
 let cameraDevices: MediaDeviceInfo[] = [];
 let voiceEnabled = false;
+let voiceRecognitionMode: VoiceRecognitionMode = localStorage.getItem("motionbridge-voice-recognition") === "phone" ? "phone" : "computer";
+voiceRecognitionSelect.value = voiceRecognitionMode;
 let voiceState: VoiceStatus = "off";
 let sequence = 0;
+let voiceSequence = 0;
 let lastVideoTime = -1;
 let lastInferenceAt = 0;
 let inferenceBusy = false;
@@ -487,8 +495,8 @@ function applyControlConfig(message: unknown): void {
   // The grammar is fixed when the recognizer is built, so a phrase edited on
   // the desktop only becomes audible after a rebuild.  Restart just for a real
   // change: config arrives on every edit and on every reconnect.
-  const phrases = [...voicePhrases(), ...voiceGrammar()].join(" ");
-  if (voiceEnabled && phrases && phrases !== activeVoicePhrases) {
+  const phrases = [...voicePhrases(), ...voiceGrammar()].join("\u0000");
+  if (voiceEnabled && voiceRecognitionMode === "phone" && phrases !== activeVoicePhrases) {
     void (async () => { await stopVoiceControl(false); await startVoiceControl(); })();
   }
 }
@@ -915,7 +923,7 @@ function showStartError(error: unknown): void {
   setupCard.classList.remove("hidden");
   runtimeCard.classList.add("hidden");
 }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "需重新连接"; setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
+function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "需重新连接"; setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "voice_result" && voiceEnabled) { const text = String(message.final || message.partial || message.text || "").trim(); const command = String(message.command || message.result?.command || "").trim(); if (command) setVoiceStatus("listening", `已执行：${command}`); else if (text) setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); else if (message.matched === false) setVoiceStatus("listening", "语音未匹配到电脑口令"); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
 // 重连时重新挑一次，而不是死守断掉的那个地址：拔掉数据线就该自动落回 WiFi，
 // 换了网段也该自己找回来。
 async function reconnectToBestServer(): Promise<void> {
@@ -1070,7 +1078,7 @@ const POSE_WRIST: Record<HandSide, number> = { left: 15, right: 16 };
 const POSE_ELBOW: Record<HandSide, number> = { left: 13, right: 14 };
 const HAND_CROP_SIDE = 256;
 type PackedHand = { handedness: "Left" | "Right"; points: number[][] };
-let handTrackingSide: HandSide | null = null;
+let handTrackingSides: HandSide[] = [];
 let handLandmarker: HandLandmarker | null = null;
 let handModelLoading = false;
 const handCropCanvas = document.createElement("canvas");
@@ -1080,9 +1088,11 @@ const handCropContext = handCropCanvas.getContext("2d")!;
 
 function syncHandTracking(): void {
   const request = syncedControlConfig?.hand_tracking;
-  const hand = request?.hand;
-  handTrackingSide = request?.enabled && (hand === "left" || hand === "right") ? hand : null;
-  if (!handTrackingSide) { releaseHandModel(); return; }
+  const requested = request?.hands ?? [request?.hand];
+  handTrackingSides = request?.enabled
+    ? [...new Set(requested.filter((hand): hand is HandSide => hand === "left" || hand === "right"))]
+    : [];
+  if (!handTrackingSides.length) { releaseHandModel(); return; }
   if (handLandmarker || handModelLoading) return;
   handModelLoading = true;
   void loadHandModel().finally(() => { handModelLoading = false; });
@@ -1113,7 +1123,7 @@ async function loadHandModel(): Promise<void> {
     try { handLandmarker = await options("CPU"); } catch { handLandmarker = null; }
   }
   // 加载期间电脑可能已经把手控鼠标关掉了。
-  if (!handTrackingSide) releaseHandModel();
+  if (!handTrackingSides.length) releaseHandModel();
 }
 
 // 手掌在手腕之外，所以框心要沿着"手肘指向手腕"这个方向再往外推一点；框的大小
@@ -1137,9 +1147,8 @@ function handCropBox(points: NormalizedLandmark[], side: HandSide, width: number
   };
 }
 
-function detectHand(points: NormalizedLandmark[]): PackedHand | null {
-  const side = handTrackingSide;
-  if (!side || !handLandmarker) return null;
+function detectHand(points: NormalizedLandmark[], side: HandSide): PackedHand | null {
+  if (!handLandmarker) return null;
   const box = handCropBox(points, side, inferenceCanvas.width, inferenceCanvas.height);
   if (!box) return null;
   handCropContext.drawImage(inferenceCanvas, box.sx, box.sy, box.side, box.side,
@@ -1190,8 +1199,10 @@ function predict(now: number): void {
     const firstPose = poseResult.landmarks[0];
     // 手部关节只在电脑正用手控鼠标、并且连着的时候才跑：断开时这些点没地方去，
     // 白费一次推理和一份电。
-    const packedHand = firstPose && socket?.readyState === WebSocket.OPEN
-      ? detectHand(firstPose) : null;
+    // 同一视频帧顺序识别两只手，不复用上一帧的握拳状态；同手双轴只识别一次。
+    const packedHands = firstPose && socket?.readyState === WebSocket.OPEN
+      ? handTrackingSides.map(side => detectHand(firstPose, side))
+          .filter((hand): hand is PackedHand => hand !== null) : [];
     const elapsed = performance.now() - started;
     updateInferenceBudget(elapsed, now);
     motionDebug.lastInferenceMs = elapsed;
@@ -1230,7 +1241,7 @@ function predict(now: number): void {
         };
         // 保持紧凑控制载荷不变，同时为新版电脑携带可选的米制世界坐标。
         if (worldPoints.length === 33) frame.world_points = worldPoints;
-        if (packedHand) frame.hands = [packedHand];
+        if (packedHands.length) frame.hands = packedHands;
         socket.send(JSON.stringify(frame));
       } else {
         // Real-time control must prefer freshness over completeness. Never add
@@ -1272,16 +1283,86 @@ function startCameraFrameCounter(): void { cameraFrameLoop = typeof video.reques
 function applyMirror(): void { document.querySelector<HTMLElement>("#cameraStage")?.classList.toggle("front-mirror", facingMode === "user"); }
 
 // 复选框保存用户偏好；后台停止或启动报错只更新状态，不能把偏好改成关闭。
-async function stopVoiceControl(showOff = true): Promise<void> { voiceEnabled = false; activeVoicePhrases = ""; await nativeVoiceTextListener?.remove().catch(() => {}); await nativeVoiceStateListener?.remove().catch(() => {}); await nativeAudioErrorListener?.remove().catch(() => {}); nativeVoiceTextListener = null; nativeVoiceStateListener = null; nativeAudioErrorListener = null; await NativeAudio.stop().catch(() => {}); if (showOff) setVoiceStatus("off"); }
-async function startVoiceControl(): Promise<void> { if (activeRole !== "camera") { setVoiceStatus("error", "仅摄像头可用"); return; } if (voiceEnabled) return; if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "请先连接电脑"); return; } setVoiceStatus("connecting", "准备语音模型"); try { const phrases = voicePhrases(); const grammar = voiceGrammar(); activeVoicePhrases = [...phrases, ...grammar].join(" ");
-    // 状态监听必须在 start 之前挂上。第一次开语音要从电脑下载 65 MB，进度是在
-    // start 还没返回的那段时间里发出来的——挂晚了一条都收不到，界面看着像卡死。
-    nativeVoiceStateListener = await NativeAudio.addListener("voiceState", (event) => { if (!voiceEnabled && event.state !== "connecting") return; const detail = event.message || (event.state === "command" ? "已识别命令" : event.state === "listening" ? "语音识别已就绪" : "等待语音"); setVoiceStatus(event.state === "connecting" ? "connecting" : "listening", detail); });
-    const ready = await NativeAudio.start({ phrases: phrases.length ? phrases : undefined, grammar: grammar.length ? grammar : undefined, baseUrl: deviceHttpBase() }); if (!ready.recognizerReady) throw new Error("语音模型错误"); voiceEnabled = true; nativeVoiceTextListener = await NativeAudio.addListener("voiceText", (event) => { const text = (event.text || "").trim(); if (!voiceEnabled || !event.final || !text) return; setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "电脑已断开"); return; } const frame: Record<string, unknown> = { type: "voice_text", role: "camera", device_id: deviceId, sequence: sequence++, captured_at_ms: Date.now() + serverClockOffsetMs, text, confidence: event.confidence, final: true, source: "android_vosk_speech_service_v100" }; socket.send(JSON.stringify(frame)); }); nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => { setVoiceStatus("error", event.message || "手机语音错误"); void stopVoiceControl(false); }); setVoiceStatus("listening", "Vosk 受限语法已就绪"); } catch (error) { const message = error instanceof Error ? error.message : String(error); const denied = /未授权|permission|denied/i.test(message); await stopVoiceControl(false); // 插件报上来的话本来就是给人看的（"先连上电脑"、"电脑上没有中文语音模型"），
-    // 压成一句"模型错误"等于把唯一有用的线索丢掉。
-    setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : message || "错误"); } }
+async function stopVoiceControl(showOff = true): Promise<void> {
+  voiceEnabled = false;
+  activeVoicePhrases = "";
+  await nativeVoiceTextListener?.remove().catch(() => {});
+  await nativeVoiceStateListener?.remove().catch(() => {});
+  await nativeAudioChunkListener?.remove().catch(() => {});
+  await nativeAudioErrorListener?.remove().catch(() => {});
+  nativeVoiceTextListener = null;
+  nativeVoiceStateListener = null;
+  nativeAudioChunkListener = null;
+  nativeAudioErrorListener = null;
+  await NativeAudio.stop().catch(() => {});
+  if (showOff) setVoiceStatus("off");
+}
+async function startVoiceControl(): Promise<void> {
+  if (activeRole !== "camera") { setVoiceStatus("error", "仅摄像头可用"); return; }
+  if (voiceEnabled) return;
+  if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "请先连接电脑"); return; }
+  const remote = voiceRecognitionMode === "computer";
+  setVoiceStatus("connecting", remote ? "准备电脑识别" : "准备手机语音模型");
+  try {
+    const phrases = voicePhrases();
+    const grammar = voiceGrammar();
+    activeVoicePhrases = remote ? "" : [...phrases, ...grammar].join("\u0000");
+    // 先监听再启动，保留第一次下载手机模型时的进度反馈。
+    nativeVoiceStateListener = await NativeAudio.addListener("voiceState", (event) => {
+      if (!voiceEnabled && event.state !== "connecting") return;
+      const detail = event.message?.replace(/^Vosk\s+/, "手机语音") || (event.state === "command" ? "已识别命令" : event.state === "listening" ? "语音识别已就绪" : "等待语音");
+      setVoiceStatus(event.state === "connecting" ? "connecting" : "listening", detail);
+    });
+    nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => {
+      setVoiceStatus("error", event.message || "手机语音错误");
+      void stopVoiceControl(false);
+    });
+    if (remote) {
+      nativeAudioChunkListener = await NativeAudio.addListener("audioChunk", (event) => {
+        const frameSequence = voiceSequence++;
+        const audioBase64 = String(event.audio_base64 || "");
+        if (!voiceEnabled || !audioBase64 || socket?.readyState !== WebSocket.OPEN || socket.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) return;
+        socket.send(JSON.stringify({
+          type: "voice_audio", role: "camera", device_id: deviceId, sequence: frameSequence,
+          captured_at_ms: Number(event.captured_at_ms || Date.now()) + serverClockOffsetMs,
+          sample_rate: Number(event.sample_rate || 16000), channels: Number(event.channels || 1),
+          format: event.format || "pcm16le", audio_base64: audioBase64,
+        }));
+      });
+      const ready = await NativeAudio.start({ remote: true });
+      if (!ready.audioReady) throw new Error("手机麦克风采集未就绪");
+      voiceEnabled = true;
+      setVoiceStatus("listening", "电脑识别已就绪");
+    } else {
+      nativeVoiceTextListener = await NativeAudio.addListener("voiceText", (event) => {
+        const text = (event.text || "").trim();
+        if (!voiceEnabled || !event.final || !text) return;
+        setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`);
+        if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "电脑已断开"); return; }
+        socket.send(JSON.stringify({
+          type: "voice_text", role: "camera", device_id: deviceId, sequence: sequence++,
+          captured_at_ms: Date.now() + serverClockOffsetMs, text, confidence: event.confidence,
+          final: true, source: "android_vosk_speech_service_v100",
+        }));
+      });
+      const ready = await NativeAudio.start({
+        remote: false, phrases: phrases.length ? phrases : undefined,
+        grammar: grammar.length ? grammar : undefined, baseUrl: deviceHttpBase(),
+      });
+      if (!ready.recognizerReady) throw new Error("手机语音模型错误");
+      voiceEnabled = true;
+      setVoiceStatus("listening", "手机识别已就绪");
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const denied = /未授权|permission|denied/i.test(message);
+    await stopVoiceControl(false);
+    // 保留原生插件提供的具体失败原因，以及用户的语音开关偏好。
+    setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : message || "语音启动失败");
+  }
+}
 
-async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; releaseHandModel(); handTrackingSide = null; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline");
+async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; releaseHandModel(); handTrackingSides = []; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline");
   // 回到这一页就重新读一遍。人很可能就是刚刚按着上面那个按钮去把网络共享
   // 打开了再回来的——还给他看一句"两条路都没开"，那句话就从提示变成了错误。
   await refreshLinkState(); }
@@ -1401,6 +1482,11 @@ showStatus.addEventListener("click", () => { if (!running) return; runtimeCard.c
 modelSelect.value = modelChoice;
 modelSelect.addEventListener("change", () => { modelChoice = modelSelect.value === "lite" ? "lite" : "full"; localStorage.setItem("motionbridge-model", modelChoice); updateModelLabel(); });
 cameraDeviceSelect.addEventListener("change", () => void chooseCamera(cameraDeviceSelect.value));
+voiceRecognitionSelect.addEventListener("change", () => {
+  voiceRecognitionMode = voiceRecognitionSelect.value === "phone" ? "phone" : "computer";
+  localStorage.setItem("motionbridge-voice-recognition", voiceRecognitionMode);
+  if (voiceEnabled) void (async () => { await stopVoiceControl(false); await startVoiceControl(); })();
+});
 frontCameraButton.addEventListener("click", () => void chooseFacing("user")); backCameraButton.addEventListener("click", () => void chooseFacing("environment")); voiceToggle.addEventListener("change", () => { localStorage.setItem("motionbridge-voice-auto", voiceToggle.checked ? "1" : "0"); void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()); });
 document.querySelector("#centerSensor")!.addEventListener("click", () => { handheldRecenter = true; document.querySelector("#sensorState")!.textContent = "正在居中"; }); document.querySelector("#stopHandheld")!.addEventListener("click", () => void stopHandheld());
 document.querySelectorAll<HTMLElement>("[data-pad]").forEach((button) => { button.addEventListener("pointerdown", (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); padState.add(button.dataset.pad!); button.classList.add("pressed"); }); const release = () => { padState.delete(button.dataset.pad!); button.classList.remove("pressed"); }; button.addEventListener("pointerup", release); button.addEventListener("pointercancel", release); button.addEventListener("lostpointercapture", release); });

@@ -2,6 +2,10 @@ package cn.motioncontrol.app;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
+import android.util.Base64;
 
 import androidx.core.content.ContextCompat;
 
@@ -31,15 +35,15 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * MotionControl 1.00 offline command recognition.  Vosk SpeechService owns
- * microphone capture and buffering; raw PCM is never handled by this plugin.
- * Only final text leaves the recognizer.
+ * MotionControl 1.00 audio bridge.  The default mode keeps the older Vosk
+ * command recognizer; remote mode emits raw PCM chunks for computer recognition.
  */
 @CapacitorPlugin(name = "NativeAudio", permissions = {
         @Permission(alias = "microphone", strings = { Manifest.permission.RECORD_AUDIO })
 })
 public class NativeAudioPlugin extends Plugin {
     private static final int SAMPLE_RATE = 16_000;
+    private static final int REMOTE_CHUNK_BYTES = SAMPLE_RATE / 10 * 2;
     private static final String MODEL_DIR_NAME = "vosk-model-small-cn-0.22";
     // 这个模型以前是打进 APK 的：41.5 MB，整个安装包的一半，而那些文件跟连着的
     // 电脑上的逐字节一样。手机本来就必须有一台电脑才能用（识别出来的文字要发过
@@ -74,6 +78,9 @@ public class NativeAudioPlugin extends Plugin {
     private Model model;
     private Recognizer recognizer;
     private volatile boolean running;
+    private AudioRecord remoteAudioRecord;
+    private Thread remoteAudioThread;
+    private volatile boolean remoteRunning;
 
     @PluginMethod
     public void start(PluginCall call) {
@@ -82,7 +89,11 @@ public class NativeAudioPlugin extends Plugin {
             requestPermissionForAlias("microphone", call, "startAfterPermission");
             return;
         }
-        startRecognizer(call);
+        if (Boolean.TRUE.equals(call.getBoolean("remote", false))) {
+            startRemoteAudio(call);
+        } else {
+            startRecognizer(call);
+        }
     }
 
     @PermissionCallback
@@ -92,10 +103,96 @@ public class NativeAudioPlugin extends Plugin {
             call.reject("麦克风未授权");
             return;
         }
-        startRecognizer(call);
+        if (Boolean.TRUE.equals(call.getBoolean("remote", false))) {
+            startRemoteAudio(call);
+        } else {
+            startRecognizer(call);
+        }
+    }
+
+    private void startRemoteAudio(PluginCall call) {
+        // 远程模式只把原始音频发给电脑，不准备手机语音模型。
+        stopRecognizer();
+        synchronized (lock) {
+            if (remoteRunning) {
+                call.resolve(formatResult());
+                return;
+            }
+            int minimum = AudioRecord.getMinBufferSize(
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT);
+            if (minimum <= 0) {
+                call.reject("手机不支持 16kHz 单声道录音");
+                return;
+            }
+            int bufferSize = Math.max(minimum, REMOTE_CHUNK_BYTES * 2);
+            AudioRecord recorder = null;
+            try {
+                recorder = new AudioRecord(
+                        MediaRecorder.AudioSource.DEFAULT,
+                        SAMPLE_RATE,
+                        AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                        bufferSize);
+                if (recorder.getState() != AudioRecord.STATE_INITIALIZED) {
+                    throw new IOException("手机录音设备初始化失败");
+                }
+                recorder.startRecording();
+                final AudioRecord activeRecorder = recorder;
+                remoteAudioRecord = activeRecorder;
+                remoteRunning = true;
+                remoteAudioThread = new Thread(() -> captureRemoteAudio(activeRecorder), "remote-audio");
+                remoteAudioThread.start();
+                notifyVoiceState("listening", "远程语音采集已就绪");
+                call.resolve(formatResult());
+            } catch (Exception error) {
+                if (recorder != null) {
+                    try { recorder.release(); } catch (Exception ignored) { }
+                }
+                remoteAudioRecord = null;
+                remoteRunning = false;
+                call.reject("远程语音采集失败: " + safeMessage(error), error);
+            }
+        }
+    }
+
+    private void captureRemoteAudio(AudioRecord recorder) {
+        byte[] chunk = new byte[REMOTE_CHUNK_BYTES];
+        int filled = 0;
+        try {
+            while (remoteRunning && remoteAudioRecord == recorder) {
+                int count = recorder.read(chunk, filled, chunk.length - filled);
+                if (count < 0) {
+                    throw new IOException("手机录音读取失败: " + count);
+                }
+                if (count == 0) {
+                    continue;
+                }
+                filled += count;
+                if (filled < chunk.length) {
+                    continue;
+                }
+                JSObject event = new JSObject()
+                        .put("audio_base64", Base64.encodeToString(chunk, Base64.NO_WRAP))
+                        .put("sample_rate", SAMPLE_RATE)
+                        .put("channels", 1)
+                        .put("format", "pcm16le")
+                        .put("captured_at_ms", System.currentTimeMillis());
+                notifyListeners("audioChunk", event);
+                filled = 0;
+            }
+        } catch (Exception error) {
+            if (remoteRunning) {
+                notifyListeners("audioError", new JSObject().put("message", "远程语音采集错误: " + safeMessage(error)));
+            }
+        } finally {
+            stopRemoteAudio();
+        }
     }
 
     private void startRecognizer(PluginCall call) {
+        stopRemoteAudio();
         synchronized (lock) {
             if (running) {
                 call.resolve(formatResult());
@@ -147,6 +244,7 @@ public class NativeAudioPlugin extends Plugin {
     @PluginMethod
     public void stop(PluginCall call) {
         stopRecognizer();
+        stopRemoteAudio();
         call.resolve();
     }
 
@@ -224,9 +322,9 @@ public class NativeAudioPlugin extends Plugin {
                 .put("sampleRate", SAMPLE_RATE)
                 .put("channels", 1)
                 .put("format", "pcm16le")
-                .put("source", "native_vosk_speech_service_v100")
+                .put("source", remoteRunning ? "android_audio_record_remote_v100" : "native_vosk_speech_service_v100")
                 .put("recognizerReady", running && model != null && recognizer != null && speechService != null)
-                .put("audioReady", running && speechService != null);
+                .put("audioReady", remoteRunning || (running && speechService != null));
     }
 
     private final class VoiceListener implements RecognitionListener {
@@ -304,6 +402,26 @@ public class NativeAudioPlugin extends Plugin {
         }
         if (activeModel != null) {
             try { activeModel.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    private void stopRemoteAudio() {
+        AudioRecord activeRecord;
+        Thread activeThread;
+        synchronized (lock) {
+            remoteRunning = false;
+            activeRecord = remoteAudioRecord;
+            remoteAudioRecord = null;
+            activeThread = remoteAudioThread;
+            remoteAudioThread = null;
+        }
+        if (activeRecord != null) {
+            try { activeRecord.stop(); } catch (Exception ignored) { }
+            try { activeRecord.release(); } catch (Exception ignored) { }
+        }
+        if (activeThread != null && activeThread != Thread.currentThread()) {
+            activeThread.interrupt();
+            try { activeThread.join(250L); } catch (InterruptedException error) { Thread.currentThread().interrupt(); }
         }
     }
 
@@ -398,12 +516,14 @@ public class NativeAudioPlugin extends Plugin {
     @Override
     protected void handleOnPause() {
         stopRecognizer();
+        stopRemoteAudio();
         super.handleOnPause();
     }
 
     @Override
     protected void handleOnDestroy() {
         stopRecognizer();
+        stopRemoteAudio();
         super.handleOnDestroy();
     }
 }
