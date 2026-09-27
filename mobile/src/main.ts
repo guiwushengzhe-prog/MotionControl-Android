@@ -1524,7 +1524,8 @@ async function sendHandheldFrame(): Promise<void> {
           orientation: screen.orientation?.angle ?? 0,
         });
         const coarse = stickMouse.update(shooterState.stick, shooterState.stickPressed, performance.now(), Number(document.querySelector<HTMLInputElement>("#stickSensitivity")!.value));
-        const result = await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx: gyro.dx + coarse.dx, dy: gyro.dy + coarse.dy, sessionId });
+        // 陀螺仪默认反向 X、Y 两轴，浮动摇杆保持原方向。
+        const result = await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx: coarse.dx - gyro.dx, dy: coarse.dy - gyro.dy, sessionId });
         if (!result.sent) throw new Error("蓝牙鼠标输出未送达，请检查连接");
         document.querySelector("#sensorState")!.textContent = shooterState.stickPressed ? "摇杆大移动 · 陀螺仪暂停" : gyro.calibrating ? "请静握 1 秒，校准陀螺仪" : "陀螺仪微调";
       } else {
