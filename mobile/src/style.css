@@ -1,6 +1,54 @@
-:root { color-scheme: dark; font-family: Inter, "Microsoft YaHei UI", system-ui, sans-serif; color: #f5f7f8; background: #080b0f; }
+/* 手机端配色和电脑端「石墨」（夜间）是同一套。手机只在玩的时候看：摄像头画面本来就是
+   暗的，手柄握在手里，所以固定用深色，不随系统切换。颜色只在这里定义，下面只用变量。 */
+:root {
+  --bg: #0b0b0c;
+  --card: #1c1c1e;
+  --fill: #2c2c2e;
+  --fill-2: #3a3a3c;
+  --fill-3: #48484a;
+  --hud: rgba(28, 28, 30, .92);
+  --seg-bg: rgba(118, 118, 128, .24);
+  --seg-on: #636366;
+  --line: rgba(255, 255, 255, .1);
+  --line-strong: rgba(255, 255, 255, .2);
+  --text: #f5f5f7;
+  --text-2: #a1a1a6;
+  --text-3: #6e6e73;
+  --accent: #0a84ff;
+  --accent-press: #409cff;
+  --tint: rgba(10, 132, 255, .2);
+  --on-tint: #64b1ff;
+  --ok: #30d158;
+  --ok-tint: rgba(48, 209, 88, .16);
+  --ok-deep: #0e2a17;
+  --warn: #ff9f0a;
+  --warn-tint: rgba(255, 159, 10, .14);
+  --danger: #ff6961;
+  --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a1a1a6' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Noto Sans CJK SC", "Microsoft YaHei UI", system-ui, sans-serif;
+
+  color-scheme: dark;
+  color: var(--text);
+  background: var(--bg);
+  font-family: var(--font);
+  -webkit-tap-highlight-color: transparent;
+}
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100dvh; overflow: hidden; background: #080b0f; }
+body { margin: 0; min-height: 100dvh; overflow: hidden; background: var(--bg); font-size: 15px; line-height: 1.4; -webkit-font-smoothing: antialiased; }
+h1, h2, p { margin: 0; }
+button, input, select { font: inherit; color: inherit; }
+button { min-height: 44px; padding: 10px 16px; border: 0; border-radius: 12px; background: var(--fill); color: var(--text); font-weight: 600; cursor: pointer; touch-action: manipulation; }
+button:disabled { opacity: .45; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+svg { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+input, select { width: 100%; min-height: 46px; padding: 10px 12px; border: 0; border-radius: 12px; background: var(--fill); color: var(--text); font-size: 16px; }
+select { appearance: none; padding-right: 34px; background: var(--fill) var(--chev) no-repeat right 14px center; }
+input::placeholder { color: var(--text-3); }
+input[type="range"] { min-height: 28px; padding: 0; background: transparent; accent-color: var(--accent); }
+.hidden { display: none !important; }
+.technical { display: none !important; }
+
+/* 原生相机预览时网页要整个透明，画面在网页下面。 */
 html.native-preview,
 html.native-preview body,
 html.native-preview body #app { background: transparent !important; }
@@ -11,349 +59,216 @@ html.native-preview body::after,
 html.native-preview body #app::before,
 html.native-preview body #app::after { background: transparent !important; }
 html.native-preview body #camera { visibility: hidden; background: transparent; }
+
+/* ---- 摄像头画面 ---------------------------------------------------------------- */
 #cameraStage { position: fixed; inset: 0; width: 100%; height: 100%; transform-origin: center; }
 #cameraStage.front-mirror { transform: scaleX(-1); }
 #camera, #overlay, .shade { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
-#inferenceCanvas { display: none; }
-#camera { background: radial-gradient(circle at center, #17242b, #080b0f 70%); }
+#camera { background: #000; }
 #overlay { z-index: 2; background: transparent; }
-/* 暗角压在画面上、框的下面。原来压在框上面，画面最上面那段（头顶区）的框被压暗了六成。 */
-.shade { z-index: 1; pointer-events: none; background: linear-gradient(180deg, rgba(0,0,0,.64), transparent 30%, transparent 65%, rgba(0,0,0,.72)); }
-header { position: fixed; z-index: 4; left: max(20px, env(safe-area-inset-left)); right: max(20px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); display: flex; justify-content: space-between; align-items: flex-start; }
-header p { color: #c8ff38; letter-spacing: .16em; font-size: 9px; font-weight: 900; margin: 0 0 3px; }
-h1 { margin: 0; font-size: clamp(20px, 4vw, 32px); letter-spacing: -.04em; }
-.badge { display: flex; align-items: center; gap: 7px; border: 1px solid rgba(255,255,255,.2); background: rgba(8,11,15,.88); padding: 8px 10px; border-radius: 99px; font-size: 11px; }
-.badge i { width: 8px; height: 8px; border-radius: 50%; background: #78818b; }
-.badge.connecting i { background: #ffd84c; }
-.badge.online i { background: #c8ff38; box-shadow: 0 0 12px #c8ff38; }
-.badge.error i { background: #ff6b45; }
-.voice-control { pointer-events: auto; position: fixed; z-index: 5; top: max(62px, env(safe-area-inset-top)); right: max(20px, env(safe-area-inset-right)); display: flex; align-items: center; gap: 10px; padding: 8px 11px; border: 1px solid rgba(255,255,255,.2); border-radius: 10px; background: rgba(8,11,15,.94); font-size: 11px; }
-.voice-control label { display: flex; align-items: center; gap: 7px; color: #f5f7f8; }
-.voice-control input { width: 16px; height: 16px; margin: 0; accent-color: #c8ff38; }
-.voice-state { color: #9aa6b0; min-width: 42px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
-.voice-state.connecting { color: #ffd84c; }.voice-state.listening { color: #c8ff38; }.voice-state.error,.voice-state.unauthorized { color: #ff9b7f; }
-main { position: fixed; z-index: 4; inset: 0; display: grid; place-items: center; pointer-events: none; }
-.setup-card { pointer-events: auto; width: min(460px, calc(100vw - 32px)); padding: 22px; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; background: rgba(11,16,20,.88); backdrop-filter: blur(18px); box-shadow: 0 20px 80px rgba(0,0,0,.45); }
-.setup-card h2 { margin: 0 0 5px; font-size: 24px; }
-.setup-card p { color: #9aa6b0; font-size: 12px; line-height: 1.55; }
-label { display: grid; gap: 6px; color: #a8b2bb; font-size: 11px; }
-input, select { width: 100%; color: #f5f7f8; background: #080c10; border: 1px solid #303a43; border-radius: 9px; padding: 11px 12px; font: inherit; }
-.actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 13px; }
-button { border: 0; border-radius: 9px; padding: 11px 15px; background: #c8ff38; color: #111704; font: inherit; font-weight: 900; }
-button.secondary, button.stop { color: #f5f7f8; border: 1px solid #39434c; background: transparent; }
-.warning { color: #ffb29d !important; margin-bottom: 0; }
-.runtime-card { pointer-events: auto; position: fixed; z-index: 4; left: 50%; bottom: max(12px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(720px, calc(100vw - 24px)); padding: 12px; border: 1px solid rgba(255,255,255,.2); border-radius: 16px; background: rgba(8,12,16,.95); box-shadow: 0 12px 36px rgba(0,0,0,.28); }
-.status-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 14px; min-height: 38px; color: #f5f7f8; font-size: 11px; }
-.status-summary strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-summary span { flex: 0 0 auto; color: #aab5be; white-space: nowrap; }
-.status-summary span b { color: #f5f7f8; font-weight: 800; }
-.status-summary small { max-width: 32vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ffb29d; font-size: 10px; }
+#inferenceCanvas { display: none; }
+/* 暗角压在画面上、框的下面：上下两头的字和按钮在什么背景上都看得清。 */
+.shade { z-index: 1; pointer-events: none; background: linear-gradient(180deg, rgba(0,0,0,.5), transparent 22%, transparent 68%, rgba(0,0,0,.6)); }
 
-.profile-sync { display: grid; gap: 7px; padding: 9px 10px; border: 1px solid rgba(255,255,255,.1); border-radius: 11px; background: rgba(255,255,255,.035); }
-.profile-sync-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 10px; color: #8f9ba5; }
-.profile-sync-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #f5f7f8; font-size: 11px; }
-.profile-sync-head small { margin-left: auto; flex: 0 0 auto; color: #7d8993; }
-.profile-sync-head small.fresh { color: #c8ff38; }
-.profile-sync-head small.cached { color: #ffd84c; }
-.profile-sync-bindings { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; }
-.profile-sync-bindings span { min-width: 0; display: grid; gap: 2px; padding: 5px 6px; border-radius: 7px; background: rgba(0,0,0,.24); }
-.profile-sync-bindings i { font-style: normal; color: #788793; font-size: 9px; }
-.profile-sync-bindings b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #eef3f5; font-size: 9px; font-weight: 700; }
-.handheld-profile-sync { align-self: start; }
-.runtime-camera-choice { display: grid; gap: 7px; margin-top: 10px; }
-.control-label { color: #aab5be; font-size: 11px; }
-.camera-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.camera-buttons button { color: #e9f0f4; border: 1px solid #394650; background: #131b23; padding: 10px 12px; touch-action: manipulation; }
-.camera-buttons button.selected { color: #111704; border-color: #c8ff38; background: #c8ff38; }
-.camera-switch-state { min-height: 14px; color: #ffb29d; font-size: 10px; }
-.runtime-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.runtime-voice { display: flex; align-items: center; gap: 6px; min-width: 0; color: #f5f7f8; font-size: 11px; }
-.runtime-voice label { display: flex; align-items: center; gap: 6px; }
-.runtime-voice input { width: 16px; height: 16px; margin: 0; accent-color: #c8ff38; }
-.runtime-voice span { color: #aab5be; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-hide, .status-show { color: #d7e0e6; border: 1px solid rgba(255,255,255,.2); background: rgba(8,12,16,.94); font-size: 10px; font-weight: 700; white-space: nowrap; }
-.status-hide { padding: 9px 11px; }
-.status-show { pointer-events: auto; position: fixed; z-index: 6; right: max(12px, env(safe-area-inset-right)); bottom: calc(max(12px, env(safe-area-inset-bottom)) + 8px); min-width: 76px; min-height: 34px; padding: 7px 10px; border-radius: 9px; touch-action: manipulation; }
-.status-show.hidden { display: none; }
-.guide { position: fixed; z-index: 4; top: 50%; left: 50%; width: min(72vw, 720px); aspect-ratio: 1.25; transform: translate(-50%, -48%); border: 1px dashed rgba(200,255,56,.4); border-radius: 42% 42% 20% 20%; pointer-events: none; }
-.guide span { position: absolute; top: -25px; left: 50%; transform: translateX(-50%); width: max-content; color: #c8ff38; font-size: 10px; }
-.loading { position: fixed; z-index: 7; inset: 0; background: rgba(5,8,11,.9); display: grid; place-content: center; justify-items: center; gap: 15px; }
-.loading i { width: 38px; height: 38px; border: 3px solid #35404a; border-top-color: #c8ff38; border-radius: 50%; animation: spin .8s linear infinite; }
-.loading b { font-size: 12px; }
-.technical { display: none !important; }
-.hidden { display: none !important; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.role-card { width: min(520px, calc(100vw - 32px)); }
-.role-card h2 { text-align: center; margin-bottom: 18px; }
-.role-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.role-grid button { min-height: 96px; font-size: 19px; }
-.card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-.text-button { color: #b9c4cc; background: transparent; padding: 5px; }
-.handheld-card { pointer-events: auto; position: fixed; inset: max(60px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom)); display: grid; grid-template-rows: auto auto auto 1fr; gap: 10px; }
-.handheld-top { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.15); border-radius: 12px; background: rgba(8,12,16,.9); }
-.handheld-connection-row label { flex: 1; min-width: 0; }
-.handheld-top label { grid-template-columns: auto 110px; align-items: center; }
-.handheld-top > span:nth-of-type(2) { display: grid; gap: 2px; color: #f5f7f8; font-size: 11px; }
-.handheld-top small { color: #91a0ab; }
-.shoulders { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; }
-.shoulders button, .face-buttons button, .middle-buttons button { color: #f5f7f8; background: #131b23; border: 1px solid #384652; touch-action: none; }
-.handheld-card button.pressed { color: #111704; background: #c8ff38; }
-.gamepad { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 22px; }
-.stick { width: min(32vh, 210px); aspect-ratio: 1; justify-self: center; border-radius: 50%; border: 2px solid #4b5964; background: radial-gradient(circle,#202b34 0 26%,#10171e 27% 100%); touch-action: none; display: grid; place-items: center; }
-.stick i { width: 42%; aspect-ratio: 1; border-radius: 50%; background: #c8ff38; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
-.face-buttons { width: min(34vh,230px); aspect-ratio: 1; justify-self: center; display: grid; grid-template: repeat(3,1fr)/repeat(3,1fr); gap: 7px; }
-.face-buttons button { border-radius: 50%; font-size: 18px; }
-.face-buttons [data-pad="y"] { grid-area:2/1; }.face-buttons [data-pad="x"] { grid-area:1/2; }.face-buttons [data-pad="b"] { grid-area:2/3; }.face-buttons [data-pad="a"] { grid-area:3/2; }
-.middle-buttons { display: grid; gap: 10px; }
-@media (orientation: portrait) {
-  .guide { width: 82vw; aspect-ratio: .56; }
-  .runtime-card { left: 50%; width: calc(100vw - 16px); }
-  .status-summary { gap: 7px; padding: 8px 9px; font-size: 10px; }
-  .status-hide { padding: 7px 8px; }
-  .status-summary span { max-width: 20vw; overflow: hidden; text-overflow: ellipsis; }
-  .profile-sync-bindings { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .runtime-actions { align-items: stretch; }
-  .runtime-actions > button { flex: 1; min-width: 0; padding: 9px 8px; }
-  .handheld-card { inset-top: 70px; }
-  .gamepad { grid-template-columns: 1fr 1fr; }
-  .middle-buttons { grid-column: 1/-1; grid-row: 2; grid-template-columns: 1fr 1fr; }
-  .stick,.face-buttons { width:min(40vw,210px); }
-}
+/* ---- 页头 ------------------------------------------------------------------------ */
+.app-header { position: fixed; z-index: 4; top: 0; left: 0; right: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: max(14px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) 10px max(18px, env(safe-area-inset-left)); pointer-events: none; }
+.app-header > * { pointer-events: auto; }
+.brand { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.brand h1 { font-size: 17px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
+.brand span { overflow: hidden; color: var(--text-3); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+/* 还没选用法的时候没有东西可连，不挂「未连接电脑」。 */
+body[data-role="home"] #connectionBadge { display: none; }
 
-/* MotionControl 1.00 product UI */
-:root{--mc-bg:#080c11;--mc-surface:#101720;--mc-surface2:#17212c;--mc-line:#2b3744;--mc-text:#eef4f8;--mc-muted:#8d9ba7;--mc-accent:#6ba8ff;--mc-success:#58d18b;--mc-danger:#eb6a73;--mc-warning:#ddb25c}
-body{background:var(--mc-bg);color:var(--mc-text)}
-.app-header{padding:max(14px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) 12px max(16px,env(safe-area-inset-left));background:linear-gradient(180deg,rgba(7,11,15,.9),rgba(7,11,15,.28));pointer-events:none}.app-header>*{pointer-events:auto}.mobile-brand p{color:#8bb9f5;letter-spacing:.12em;font-size:9px}.mobile-brand h1{font-size:clamp(20px,5vw,28px)}.mobile-brand small{display:block;margin-top:4px;color:#8998a5;font-size:10px}
-.badge{border-color:rgba(255,255,255,.13);background:rgba(11,17,23,.9);color:#b9c4cd}.badge.online i{background:var(--mc-success);box-shadow:none}.badge.connecting i{background:var(--mc-warning)}.badge.error i{background:var(--mc-danger)}
-.setup-card{width:min(500px,calc(100vw - 28px));padding:20px;border:1px solid var(--mc-line);border-radius:20px;background:rgba(14,20,27,.95);box-shadow:0 20px 70px rgba(0,0,0,.4);backdrop-filter:blur(18px)}.setup-card h2{font-size:23px;letter-spacing:-.02em}.eyebrow{display:block;color:#7faef0;font-size:9px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}.role-lead,.setup-help{margin:8px 0 16px;color:var(--mc-muted);font-size:12px;line-height:1.55}.role-grid{gap:9px}.role-option{min-height:116px!important;display:grid;align-content:center;justify-items:start;gap:5px;padding:16px!important;border:1px solid var(--mc-line)!important;border-radius:14px!important;background:#131c25!important;color:var(--mc-text)!important;text-align:left}.role-option.recommended{border-color:#365d88!important;background:#142236!important}.role-option strong{font-size:17px}.role-option small{color:#8f9eaa;font-size:10px}.role-symbol{font-size:18px;color:#77aef7}.role-option.recommended .role-symbol{color:var(--mc-success)}
-label{color:#9ca9b5;font-size:11px}.setup-card input,.setup-card select,.handheld-card input,.handheld-card select{min-height:44px;border-color:var(--mc-line);border-radius:10px;background:#0a1016;color:var(--mc-text)}.actions{grid-template-columns:1fr}.start-primary{min-height:52px;border-radius:11px;background:#3f84e8;color:white;font-size:15px}.text-button{color:#aebbc6}.warning{color:#f0a79d!important}
-.runtime-card{width:min(760px,calc(100vw - 18px));padding:11px;border-color:var(--mc-line);border-radius:17px;background:rgba(10,15,21,.96)}.runtime-primary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:3px 3px 10px}.runtime-primary>div{min-width:0}.runtime-primary strong{display:block;margin-top:3px;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.runtime-link{flex:0 0 auto;color:#8e9ca8;font-size:10px}.runtime-link b{display:block;margin-top:2px;color:#dfe7ed}.profile-sync{border-color:var(--mc-line);background:#111922;padding:9px}.profile-sync-head b{font-size:12px}.profile-coverage{color:#8fa0ad;font-size:9px}.profile-sync-bindings{gap:4px}.profile-sync-bindings span{background:#0b1117;border:1px solid #1f2a35}.runtime-camera-choice{grid-template-columns:auto 1fr;align-items:center;gap:8px;margin-top:9px}.runtime-camera-choice .control-label{font-size:10px}.camera-buttons{grid-template-columns:1fr 1fr;gap:5px}.camera-buttons button{min-height:38px;padding:8px;border-color:var(--mc-line);background:#151f29}.camera-buttons button.selected{border-color:#4785ce;background:#244b78;color:#eaf4ff}.camera-switch-state{grid-column:1/-1}.runtime-actions{margin-top:8px}.runtime-voice{padding:0 4px}.runtime-voice input{accent-color:var(--mc-success)}.runtime-actions button{min-height:40px}.runtime-actions .stop{border-color:#653740;color:#ffd9dd;background:#2a171c}.status-hide,.status-show{border-color:var(--mc-line);background:#111922}.guide{border-color:rgba(107,168,255,.38)}
-.handheld-card{gap:8px}.handheld-top,.handheld-profile-sync{border-color:var(--mc-line);background:rgba(12,18,24,.94)}.shoulders button,.face-buttons button,.middle-buttons button{border-color:#34414e;background:#131c25}.handheld-card button.pressed{background:#3f84e8;color:white}.stick{border-color:#40505f;background:radial-gradient(circle,#24313d 0 26%,#111820 27% 100%)}.stick i{background:#6ba8ff}
-button{min-height:42px;background:#3f84e8;color:white}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #78b2ff;outline-offset:2px}
-@media(max-width:600px){.app-header{padding-left:12px;padding-right:12px}.mobile-brand small{display:none}.setup-card{padding:16px}.role-grid{grid-template-columns:1fr}.role-option{min-height:86px!important}.runtime-card{bottom:max(7px,env(safe-area-inset-bottom));padding:9px}.profile-sync-bindings{grid-template-columns:repeat(3,minmax(0,1fr))}.runtime-camera-choice{grid-template-columns:1fr}.runtime-actions{gap:6px}.status-hide,.runtime-actions .stop{padding:8px 10px}}
-.runtime-actions .game-control{border-color:#3b6fa5;background:#14283b;color:#b9dcff}.runtime-actions .game-control.enabled{border-color:#55c985;background:#173d2d;color:#d5ffe5}
+.badge { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 6px 12px; border-radius: 999px; background: var(--hud); color: var(--text-2); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.badge b { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.badge i { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--text-3); }
+.badge.connecting i { background: var(--warn); }
+.badge.online { color: var(--text); }
+.badge.online i { background: var(--ok); }
+.badge.error i { background: var(--danger); }
 
-/* 连接出问题时才出现的那一块。正常情况下它根本不渲染,所以只有一种颜色。 */
-.link-state {
-  margin: 0 0 14px;
-  padding: 11px 13px;
-  border: 1px solid rgba(235, 188, 153, .42);
-  border-radius: 12px;
-  background: rgba(235, 188, 153, .06);
-}
+main { position: fixed; z-index: 4; inset: 0; display: grid; place-items: center; padding: 64px 16px 20px; pointer-events: none; }
+
+/* ---- 选用法、连接电脑：一张卡片 --------------------------------------------------- */
+.sheet { pointer-events: auto; width: min(460px, 100%); max-height: calc(100dvh - 84px); overflow-y: auto; padding: 22px 18px 18px; border-radius: 22px; background: var(--card); }
+.sheet h2 { font-size: 24px; font-weight: 700; letter-spacing: -.01em; }
+
+.role-card h2 { margin: 2px 4px 16px; }
+.role-list { display: grid; gap: 10px; }
+.role-option { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 14px; width: 100%; min-height: 84px; padding: 16px 12px 16px 14px; border-radius: 16px; background: var(--fill); text-align: left; font-weight: 400; }
+.role-option:active { background: var(--fill-2); }
+.role-icon { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 13px; background: var(--tint); color: var(--on-tint); }
+.role-icon svg { width: 25px; height: 25px; }
+.role-text { display: grid; gap: 3px; min-width: 0; }
+.role-text strong { font-size: 18px; font-weight: 700; }
+.role-text small { color: var(--text-2); font-size: 13px; }
+.role-tail { display: flex; align-items: center; gap: 6px; color: var(--text-3); }
+.role-tail svg { width: 18px; height: 18px; }
+.role-tag { padding: 3px 9px; border-radius: 999px; background: var(--ok-tint); color: var(--ok); font-size: 12px; font-style: normal; font-weight: 600; }
+
+.back-button { display: inline-flex; align-items: center; gap: 2px; min-height: 36px; margin: -8px 0 6px -8px; padding: 6px 10px 6px 4px; background: transparent; color: var(--accent); font-size: 16px; font-weight: 500; }
+.back-button svg { width: 20px; height: 20px; }
+.setup-help { margin: 6px 0 18px; color: var(--text-2); font-size: 14px; }
+.start-primary { width: 100%; min-height: 54px; border-radius: 14px; background: var(--accent); color: #fff; font-size: 17px; font-weight: 700; }
+.start-primary:active { background: var(--accent-press); }
+.warning { margin-top: 10px; color: var(--danger); font-size: 14px; }
+.warning:empty { display: none; }
+
+/* 自动找不到电脑时才出现，说清原因和下一步。 */
+.link-state { margin: 0 0 14px; padding: 12px 14px; border-radius: 14px; background: var(--warn-tint); }
 .link-state[hidden] { display: none; }
-.link-state p { margin: 0; font-size: 13px; line-height: 1.65; color: #ebbc99; }
-.link-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 9px; }
+.link-state p { color: var(--text); font-size: 14px; line-height: 1.55; white-space: pre-line; }
+.link-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .link-actions:empty { display: none; }
+.link-actions button { min-height: 38px; padding: 8px 14px; border-radius: 999px; background: var(--fill-2); font-size: 14px; }
 
-/* 触发牌：打游戏时游戏是全屏的，人看的就是手机上这一块。字要大。 */
-.trigger-board { display: grid; justify-items: center; gap: 2px; padding: 10px 16px; border-radius: 14px; border: 2px solid rgba(255,255,255,.14); background: rgba(8,12,16,.88); transition: border-color .12s, background .12s; }
+/* 折叠区：「更多设置」「灵敏度」「更多」 */
+details > summary { display: flex; align-items: center; justify-content: space-between; min-height: 44px; list-style: none; cursor: pointer; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::after { content: ""; width: 7px; height: 7px; margin-right: 6px; border-right: 2px solid var(--text-3); border-bottom: 2px solid var(--text-3); transform: rotate(45deg) translateY(-2px); transition: transform .2s; }
+details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
+.more { margin-top: 16px; padding-top: 2px; border-top: 1px solid var(--line); }
+.more summary { color: var(--text-2); font-size: 15px; }
+.field { display: grid; gap: 6px; margin-top: 12px; color: var(--text-2); font-size: 13px; }
+.more .field:first-of-type { margin-top: 4px; }
+
+/* 分段按钮：手柄 / 鼠标 */
+.seg { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: 2px; padding: 2px; border-radius: 11px; background: var(--seg-bg); }
+.seg button { min-height: 36px; padding: 6px 16px; border-radius: 9px; background: transparent; color: var(--text-2); font-size: 15px; }
+.seg button[aria-pressed="true"] { background: var(--seg-on); color: var(--text); }
+
+/* ---- 摄像头运行中：底部一块控制条 ----------------------------------------------------- */
+.hud { pointer-events: auto; position: fixed; z-index: 4; left: 50%; bottom: max(10px, env(safe-area-inset-bottom)); transform: translateX(-50%); display: grid; gap: 10px; width: min(560px, calc(100vw - 16px)); padding: 12px; border-radius: 24px; background: var(--hud); }
+.hud-status { display: flex; align-items: center; gap: 10px; min-height: 28px; padding: 0 4px; }
+.hud-status .dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--text-3); }
+.hud[data-link="online"] .dot { background: var(--ok); }
+.hud[data-link="connecting"] .dot { background: var(--warn); }
+.hud[data-link="error"] .dot { background: var(--danger); }
+#sendState { flex: 1; min-width: 0; overflow: hidden; font-size: 17px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
+#panelConnection { flex: none; color: var(--text-2); font-size: 13px; font-weight: 600; }
+/* 连上了就只剩绿点；没连上才写字。 */
+.hud[data-link="online"] #panelConnection { display: none; }
+.voice-state { flex: 0 1 auto; max-width: 48%; overflow: hidden; color: var(--text-2); font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
+.voice-state.off { display: none; }
+.voice-state.listening { color: var(--ok); }
+.voice-state.connecting { color: var(--warn); }
+.voice-state.error, .voice-state.unauthorized { color: var(--danger); }
+
+.game-control { width: 100%; min-height: 56px; border-radius: 16px; background: var(--accent); color: #fff; font-size: 18px; font-weight: 700; }
+.game-control:active { background: var(--accent-press); }
+.game-control.enabled { background: var(--fill-2); color: var(--text); }
+.game-control:disabled { opacity: 1; background: var(--fill); color: var(--text-2); }
+
+.hud-tools { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.tool { position: relative; display: grid; justify-items: center; align-content: center; gap: 4px; min-height: 64px; padding: 8px 2px; border-radius: 14px; background: var(--fill); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }
+.tool span { white-space: nowrap; }
+.tool input { position: absolute; width: 1px; height: 1px; min-height: 0; opacity: 0; pointer-events: none; }
+.tool[aria-pressed="true"], .tool:has(input:checked) { background: var(--tint); color: var(--on-tint); }
+.tool:active { background: var(--fill-2); }
+.tool.danger { color: var(--danger); }
+.camera-switch-state { padding: 0 4px; color: var(--danger); font-size: 13px; }
+.camera-switch-state:empty { display: none; }
+
+.status-show { pointer-events: auto; position: fixed; z-index: 6; right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 10px 16px 10px 12px; border-radius: 999px; background: var(--hud); font-size: 14px; }
+
+/* 没看到人的时候才出现：告诉人往哪儿站。 */
+.guide { position: fixed; z-index: 3; top: 46%; left: 50%; width: min(60vw, 560px); aspect-ratio: 1.25; transform: translate(-50%, -50%); border: 2px dashed rgba(255, 255, 255, .4); border-radius: 40% 40% 18% 18%; pointer-events: none; }
+.guide span { position: absolute; bottom: 100%; left: 50%; transform: translate(-50%, -10px); padding: 6px 14px; border-radius: 999px; background: var(--hud); font-size: 15px; font-weight: 600; white-space: nowrap; }
+@media (orientation: portrait) { .guide { width: 58vw; aspect-ratio: .5; } }
+
+.loading { position: fixed; z-index: 7; inset: 0; display: grid; place-content: center; justify-items: center; gap: 16px; background: rgba(0, 0, 0, .82); }
+.loading i { width: 36px; height: 36px; border: 3px solid var(--fill-2); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+.loading b { font-size: 15px; font-weight: 600; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- 触发牌：打游戏时游戏是全屏的，人看的就是手机上这一块，字要大 ------------------------ */
+.trigger-board { display: grid; justify-items: center; gap: 2px; padding: 12px 20px; border: 2px solid transparent; border-radius: 20px; background: var(--card); transition: border-color .12s, background-color .12s; }
 .trigger-board.hidden { display: none; }
-.trigger-board-key { font-size: 46px; line-height: 1.1; font-weight: 800; color: #9aa7b2; text-align: center; word-break: break-word; }
-.trigger-board-name { font-size: 15px; color: #8d9ba7; text-align: center; }
-.trigger-board.on { border-color: #58d18b; background: rgba(18,58,36,.94); }
-.trigger-board.on .trigger-board-key { color: #6ef0a2; }
-.trigger-board.on .trigger-board-name { color: #d9f5e4; }
-/* 摄像头那块浮在画面最上面，「沉浸显示」时也在。不挡触摸：它只是给人看的。 */
-.camera-trigger-board { position: fixed; z-index: 5; top: max(12px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); min-width: min(260px, 70vw); max-width: calc(100vw - 24px); pointer-events: none; }
+.trigger-board-key { color: var(--text-3); font-size: 44px; font-weight: 800; line-height: 1.1; text-align: center; word-break: break-word; }
+.trigger-board-name { color: var(--text-2); font-size: 15px; text-align: center; }
+.trigger-board.on { border-color: var(--ok); background: var(--ok-deep); }
+.trigger-board.on .trigger-board-key { color: var(--ok); }
+.trigger-board.on .trigger-board-name { color: var(--text); }
+/* 摄像头那块浮在画面最上面，收起控制时也在。不挡触摸：它只是给人看的。 */
+.camera-trigger-board { position: fixed; z-index: 5; top: max(12px, env(safe-area-inset-top)); left: 50%; min-width: min(240px, 70vw); max-width: calc(100vw - 24px); transform: translateX(-50%); background: var(--hud); pointer-events: none; }
+.camera-trigger-board .trigger-board-key { font-size: 56px; }
+.camera-trigger-board .trigger-board-name { font-size: 17px; }
 /* 触发时立刻出现，停一会儿后淡出。过渡只写在 .idle 上，所以出现不带延迟。 */
 .camera-trigger-board.idle { opacity: 0; transition: opacity .4s; }
 
-/* 靶子：那排区域框。键位字原来只有 9px，几米外什么都看不见。按着的那个变绿。 */
-.profile-sync-bindings { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-.profile-sync-bindings span { padding: 8px 8px; transition: background .1s, box-shadow .1s; }
-.profile-sync-bindings i { font-size: 12px; }
-.profile-sync-bindings b { font-size: 22px; }
-.profile-sync-bindings span.lit { background: rgba(88,209,139,.30); box-shadow: 0 0 0 2px #58d18b inset; }
-.profile-sync-bindings span.lit b { color: #6ef0a2; }
+/* ---- 手持控制器：手柄 / 鼠标 --------------------------------------------------------- */
+.handheld-card { pointer-events: auto; position: fixed; inset: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); display: flex; flex-direction: column; gap: 10px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
+.pad-bar { display: flex; align-items: center; gap: 8px; }
+.pad-bar .back-button { margin: 0; }
+.pad-bar .badge { flex: 1; min-width: 0; justify-content: center; background: var(--card); }
+.pill-button { min-height: 36px; padding: 6px 14px; border-radius: 999px; font-size: 14px; }
+.pad-mode { display: flex; align-items: center; gap: 10px; }
+.pad-mode .seg { flex: 1; }
+.controller-options label { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; white-space: nowrap; }
+.controller-options select { width: auto; min-height: 40px; padding: 6px 30px 6px 12px; background-position: right 11px center; font-size: 15px; }
+.handheld-card.shooter-mode .controller-options { display: none; }
+#sensorState { min-height: 18px; padding: 0 4px; overflow: hidden; color: var(--text-2); font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
 
-/* 手柄：玩的时候用得上的都放大；用不上的收进「更多」。 */
-.handheld-card { grid-template-rows: auto auto auto auto 1fr auto; }
-.handheld-trigger-board .trigger-board-key { font-size: 40px; }
-.handheld-top #sensorState { flex: 1; min-width: 0; color: #91a0ab; font-size: 12px; }
-.handheld-top button { min-height: 44px; padding: 8px 14px; font-size: 15px; }
-.shoulders button { min-height: 64px; font-size: 22px; font-weight: 700; border-radius: 14px; }
-.face-buttons { width: min(42vh, 300px); }
-.face-buttons button { font-size: 28px; font-weight: 800; }
-.stick { width: min(38vh, 260px); }
-.middle-buttons button { min-height: 52px; font-size: 16px; border-radius: 12px; }
-.handheld-more { color: #8d9ba7; font-size: 12px; }
-.handheld-more summary { cursor: pointer; padding: 4px 0; }
-.handheld-more-body { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding-top: 6px; }
+.panel { flex: none; padding: 2px 14px; border-radius: 16px; background: var(--card); }
+.panel[open] { padding-bottom: 14px; }
+.panel summary { font-size: 15px; font-weight: 600; }
+.bluetooth-panel p { margin-bottom: 10px; color: var(--text-2); font-size: 14px; line-height: 1.5; }
+.bluetooth-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.bluetooth-actions select { grid-column: 1 / -1; min-width: 0; }
+.bluetooth-actions button { min-height: 44px; font-size: 14px; }
+#bluetoothConnect { background: var(--accent); color: #fff; }
+.bluetooth-panel small { display: block; margin-top: 10px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+.shooter-settings label { display: grid; gap: 4px; margin-top: 8px; color: var(--text-2); font-size: 13px; }
+.handheld-more-body { display: grid; gap: 10px; }
+.handheld-more-body .field { margin-top: 0; }
+.handheld-more-body > span { color: var(--text-2); font-size: 13px; }
 
-/* 竖屏和窄屏要排在最后：上面那几条宽度写的是横屏，不压回来的话竖屏会撑出屏幕。 */
-@media (orientation: portrait) {
-  .stick, .face-buttons { width: min(44vw, 240px); }
-  .trigger-board-key { font-size: 38px; }
-}
-@media (max-width: 600px) {
-  .profile-sync-bindings { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-
-/* 横着拿（手柄本来就是横着用的）：竖着一层层往下排，摇杆和 ABXY 会被挤出屏幕。
-   改成左右三栏——摇杆在左、ABXY 在右，触发牌和靶子夹在中间，正好在两个拇指之间、
-   眼睛最容易扫到的地方。
-   .gamepad 用 display: contents，让摇杆、中间两键、ABXY 直接变成这张网格的格子，
-   不用为横屏另写一套 HTML。 */
-@media (orientation: landscape) {
-  .handheld-card {
-    inset: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-rows: auto auto auto auto auto 1fr;
-    grid-template-areas:
-      "shoulders shoulders shoulders"
-      "stick     board     face"
-      "stick     targets   face"
-      "stick     status    face"
-      "stick     middle    face"
-      "stick     more      face";
-    gap: 8px;
-  }
-  .gamepad { display: contents; }
-  .shoulders { grid-area: shoulders; }
-  .shoulders button { min-height: 52px; }
-  .stick { grid-area: stick; align-self: center; width: min(62vh, 240px); }
-  .face-buttons { grid-area: face; align-self: center; width: min(62vh, 240px); }
-  .handheld-trigger-board { grid-area: board; padding: 6px 10px; }
-  .handheld-trigger-board .trigger-board-key { font-size: 34px; }
-  .handheld-trigger-board .trigger-board-name { font-size: 13px; }
-  .handheld-targets { grid-area: targets; grid-template-columns: repeat(5, minmax(0, 1fr)); }
-  .handheld-targets b { font-size: 17px; }
-  .handheld-connection-row { grid-area: status; padding: 4px 8px; }
-  .handheld-connection-row button { min-height: 38px; padding: 6px 10px; font-size: 14px; }
-  .middle-buttons { grid-area: middle; grid-template-columns: 1fr 1fr; }
-  .middle-buttons button { min-height: 40px; }
-  .handheld-more { grid-area: more; }
-}
-
-/* 状态行中间放语音开关；长状态只省略自身，保留两侧状态。 */
-.runtime-primary > div:first-child { flex: 1 1 0; }
-.runtime-primary .runtime-voice { flex: 0 1 170px; padding: 0; }
-.runtime-primary .runtime-voice label { flex: 0 0 auto; color: #eef4f8; white-space: nowrap; }
-.runtime-primary .runtime-voice > span { min-width: 0; }
-.runtime-actions { flex-wrap: nowrap; }
-.runtime-actions > button { flex: 1 1 0; min-width: 0; white-space: nowrap; min-height: 48px; padding: 10px 8px; font-size: 16px; }
-.runtime-actions > .game-control { flex-grow: 1.5; }
-.runtime-camera-choice { grid-template-columns: 1fr; }
-@media (max-width: 380px) {
-  .runtime-primary { display: grid; grid-template-columns: minmax(0, 1fr) auto; row-gap: 8px; }
-  .runtime-primary .runtime-voice { grid-column: 1 / -1; grid-row: 2; }
-}
-
-.runtime-camera-choice { grid-template-columns: 1fr auto; align-items: center; }
-.zone-toggle { min-height: 38px; padding: 8px 11px; border: 1px solid var(--mc-line); border-radius: 9px; background: #151f29; color: #d7e0e6; font-size: 11px; font-weight: 700; white-space: nowrap; }
-.zone-toggle.selected { border-color: #4785ce; background: #244b78; color: #eaf4ff; }
-@media (max-width: 600px) { .runtime-camera-choice { grid-template-columns: 1fr; } }
-
-/* 射击模式：两颗鼠标键以外的区域都可作为浮动摇杆。 */
-.shooter-controls { position: relative; min-height: 150px; height: 100%; overflow: hidden; border: 1px solid var(--mc-line); border-radius: 20px; background: radial-gradient(ellipse at 28% 44%, #172a3c, #0c131d 72%); touch-action: none; user-select: none; -webkit-user-select: none; }
-.shooter-stick-area { position: absolute; inset: 0; touch-action: none; }
-.shooter-instructions { position: absolute; left: 24px; top: 24px; right: 160px; display: grid; gap: 7px; pointer-events: none; }
-.shooter-instructions strong { color: #d2e6fa; font-size: 18px; font-weight: 700; }
-.shooter-instructions span { color: #8facc6; font-size: 11px; line-height: 1.7; }
-.shooter-gyro-state { position: absolute; left: 20px; bottom: 18px; right: 160px; color: #86bcff; font-size: 11px; pointer-events: none; }
-.shooter-controls.stick-pressed .shooter-gyro-state { color: #ddb25c; }
-.shooter-stick-ring { position: absolute; display: grid; place-items: center; border: 2px solid rgba(128, 182, 249, .7); border-radius: 50%; background: rgba(25, 45, 67, .72); transform: translate(-50%, -50%); pointer-events: none; }
-.shooter-stick-knob { display: block; width: 42%; aspect-ratio: 1; border: 1px solid #add3ff; border-radius: 50%; background: #6ba8ff; box-shadow: 0 5px 24px rgba(0, 0, 0, .3); }
-.shooter-mouse-buttons { position: absolute; z-index: 1; right: 16px; bottom: 16px; top: 16px; width: clamp(92px, 16vw, 132px); display: grid; grid-template-rows: 1fr 1fr; gap: 12px; pointer-events: none; }
-.shooter-mouse-buttons button { display: grid; align-content: center; justify-items: center; gap: 7px; padding: 14px 8px; border: 1px solid #43627d; border-radius: 22px; background: #152b40; color: #eef4f8; touch-action: none; pointer-events: auto; -webkit-tap-highlight-color: transparent; }
-.shooter-mouse-buttons button strong { font-size: 22px; }
-.shooter-mouse-buttons button small { font-size: 11px; font-weight: 400; color: #9fbbd4; }
-.shooter-mouse-buttons button.pressed { border-color: #91c1ff; background: #3f84e8; }
-.shooter-mouse-buttons button.pressed small { color: #edf5ff; }
-@media (orientation: portrait) {
-  .shooter-controls { min-height: 240px; }
-  .shooter-instructions { left: 20px; right: 20px; }
-  .shooter-mouse-buttons { top: auto; width: clamp(92px, 27vw, 126px); height: min(46%, 264px); }
-  .shooter-gyro-state { right: 140px; }
-}
-
-/* 模式和连接方式放在操作区上方，蓝牙设置展开时允许纵向查看。 */
-.handheld-card { overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto auto auto auto minmax(0, 1fr) auto; grid-template-areas: "options" "bluetooth" "board" "targets" "status" "shoulders" "pad" "more"; }
-.controller-options { grid-area: options; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 6px 10px; }
-.bluetooth-panel { grid-area: bluetooth; }
-.handheld-trigger-board { grid-area: board; }
-.handheld-targets, .handheld-profile-sync { grid-area: targets; }
-.handheld-connection-row { grid-area: status; }
-.shoulders { grid-area: shoulders; }
-.gamepad { grid-area: pad; min-height: 0; }
-.handheld-more { grid-area: more; }
-.controller-options label { display: grid; grid-template-columns: auto minmax(0, 1fr); min-width: 0; gap: 8px; }
-.controller-options select { min-height: 38px; padding: 7px 9px; font-size: 12px; }
-.bluetooth-panel, .shooter-settings { padding: 8px 10px; border: 1px solid var(--mc-line); border-radius: 12px; background: rgba(12, 18, 24, .94); color: #a6b8c9; font-size: 11px; }
-.bluetooth-panel summary, .shooter-settings summary { cursor: pointer; padding: 2px 0; color: #d2e6fa; font-size: 12px; }
-.bluetooth-panel p { margin: 7px 0; line-height: 1.6; }
-.bluetooth-panel small { display: block; margin-top: 7px; color: #8d9ba7; font-size: 10px; line-height: 1.6; }
-.bluetooth-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
-.bluetooth-actions button { min-height: 36px; padding: 7px 10px; border: 1px solid #355679; background: #17344f; font-size: 11px; }
-.bluetooth-actions select { grid-column: 1 / -1; min-width: 0; min-height: 36px; padding: 7px 9px; }
-.bluetooth-actions button:disabled { opacity: .45; }
-.shooter-settings[open] summary { margin-bottom: 8px; }
-.shooter-settings label { display: inline-grid; width: calc(50% - 6px); gap: 4px; }
-.shooter-settings label + label { margin-left: 12px; }
-.shooter-settings input[type="range"] { min-height: 24px; margin: 0; padding: 0; accent-color: #6ba8ff; }
-@media (min-width: 601px) {
-  .role-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@media (orientation: landscape) {
-  .handheld-card:not(.shooter-mode) {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr);
-    grid-template-areas:
-      "options   options   options"
-      "bluetooth bluetooth bluetooth"
-      "shoulders shoulders shoulders"
-      "stick     board     face"
-      "stick     targets   face"
-      "stick     status    face"
-      "stick     middle    face"
-      "stick     more      face";
-  }
-  .controller-options { grid-area: options; }
-  .bluetooth-panel { grid-area: bluetooth; }
-  .handheld-profile-sync { grid-area: targets; }
-  .bluetooth-actions { display: flex; flex-wrap: wrap; }
-  .bluetooth-actions select { flex: 1 1 180px; }
-}
-
-/* 低高度横屏为操作圆盘留出空间；展开蓝牙设置仍由手柄容器滚动。 */
-@media (orientation: landscape) and (max-height: 480px) {
-  .handheld-card:not(.shooter-mode) { gap: 6px; }
-  .handheld-card:not(.shooter-mode) .controller-options { padding: 2px 8px; }
-  .handheld-card:not(.shooter-mode) .controller-options select { min-height: 32px; padding: 5px 8px; }
-  .handheld-card:not(.shooter-mode) .bluetooth-panel { padding: 4px 8px; }
-  .handheld-card:not(.shooter-mode) .shoulders button { min-height: 44px; font-size: 20px; }
-  .handheld-card:not(.shooter-mode) .stick,
-  .handheld-card:not(.shooter-mode) .face-buttons { width: min(48vh, 210px); }
-  .handheld-card:not(.shooter-mode) .handheld-trigger-board { padding: 4px 8px; }
-  .handheld-card:not(.shooter-mode) .trigger-board-key { font-size: 28px; }
-  .handheld-card:not(.shooter-mode) .trigger-board-name { font-size: 12px; }
-  .handheld-card:not(.shooter-mode) .handheld-connection-row { gap: 6px; padding: 2px 6px; }
-  .handheld-card:not(.shooter-mode) .handheld-connection-row button { min-height: 34px; padding: 5px 8px; }
-  .handheld-card:not(.shooter-mode) .handheld-connection-row #sensorState { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-}
-
-/* 射击模式单独定义网格，避免原手柄横屏的命名区域挤占鼠标操作面。 */
-.handheld-card.shooter-mode {
-  inset: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto minmax(150px, 1fr) auto;
-  grid-template-areas: "options" "bluetooth" "status" "shooter" "settings";
-  gap: 8px;
-}
-.handheld-card.shooter-mode .controller-options { grid-area: options; }
-.handheld-card.shooter-mode .bluetooth-panel { grid-area: bluetooth; }
-.handheld-card.shooter-mode .handheld-connection-row { grid-area: status; }
-.handheld-card.shooter-mode .shooter-controls { grid-area: shooter; min-height: 0; height: 100%; }
-.handheld-card.shooter-mode .shooter-settings { grid-area: settings; }
+/* 蓝牙时没有电脑推来的触发消息，触发牌没东西可显示。 */
+.handheld-card.bluetooth-mode .handheld-trigger-board,
 .handheld-card.shooter-mode .handheld-trigger-board,
-.handheld-card.shooter-mode .handheld-targets,
-.handheld-card.shooter-mode .handheld-profile-sync,
-.handheld-card.shooter-mode .shoulders,
-.handheld-card.shooter-mode .gamepad,
 .handheld-card.shooter-mode .handheld-more { display: none; }
-@media (orientation: portrait) {
-  .handheld-card.shooter-mode { grid-template-rows: auto auto auto minmax(240px, 1fr) auto; }
-  .handheld-card.shooter-mode .handheld-connection-row { flex-wrap: wrap; gap: 7px; }
-  .handheld-card.shooter-mode .handheld-connection-row #sensorState { flex-basis: calc(100% - 90px); }
+.handheld-trigger-board { flex: none; }
+
+.shoulders { display: grid; flex: none; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.shoulders button { min-height: 60px; border-radius: 16px; font-size: 20px; font-weight: 700; touch-action: none; }
+.gamepad { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) auto; align-items: center; gap: 16px 12px; }
+.stick { display: grid; place-items: center; justify-self: center; width: min(44vw, 240px); aspect-ratio: 1; border-radius: 50%; background: var(--card); box-shadow: inset 0 0 0 2px var(--line-strong); touch-action: none; }
+.stick i { width: 42%; aspect-ratio: 1; border-radius: 50%; background: var(--accent); box-shadow: 0 6px 18px rgba(0, 0, 0, .45); }
+.face-buttons { display: grid; justify-self: center; grid-template: repeat(3, 1fr) / repeat(3, 1fr); gap: 6px; width: min(44vw, 240px); aspect-ratio: 1; }
+.face-buttons button { padding: 0; border-radius: 50%; font-size: 26px; font-weight: 800; touch-action: none; }
+.face-buttons [data-pad="y"] { grid-area: 2 / 1; color: #ffd60a; }
+.face-buttons [data-pad="x"] { grid-area: 1 / 2; color: #64b1ff; }
+.face-buttons [data-pad="b"] { grid-area: 2 / 3; color: #ff6961; }
+.face-buttons [data-pad="a"] { grid-area: 3 / 2; color: #30d158; }
+.middle-buttons { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.middle-buttons button { min-height: 52px; border-radius: 14px; font-size: 16px; touch-action: none; }
+.handheld-card button.pressed { background: var(--accent); color: #fff; }
+
+/* 鼠标模式：两颗鼠标键以外的地方都能按出浮动摇杆。 */
+.shooter-controls { position: relative; flex: 1; min-height: 240px; overflow: hidden; border-radius: 22px; background: var(--card); touch-action: none; user-select: none; -webkit-user-select: none; }
+.shooter-stick-area { position: absolute; inset: 0; touch-action: none; }
+.shooter-instructions { position: absolute; top: 20px; left: 20px; right: 20px; display: grid; gap: 6px; pointer-events: none; }
+.shooter-instructions strong { font-size: 17px; font-weight: 700; }
+.shooter-instructions span { color: var(--text-2); font-size: 13px; line-height: 1.5; }
+/* 和上面那行传感器状态说的是同一件事，只留一处。 */
+.shooter-gyro-state { display: none; }
+.shooter-stick-ring { position: absolute; display: grid; place-items: center; border-radius: 50%; background: rgba(255, 255, 255, .06); box-shadow: inset 0 0 0 2px var(--line-strong); transform: translate(-50%, -50%); pointer-events: none; }
+.shooter-stick-knob { display: block; width: 42%; aspect-ratio: 1; border-radius: 50%; background: var(--accent); box-shadow: 0 5px 20px rgba(0, 0, 0, .4); }
+.shooter-mouse-buttons { position: absolute; z-index: 1; right: 14px; bottom: 14px; display: grid; grid-template-rows: 1fr 1fr; gap: 12px; width: clamp(96px, 27vw, 130px); height: min(50%, 280px); pointer-events: none; }
+.shooter-mouse-buttons button { display: grid; align-content: center; justify-items: center; gap: 6px; padding: 14px 8px; border-radius: 22px; background: var(--fill-2); touch-action: none; pointer-events: auto; }
+.shooter-mouse-buttons button strong { font-size: 22px; }
+.shooter-mouse-buttons button small { color: var(--text-2); font-size: 12px; font-weight: 500; }
+.shooter-mouse-buttons button.pressed { background: var(--accent); }
+.shooter-mouse-buttons button.pressed small { color: rgba(255, 255, 255, .85); }
+
+/* 安装包现在锁竖屏；旧安装包还能横过来，横着时摇杆在左、ABXY 在右，中间放开始键。 */
+@media (orientation: landscape) {
+  .guide { width: min(40vw, 420px); }
+  .gamepad { grid-template-columns: 1fr minmax(0, 1fr) 1fr; grid-template-rows: 1fr; }
+  .stick, .face-buttons { width: min(58vh, 220px); }
+  .face-buttons { grid-column: 3; grid-row: 1; }
+  .middle-buttons { grid-column: 2; grid-row: 1; align-self: end; }
+  .shoulders button { min-height: 48px; }
+  .shooter-mouse-buttons { top: 14px; height: auto; }
+  .shooter-instructions { right: 160px; }
 }

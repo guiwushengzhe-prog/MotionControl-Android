@@ -70,44 +70,75 @@ const NativeAudio = registerPlugin<NativeAudioApi>("NativeAudio");
 const SensorBridge = registerPlugin<{ start(options?: { mode: string }): Promise<void>; getLatest(): Promise<SensorSample>; stop(): Promise<void> }>("SensorBridge");
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
+document.body.dataset.role = "home";
+// 界面上的线条图标，颜色跟着文字走。
+const icon = (body: string): string => `<svg viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+const ICONS = {
+  camera: icon('<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>'),
+  gamepad: icon('<path d="M7 8h10a4 4 0 0 1 3.9 4.9l-1 4.3a2 2 0 0 1-3.4.9L14.6 16H9.4l-1.9 2.1a2 2 0 0 1-3.4-.9l-1-4.3A4 4 0 0 1 7 8z"/><path d="M8 11v3M6.5 12.5h3M15.5 11.5h.01M17.5 13.5h.01"/>'),
+  chevron: icon('<path d="M9 6l6 6-6 6"/>'),
+  back: icon('<path d="M15 6l-6 6 6 6"/>'),
+  mic: icon('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>'),
+  flip: icon('<path d="M20 11a8 8 0 0 0-14.5-4.6L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.5 4.6L20 16"/><path d="M20 20v-4h-4"/>'),
+  frame: icon('<path d="M4 9V6a2 2 0 0 1 2-2h3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3"/>'),
+  collapse: icon('<path d="M6 9l6 6 6-6"/>'),
+  expand: icon('<path d="M6 15l6-6 6 6"/>'),
+  stop: icon('<rect x="6.5" y="6.5" width="11" height="11" rx="2"/>'),
+};
 app.innerHTML = `
   <div id="cameraStage"><video id="camera" autoplay playsinline muted></video><canvas id="overlay"></canvas><div class="shade"></div><canvas id="inferenceCanvas" aria-hidden="true"></canvas></div>
-  <header class="app-header"><div class="mobile-brand"><p id="brandVersion">MOTIONCONTROL ${__WEB_VERSION__}</p><h1 id="pageTitle">手机控制端</h1><small>固定摄像头 · 手持控制器</small></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
+  <header class="app-header"><div class="brand"><h1>MotionControl</h1><span id="brandVersion">${__WEB_VERSION__}</span></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
   <main>
-    <section class="setup-card role-card" id="roleCard">
-      <span class="eyebrow">开始</span><h2>这台手机要做什么？</h2><p class="role-lead">固定在玩家前方时选“摄像头”；拿在手里时选“手持手柄”。</p>
-      <div class="role-grid"><button id="cameraRole" class="role-option recommended"><span class="role-symbol">●</span><strong>固定摄像头</strong><small>推荐 · 识别人和动作</small></button><button id="handheldRole" class="role-option"><span class="role-symbol">◆</span><strong>手持手柄</strong><small>陀螺仪 + 虚拟按键</small></button><button id="shooterRole" class="role-option"><span class="role-symbol">＋</span><strong>鼠标射击游戏</strong><small>蓝牙直连 · 摇杆大移动 · 陀螺仪微调</small></button></div>
+    <section class="sheet role-card" id="roleCard">
+      <h2>这台手机用来做什么</h2>
+      <div class="role-list">
+        <button id="cameraRole" class="role-option" type="button"><span class="role-icon">${ICONS.camera}</span><span class="role-text"><strong>固定摄像头</strong><small>立在面前，识别身体动作</small></span><span class="role-tail"><em class="role-tag">推荐</em>${ICONS.chevron}</span></button>
+        <button id="handheldRole" class="role-option" type="button"><span class="role-icon">${ICONS.gamepad}</span><span class="role-text"><strong>手持控制器</strong><small>拿在手里，当手柄或鼠标用</small></span><span class="role-tail">${ICONS.chevron}</span></button>
+      </div>
     </section>
-    <section class="setup-card hidden" id="setupCard">
-      <div class="card-head"><div><span class="eyebrow">摄像头模式</span><h2>连接电脑</h2></div><button id="cameraHome" class="text-button">返回</button></div>
-      <p class="setup-help">电脑端保持 MotionControl 打开。地址不用自己填，点「连接并开始」它会自己找。第一次几十秒都正常，以后几秒。</p>
+    <section class="sheet hidden" id="setupCard">
+      <button id="cameraHome" class="back-button" type="button">${ICONS.back}返回</button>
+      <h2>固定摄像头</h2>
+      <p class="setup-help">电脑上先打开 MotionControl。</p>
       <div class="link-state" id="linkState" hidden><p id="linkLine"></p><div class="link-actions" id="linkActions"></div></div>
-      <label>电脑地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label>
-      <label>使用镜头<select id="cameraDeviceSelect"><option value="__auto__">自动选择</option></select></label>
-      <label>语音识别位置<select id="voiceRecognitionLocation"><option value="computer">电脑识别（使用手机麦克风）</option><option value="phone">手机识别</option></select></label>
-      <label class="technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option></select></label>
-      <div class="actions"><button id="startButton" class="start-primary">连接并开始</button></div><p class="warning" id="securityWarning"></p>
+      <button id="startButton" class="start-primary" type="button">连接并开始</button>
+      <p class="warning" id="securityWarning"></p>
+      <details class="more" id="setupMore"><summary>更多设置</summary>
+        <label class="field">电脑地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="自动查找"></label>
+        <label class="field">镜头<select id="cameraDeviceSelect"><option value="__auto__">自动</option></select></label>
+        <label class="field">语音识别<select id="voiceRecognitionLocation"><option value="computer">电脑识别（用手机麦克风）</option><option value="phone">手机识别</option></select></label>
+        <label class="field technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option></select></label>
+      </details>
     </section>
-    <section class="runtime-card hidden" id="runtimeCard">
-      <div class="runtime-primary"><div><strong id="sendState">等待完整人体</strong></div><div class="runtime-voice" id="voiceControl"><label><input id="voiceToggle" type="checkbox"><span>语音控制</span></label><span id="voiceState">关闭</span></div><span class="runtime-link"><b id="panelConnection">未连接</b></span></div>
-      <div class="technical runtime-tech"><span>摄像头 <b id="cameraFps">0 FPS</b></span><span>识别 <b id="localFps">0 FPS</b></span><span id="modelStatus">Full33</span><span id="delegateStatus">—</span><small id="modelError"></small></div>
-      <div class="runtime-camera-choice"><div class="camera-buttons" role="group" aria-label="选择镜头"><button id="frontCameraButton" type="button" aria-pressed="false">前置</button><button id="backCameraButton" type="button" aria-pressed="false">后置</button></div><button id="toggleZonesButton" class="zone-toggle" type="button" aria-pressed="true">区域框：开</button><small id="cameraSwitchState" class="camera-switch-state"></small></div>
-      <div class="runtime-actions"><button id="gameControlButton" class="game-control" type="button" disabled>连接电脑中</button><button id="hideStatus" class="status-hide" type="button">沉浸显示</button><button id="stopButton" class="stop">停止</button></div>
+    <section class="hud hidden" id="runtimeCard" data-link="offline">
+      <div class="hud-status"><i class="dot"></i><strong id="sendState">等待完整人体</strong><span id="voiceState" class="voice-state off">关闭</span><b id="panelConnection">未连接</b></div>
+      <button id="gameControlButton" class="game-control" type="button" disabled>连接电脑中</button>
+      <div class="hud-tools">
+        <label class="tool" id="voiceControl"><input id="voiceToggle" type="checkbox">${ICONS.mic}<span>语音</span></label>
+        <button id="flipCameraButton" class="tool" type="button" aria-label="换镜头">${ICONS.flip}<span>换镜头</span></button>
+        <button id="toggleZonesButton" class="tool" type="button" aria-pressed="true">${ICONS.frame}<span>区域框</span></button>
+        <button id="hideStatus" class="tool" type="button">${ICONS.collapse}<span>收起</span></button>
+        <button id="stopButton" class="tool danger" type="button">${ICONS.stop}<span>停止</span></button>
+      </div>
+      <small id="cameraSwitchState" class="camera-switch-state"></small>
+      <div class="technical"><span>摄像头 <b id="cameraFps">0 FPS</b></span><span>识别 <b id="localFps">0 FPS</b></span><span id="modelStatus">Full33</span><span id="delegateStatus">—</span><small id="modelError"></small></div>
     </section>
     <div class="trigger-board camera-trigger-board hidden" id="cameraTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
-    <button id="showStatus" class="status-show hidden" type="button">显示控制</button>
+    <button id="showStatus" class="status-show hidden" type="button">${ICONS.expand}显示控制</button>
     <section class="handheld-card hidden" id="handheldCard">
-      <div class="handheld-top controller-options"><label>模式<select id="handheldMode"><option value="gamepad">手持手柄</option><option value="shooter">鼠标射击游戏</option></select></label><label>连接<select id="handheldTransport"><option value="network">网络连接</option><option value="bluetooth">蓝牙直连</option></select></label></div>
-      <details id="bluetoothPanel" class="bluetooth-panel hidden" open><summary>蓝牙连接设置</summary><p id="bluetoothStatus">在电脑蓝牙设置中添加这台手机，再选择电脑连接。</p><div class="bluetooth-actions"><button id="bluetoothPair">允许电脑配对</button><button id="bluetoothRefresh">刷新设备</button><select id="bluetoothDevice" aria-label="已配对电脑"></select><button id="bluetoothConnect">连接电脑</button></div><small>蓝牙手柄为通用手柄；只接受 Xbox 手柄的游戏仍使用网络连接。</small></details>
+      <div class="pad-bar handheld-connection-row"><button id="stopHandheld" class="back-button" type="button">${ICONS.back}停止</button><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><button id="centerSensor" class="pill-button" type="button">重新居中</button></div>
+      <div class="pad-mode"><div class="seg" id="modeSeg" role="group" aria-label="用法"><button type="button" data-mode="gamepad">手柄</button><button type="button" data-mode="shooter">鼠标</button></div><div class="controller-options"><select id="handheldMode" hidden><option value="gamepad">手柄</option><option value="shooter">鼠标</option></select><select id="handheldTransport" aria-label="连接方式"><option value="network">网络连接</option><option value="bluetooth">蓝牙连接</option></select></div></div>
+      <small id="sensorState">等待传感器</small>
+      <details id="bluetoothPanel" class="panel bluetooth-panel hidden" open><summary>蓝牙连接</summary><p id="bluetoothStatus">先在电脑的蓝牙设置里添加这台手机，再选电脑连接。</p><div class="bluetooth-actions"><button id="bluetoothPair" type="button">允许电脑配对</button><button id="bluetoothRefresh" type="button">刷新设备</button><select id="bluetoothDevice" aria-label="已配对电脑"></select><button id="bluetoothConnect" type="button">连接电脑</button></div><small>蓝牙模拟的是通用手柄；只认 Xbox 手柄的游戏请用网络连接。</small></details>
       <div class="trigger-board handheld-trigger-board" id="handheldTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
-      <div class="handheld-top handheld-connection-row"><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><label class="hidden" id="handheldAddressField">电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="ws://电脑IP:8765/ws/input"></label><small id="sensorState">等待传感器</small><button id="centerSensor">重新居中</button><button id="stopHandheld" class="stop">停止</button></div>
-      <div class="shoulders"><button data-pad="l">LB</button><button data-pad="zl">LT</button><button data-pad="zr">RT</button><button data-pad="r">RB</button></div><div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div></div>
+      <div class="shoulders"><button data-pad="l">LB</button><button data-pad="zl">LT</button><button data-pad="zr">RT</button><button data-pad="r">RB</button></div>
+      <div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div></div>
       ${SHOOTER_CONTROLS_HTML}
-      <details id="shooterSettings" class="shooter-settings hidden"><summary>鼠标灵敏度</summary><label>陀螺仪微调<input id="gyroSensitivity" type="range" min="0.1" max="2" step="0.1" value="0.5"></label><label>摇杆大移动<input id="stickSensitivity" type="range" min="400" max="3600" step="200" value="1800"></label></details>
-      <details class="handheld-more"><summary>更多</summary><div class="handheld-more-body"><label>玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span>传感器 <b id="sensorFps">0 FPS</b></span></div></details>
+      <details id="shooterSettings" class="panel shooter-settings hidden"><summary>灵敏度</summary><label>陀螺仪微调<input id="gyroSensitivity" type="range" min="0.1" max="2" step="0.1" value="0.5"></label><label>摇杆大移动<input id="stickSensitivity" type="range" min="400" max="3600" step="200" value="1800"></label></details>
+      <details class="panel handheld-more"><summary>更多</summary><div class="handheld-more-body"><label class="field hidden" id="handheldAddressField">电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="自动查找"></label><label class="field">玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span>传感器 <b id="sensorFps">0 次/秒</b></span></div></details>
     </section>
   </main>
-  <div class="guide hidden" id="guide"></div><div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头</b></div>`;
+  <div class="guide hidden" id="guide"><span>全身站进画面</span></div><div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头</b></div>`;
 
 const video = document.querySelector<HTMLVideoElement>("#camera")!;
 const canvas = document.querySelector<HTMLCanvasElement>("#overlay")!;
@@ -143,8 +174,7 @@ function setStartBusy(label: string | null): void {
   startButton.disabled = label !== null;
   startButton.textContent = label ?? START_LABEL;
 }
-const frontCameraButton = document.querySelector<HTMLButtonElement>("#frontCameraButton")!;
-const backCameraButton = document.querySelector<HTMLButtonElement>("#backCameraButton")!;
+const flipCameraButton = document.querySelector<HTMLButtonElement>("#flipCameraButton")!;
 const cameraSwitchState = document.querySelector<HTMLElement>("#cameraSwitchState")!;
 
 let vision: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
@@ -199,6 +229,12 @@ let sensorPolling = false;
 let stickState = { x: 0, y: 0 };
 const modeInput = document.querySelector<HTMLSelectElement>("#handheldMode")!;
 const transportInput = document.querySelector<HTMLSelectElement>("#handheldTransport")!;
+const modeButtons = [...document.querySelectorAll<HTMLButtonElement>("#modeSeg [data-mode]")];
+for (const button of modeButtons) button.addEventListener("click", () => {
+  if (modeInput.disabled || modeInput.value === button.dataset.mode) return;
+  modeInput.value = button.dataset.mode!;
+  modeInput.dispatchEvent(new Event("change"));
+});
 const handheldSettingIds = ["handheldMode", "handheldTransport", "gyroSensitivity", "stickSensitivity", "handheldSlot"];
 for (const id of handheldSettingIds) {
   const input = document.querySelector<HTMLInputElement | HTMLSelectElement>(`#${id}`)!;
@@ -514,7 +550,7 @@ function applyGameOutputState(message: GameOutputStateV1): void {
   if (typeof message.enabled !== "boolean") return;
   gameOutputEnabled = message.enabled;
   gameControlButton.disabled = false;
-  gameControlButton.textContent = message.enabled ? "停止游戏控制" : "开始游戏控制";
+  gameControlButton.textContent = message.enabled ? "暂停控制" : "开始控制";
   gameControlButton.classList.toggle("enabled", message.enabled);
   if (message.ok === false && message.error) gameControlButton.title = message.error;
 }
@@ -936,7 +972,7 @@ function getSuggestedServer(): string { const parameter = new URLSearchParams(lo
 serverInput.value = localStorage.getItem("motionbridge-server") || getSuggestedServer(); handheldServerInput.value = localStorage.getItem("motionbridge-server") || getSuggestedServer();
 handheldServerInput.addEventListener("change", () => { const value = handheldServerInput.value.trim(); if (value) { serverInput.value = value; localStorage.setItem("motionbridge-server", value); } });
 
-function setConnection(state: ConnectionState): void { const text = ({ offline: "未连接电脑", connecting: "连接中", online: "已连接电脑", error: "连接异常" })[state]; badge.className = `badge ${state}`; badge.querySelector("b")!.textContent = text; const panel = document.querySelector<HTMLElement>("#panelConnection"); if (panel) panel.textContent = text; }
+function setConnection(state: ConnectionState): void { const text = ({ offline: "未连接电脑", connecting: "连接中", online: "已连接电脑", error: "连接异常" })[state]; badge.className = `badge ${state}`; badge.querySelector("b")!.textContent = text; runtimeCard.dataset.link = state; const panel = document.querySelector<HTMLElement>("#panelConnection"); if (panel) panel.textContent = text; }
 function setVoiceStatus(status: VoiceStatus, detail?: string): void { voiceState = status; voiceStateLabel.textContent = detail || ({ off: "关闭", connecting: "连接中", listening: "正在听", error: "错误", unauthorized: "未授权" })[status]; voiceStateLabel.className = `voice-state ${status}`; }
 function poseVoiceState(): "not_connected" | "connected" | "enabled" | "unauthorized" | "failed" { return voiceState === "off" ? "not_connected" : voiceState === "connecting" ? "connected" : voiceState === "listening" ? "enabled" : voiceState === "unauthorized" ? "unauthorized" : "failed"; }
 function clearWebCamera(): void { cameraFrameLoop = false; stream?.getTracks().forEach((track) => track.stop()); stream = null; video.pause(); video.srcObject = null; video.removeAttribute("src"); video.load(); video.style.display = "none"; }
@@ -958,7 +994,7 @@ async function createPose(): Promise<PoseLandmarker> { const files = await getVi
 function updateModelLabel(): void { modelStatus.textContent = modelChoice === "lite" ? "Lite33" : "Full33"; modelSelect.value = modelChoice; }
 async function loadPoseModel(): Promise<void> { document.querySelector("#loading")!.classList.remove("hidden"); motionDebug.modelState = "loading"; motionDebug.actualModel = modelChoice; motionDebug.modelUrl = new URL(`./models/pose_landmarker_${modelChoice}.task`, location.href).href; updateModelLabel(); motionDebug.delegate = "unknown"; motionDebug.fallbackError = null; motionDebug.detectCalls = 0; motionDebug.lastPoseCount = 0; motionDebug.lastInferenceMs = 0; motionDebug.lastDetectError = null; try { poseLandmarker?.close(); poseLandmarker = await createPose(); motionDebug.modelState = "ready"; document.querySelector("#delegateStatus")!.textContent = motionDebug.fallbackError ? "CPU·GPU回退" : motionDebug.delegate; document.querySelector("#modelError")!.textContent = motionDebug.fallbackError ? `GPU回退：${motionDebug.fallbackError}` : ""; document.querySelector("#loading")!.classList.add("hidden"); } catch (error) { motionDebug.modelState = "error"; motionDebug.lastDetectError = error instanceof Error ? error.message : String(error); document.querySelector("#delegateStatus")!.textContent = "模型错误"; document.querySelector("#modelError")!.textContent = motionDebug.lastDetectError; document.querySelector("#loadingText")!.textContent = `模型错误：${motionDebug.lastDetectError}`; document.querySelector("#loading")!.classList.add("hidden"); throw error; } }
 
-function updateCameraButtons(): void { const front = facingMode === "user"; frontCameraButton.classList.toggle("selected", front); backCameraButton.classList.toggle("selected", !front); frontCameraButton.setAttribute("aria-pressed", String(front)); backCameraButton.setAttribute("aria-pressed", String(!front)); }
+function updateCameraButtons(): void { flipCameraButton.setAttribute("aria-label", facingMode === "user" ? "换成后置镜头" : "换成前置镜头"); }
 async function refreshCameraDevices(): Promise<void> { cameraDevices = (await navigator.mediaDevices.enumerateDevices()).filter((item) => item.kind === "videoinput"); const options = ["<option value=\"__auto__\">自动</option>", ...cameraDevices.map((item, index) => { const lower = item.label.toLowerCase(); const name = lower.includes("front") || lower.includes("user") || lower.includes("前") ? "前置" : lower.includes("back") || lower.includes("environment") || lower.includes("后") ? "后置" : item.label || `镜头 ${index + 1}`; return `<option value=\"${item.deviceId}\">${name}</option>`; })].join(""); cameraDeviceSelect.innerHTML = options; if (!cameraDevices.some((item) => item.deviceId === selectedCameraDeviceId)) selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = selectedCameraDeviceId; }
 type CameraRatioProfile = { width: number; height: number; ratio: number };
 function cameraRatioProfiles(): CameraRatioProfile[] { return [{ width: 480, height: 854, ratio: 9 / 16 }, { width: 480, height: 640, ratio: 3 / 4 }]; }
@@ -969,6 +1005,7 @@ async function start(): Promise<void> {
   // pickServer 后面，于是全程最慢的那几秒，恰好是唯一没有任何提示的几秒。
   if (startButton.disabled) return;   // 已经在跑了，别叠第二路
   setStartBusy("正在找电脑…"); setConnection("connecting");
+  document.querySelector("#securityWarning")!.textContent = "";
   try { overlayRenderingEnabled = true; lastSendStateText = ""; const picked = await pickServer(serverInput.value, setStartBusy);
     if (!picked.found) { await refreshLinkState(true); throw new Error("没找到电脑"); }
     const socketUrl = picked.url; serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setStartBusy("正在打开摄像头…"); await startCamera(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden");
@@ -985,14 +1022,13 @@ function showStartError(error: unknown): void {
     : /NotFound|NotReadable|device/i.test(raw) ? "摄像头打不开，可能被别的应用占着"
     : /超时/.test(raw) ? "摄像头打开超时，重试一次"
     : /模型/.test(raw) ? raw
-    : /没找到电脑/.test(raw) ? "没找到电脑。看下面这行字。"
+    : /没找到电脑/.test(raw) ? ""  // 上面的连接提示已经说了原因和办法
     : "启动失败，重试一次";
-  showStatus.textContent = hint;
-  showStatus.classList.remove("hidden");
+  document.querySelector("#securityWarning")!.textContent = hint;
   setupCard.classList.remove("hidden");
   runtimeCard.classList.add("hidden");
 }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "需重新连接"; setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "voice_result" && voiceEnabled) { const text = String(message.final || message.partial || message.text || "").trim(); const command = String(message.command || message.result?.command || "").trim(); if (command) setVoiceStatus("listening", `已执行：${command}`); else if (text) setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); else if (message.matched === false) setVoiceStatus("listening", "语音未匹配到电脑口令"); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
+function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "重新连接中"; setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "voice_result" && voiceEnabled) { const text = String(message.final || message.partial || message.text || "").trim(); const command = String(message.command || message.result?.command || "").trim(); if (command) setVoiceStatus("listening", `已执行：${command}`); else if (text) setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); else if (message.matched === false) setVoiceStatus("listening", "语音未匹配到电脑口令"); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
 // 重连时重新挑一次，而不是死守断掉的那个地址：拔掉数据线就该自动落回 WiFi，
 // 换了网段也该自己找回来。
 async function reconnectToBestServer(): Promise<void> {
@@ -1322,6 +1358,7 @@ function predict(now: number): void {
     if (nextSendState !== lastSendStateText) {
       document.querySelector("#sendState")!.textContent = nextSendState;
       lastSendStateText = nextSendState;
+      document.querySelector("#guide")!.classList.toggle("hidden", !!firstPose);
     }
     fpsCounter++;
     if (performance.now() - fpsStarted >= 1000) {
@@ -1437,8 +1474,8 @@ async function stop(): Promise<void> { running = false; overlayRenderingEnabled 
   await refreshLinkState(); }
 async function chooseCamera(cameraId: string): Promise<void> { selectedCameraDeviceId = cameraId; cameraDeviceSelect.value = cameraId; if (running) await startCamera(); applyMirror(); }
 async function chooseFacing(target: "user" | "environment"): Promise<void> { if (!running || facingMode === target) { updateCameraButtons(); return; } const previousFacing = facingMode; const previousDevice = selectedCameraDeviceId; facingMode = target;
-  try { localStorage.setItem("motionbridge-facing", target); } catch { /* 存不下不影响这次切换 */ } selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = "__auto__"; cameraSwitchState.textContent = "切换中"; try { await startCamera(); cameraSwitchState.textContent = `当前${target === "user" ? "前置镜头" : "后置镜头"}`; } catch (error) { facingMode = previousFacing; selectedCameraDeviceId = previousDevice; cameraSwitchState.textContent = `切换失败：${error instanceof Error ? error.message : "无法打开镜头"}`; try { await startCamera(); } catch { cameraSwitchState.textContent += "；原镜头恢复失败"; } updateCameraButtons(); } }
-function showRole(role: "home" | "camera" | "handheld"): void { activeRole = role; roleCard.classList.toggle("hidden", role !== "home"); setupCard.classList.toggle("hidden", role !== "camera"); handheldCard.classList.toggle("hidden", role !== "handheld"); voiceControl.classList.toggle("hidden", role !== "camera"); document.querySelector("#pageTitle")!.textContent = role === "handheld" ? "手持手柄" : role === "camera" ? "固定摄像头" : "手机控制端";
+  try { localStorage.setItem("motionbridge-facing", target); } catch { /* 存不下不影响这次切换 */ } selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = "__auto__"; cameraSwitchState.textContent = "切换中"; try { await startCamera(); cameraSwitchState.textContent = ""; } catch (error) { facingMode = previousFacing; selectedCameraDeviceId = previousDevice; cameraSwitchState.textContent = `切换失败：${error instanceof Error ? error.message : "无法打开镜头"}`; try { await startCamera(); } catch { cameraSwitchState.textContent += "；原镜头恢复失败"; } updateCameraButtons(); } }
+function showRole(role: "home" | "camera" | "handheld"): void { activeRole = role; document.body.dataset.role = role; roleCard.classList.toggle("hidden", role !== "home"); setupCard.classList.toggle("hidden", role !== "camera"); handheldCard.classList.toggle("hidden", role !== "handheld"); voiceControl.classList.toggle("hidden", role !== "camera");
   // 手柄模式下把页头藏起来。两个理由：卡片自己就有连接状态徽标，页头那个是重复的；
   // 而且两者都是固定定位，横屏时版本号折成两行会把页头撑高压到卡片上——标题整个
   // 被盖住，看着像渲染坏了。
@@ -1447,6 +1484,11 @@ function showRole(role: "home" | "camera" | "handheld"): void { activeRole = rol
 
 function controllerError(error: unknown): void {
   document.querySelector("#sensorState")!.textContent = Capacitor.isNativePlatform() ? (error instanceof Error ? error.message : "控制器异常") : "手持控制请使用安卓安装包";
+}
+/** 手柄每 16 毫秒发一帧，状态字大多数时候没变——没变就不碰，免得每帧重排版。 */
+function setSensorState(text: string): void {
+  const el = document.querySelector<HTMLElement>("#sensorState")!;
+  if (el.textContent !== text) el.textContent = text;
 }
 function controllerBadge(online: boolean, text: string): void {
   document.querySelector("#handheldConnection")!.className = `badge ${online ? "online" : "connecting"}`;
@@ -1458,6 +1500,8 @@ function renderControllerMode(): void {
   transportInput.querySelector<HTMLOptionElement>('[value="network"]')!.disabled = shooter;
   const bluetooth = transportInput.value === "bluetooth";
   handheldCard.classList.toggle("shooter-mode", shooter);
+  for (const button of modeButtons) button.setAttribute("aria-pressed", String(button.dataset.mode === modeInput.value));
+  handheldCard.classList.toggle("bluetooth-mode", bluetooth);
   document.querySelector("#shooterControls")!.classList.toggle("hidden", !shooter);
   document.querySelector("#shooterSettings")!.classList.toggle("hidden", !shooter);
   document.querySelector("#bluetoothPanel")!.classList.toggle("hidden", !bluetooth);
@@ -1577,14 +1621,14 @@ async function sendHandheldFrame(): Promise<void> {
         // 按实际握持反馈，两轴沿用陀螺仪计算方向。
         const result = await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx: coarse.dx + gyro.dx, dy: coarse.dy + gyro.dy, sessionId });
         if (!result.sent) throw new Error("蓝牙鼠标输出未送达，请检查连接");
-        document.querySelector("#sensorState")!.textContent = shooterState.stickPressed ? "摇杆大移动 · 陀螺仪暂停" : gyro.calibrating ? "请静握 1 秒，校准陀螺仪" : gyroCalibrationSaved ? "陀螺仪微调 · 沿用已保存校准" : "陀螺仪微调";
+        setSensorState(shooterState.stickPressed ? "摇杆大移动 · 陀螺仪暂停" : gyro.calibrating ? "请静握 1 秒，校准陀螺仪" : gyroCalibrationSaved ? "陀螺仪微调" : "陀螺仪微调 · 校准没存上，下次要重新校准");
       } else {
         const quaternion = [sample.qx, sample.qy, sample.qz, sample.qw];
         if (!tiltBaseline || handheldRecenter) tiltBaseline = quaternion;
         const tilt = relativeTilt(tiltBaseline, quaternion);
         const result = await BluetoothController.sendGamepad({ buttons: bluetoothButtons(padState), x: stickState.x, y: stickState.y, ...tilt, lt: padState.has("zl") ? 1 : 0, rt: padState.has("zr") ? 1 : 0, sessionId });
         if (!result.sent) throw new Error("蓝牙手柄输出未送达，请检查连接");
-        document.querySelector("#sensorState")!.textContent = "触摸控制左摇杆 · 转动控制右摇杆";
+        setSensorState("触摸控制左摇杆 · 转动控制右摇杆");
       }
     } else if (!bluetooth && handheldSocket?.readyState === WebSocket.OPEN) {
       const touches: Record<string, unknown>[] = [...padState].map((control) => ({ control, pressed: true }));
@@ -1703,15 +1747,15 @@ function renderLinkState(state: LinkState, failed = false): void {
   const buttons: { label: string; which: "tether" | "wifi" }[] = [];
   let text = "";
   if (state.known && !state.usb && !state.wifi) {
-    text = "两条路都没开：现在只有移动数据，连不到电脑。二选一——连上电脑那个 WiFi，或者插数据线再打开「USB 网络共享」。";
+    text = "现在只有移动数据，连不到电脑。连上电脑所在的 Wi-Fi，或插数据线并打开「USB 网络共享」。";
     buttons.push({ label: "打开网络共享", which: "tether" }, { label: "连 WiFi", which: "wifi" });
   } else if (failed && !state.known) {
-    text = "没找到电脑。手机和电脑要连同一个 WiFi，或者插数据线并打开「USB 网络共享」。";
+    text = "没找到电脑。手机和电脑要连同一个 Wi-Fi，或插数据线并打开「USB 网络共享」。";
     buttons.push({ label: "打开网络共享", which: "tether" }, { label: "连 WiFi", which: "wifi" });
   } else if (failed && state.usb) {
-    text = "数据线这条路是通的，但没找到电脑。确认电脑上 MotionControl 开着，并且「摄像头来源」已经选了手机摄像头。";
+    text = "数据线已接通，但没找到电脑。确认电脑上 MotionControl 开着，摄像头来源选的是「手机摄像头」。";
   } else if (failed) {
-    text = "这个 WiFi 里没找到电脑。多半是两边不在同一个路由器下——换成插数据线最省事。";
+    text = "这个 Wi-Fi 里没找到电脑，可能不在同一个路由器下。插数据线最省事。";
     buttons.push({ label: "换成数据线", which: "tether" });
   }
   if (failed) {
@@ -1720,7 +1764,8 @@ function renderLinkState(state: LinkState, failed = false): void {
     const hint = lastOctetHint(state.links ?? []);
     if (hint && !serverInput.value.includes(hint.prefix)) {
       serverInput.value = hint.prefix;
-      text += `\n实在找不到就手填：电脑上那个地址的最后一段（比如 ${hint.example}），补在上面的「电脑地址」里。前面几位已经替你填好了。`;
+      text += `\n也可以手填：在下面「更多设置」的电脑地址里补上最后一段（比如 ${hint.example}）。`;
+      document.querySelector<HTMLDetailsElement>("#setupMore")!.open = true;
     }
   }
 
@@ -1734,7 +1779,7 @@ function renderLinkState(state: LinkState, failed = false): void {
     button.textContent = label;
     button.addEventListener("click", () => {
       void LocalNetwork.openSettings({ which }).catch(() => {
-        line.textContent = "这台手机打不开那一页，请自己去系统设置里找「网络共享」或者 WiFi。";
+        line.textContent = "这台手机打不开那一页，请到系统设置里找「网络共享」或 Wi-Fi。";
       });
     });
     return button;
@@ -1747,11 +1792,7 @@ async function refreshLinkState(failed = false): Promise<void> {
 
 renderControlConfig();
 document.querySelector("#cameraRole")!.addEventListener("click", () => { void (running ? stop() : Promise.resolve()).then(() => { showRole("camera"); void refreshLinkState(); return refreshCameraDevices(); }).catch((error) => { document.querySelector("#securityWarning")!.textContent = error instanceof Error ? error.message : String(error); }); });
-document.querySelector("#handheldRole")!.addEventListener("click", () => { modeInput.value = "gamepad"; void (running || voiceEnabled ? stop() : Promise.resolve()).then(() => startHandheld()); });
-document.querySelector("#shooterRole")!.addEventListener("click", () => {
-  modeInput.value = "shooter"; transportInput.value = "bluetooth";
-  void (running || voiceEnabled ? stop() : Promise.resolve()).then(() => startHandheld());
-});
+document.querySelector("#handheldRole")!.addEventListener("click", () => { void (running || voiceEnabled ? stop() : Promise.resolve()).then(() => startHandheld()); });
 const restartController = async () => { await suspendHandheld(); await controllerStartTask; await startHandheld(); };
 modeInput.addEventListener("change", () => { void restartController(); });
 transportInput.addEventListener("change", () => { void restartController(); });
@@ -1795,7 +1836,6 @@ document.querySelector("#startButton")!.addEventListener("click", () => void sta
 gameControlButton.addEventListener("click", () => { if (gameOutputEnabled !== null) requestGameOutput(!gameOutputEnabled); });
 function updateZoneToggle(): void {
   toggleZonesButton.setAttribute("aria-pressed", String(zoneOverlayEnabled));
-  toggleZonesButton.textContent = zoneOverlayEnabled ? "区域框：开" : "区域框：关";
   toggleZonesButton.classList.toggle("selected", zoneOverlayEnabled);
 }
 updateZoneToggle();
@@ -1816,7 +1856,7 @@ voiceRecognitionSelect.addEventListener("change", () => {
   localStorage.setItem("motionbridge-voice-recognition", voiceRecognitionMode);
   if (voiceEnabled) void (async () => { await stopVoiceControl(false); await startVoiceControl(); })();
 });
-frontCameraButton.addEventListener("click", () => void chooseFacing("user")); backCameraButton.addEventListener("click", () => void chooseFacing("environment")); voiceToggle.addEventListener("change", () => { localStorage.setItem("motionbridge-voice-auto", voiceToggle.checked ? "1" : "0"); void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()); });
+flipCameraButton.addEventListener("click", () => void chooseFacing(facingMode === "user" ? "environment" : "user")); voiceToggle.addEventListener("change", () => { localStorage.setItem("motionbridge-voice-auto", voiceToggle.checked ? "1" : "0"); void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()); });
 document.querySelector("#centerSensor")!.addEventListener("click", () => { handheldRecenter = true; gyroCalibrationPending = modeInput.value === "shooter"; gyroMouse.reset(); document.querySelector("#sensorState")!.textContent = modeInput.value === "shooter" ? "请静握 1 秒，校准陀螺仪" : "正在居中"; }); document.querySelector("#stopHandheld")!.addEventListener("click", () => void stopHandheld());
 document.querySelectorAll<HTMLElement>("[data-pad]").forEach((button) => { button.addEventListener("pointerdown", (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); padState.add(button.dataset.pad!); button.classList.add("pressed"); }); const release = () => { padState.delete(button.dataset.pad!); button.classList.remove("pressed"); }; button.addEventListener("pointerup", release); button.addEventListener("pointercancel", release); button.addEventListener("lostpointercapture", release); });
 const stick = document.querySelector<HTMLElement>("#stick")!; stick.addEventListener("pointerdown", (event) => { stick.setPointerCapture(event.pointerId); updateStick(event); }); stick.addEventListener("pointermove", (event) => { if (stick.hasPointerCapture(event.pointerId)) updateStick(event); }); const releaseStick = () => { stickState = { x: 0, y: 0 }; stick.querySelector<HTMLElement>("i")!.style.transform = "translate(0,0)"; }; stick.addEventListener("pointerup", releaseStick); stick.addEventListener("pointercancel", releaseStick);
@@ -1868,8 +1908,8 @@ void App.getInfo().then((info) => {
   const el = document.querySelector<HTMLElement>("#brandVersion");
   if (!el || !info?.version) return;
   el.textContent = info.version === __WEB_VERSION__
-    ? `MOTIONCONTROL ${info.version}`
-    : `MOTIONCONTROL ${info.version} · 网页 ${__WEB_VERSION__}`;
+    ? info.version
+    : `${info.version} · 网页 ${__WEB_VERSION__}`;
 }).catch(() => { /* 浏览器里没有原生信息，维持网页版本就行 */ });
 App.addListener("backButton", () => { void handleBackButton(); });
 // 从系统设置页回来的时候再看一眼。上面那两个按钮把人送出去，
