@@ -70,6 +70,11 @@ const NativeAudio = registerPlugin<NativeAudioApi>("NativeAudio");
 const SensorBridge = registerPlugin<{ start(options?: { mode: string }): Promise<void>; getLatest(): Promise<SensorSample>; stop(): Promise<void> }>("SensorBridge");
 // 倒过来放和状态栏图标颜色只有原生能改；电脑上预览时没有这个插件，调用失败就算了。
 const Display = registerPlugin<{ setOrientation(options: { reverse: boolean }): Promise<void>; setBars(options: { light: boolean }): Promise<void> }>("Display");
+// 网页包会热更到旧 APK 上，而旧 APK 里没有 Display：白天模式下状态栏图标还是白的，
+// 浅色页面上看不见；「倒过来」按了也没反应。所以那种手机上只用深色、不给「倒过来」，
+// 装了新 APK 才全开。电脑上预览不是原生，照常跟随系统。
+const displayNative = !Capacitor.isNativePlatform() || Capacitor.isPluginAvailable("Display");
+if (!displayNative) document.documentElement.classList.add("dark-only");
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 document.body.dataset.role = "home";
@@ -180,6 +185,7 @@ function setStartBusy(label: string | null): void {
 }
 const flipCameraButton = document.querySelector<HTMLButtonElement>("#flipCameraButton")!;
 const upsideDownButton = document.querySelector<HTMLButtonElement>("#upsideDownButton")!;
+upsideDownButton.classList.toggle("hidden", !displayNative);
 const cameraSwitchState = document.querySelector<HTMLElement>("#cameraSwitchState")!;
 
 let vision: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
@@ -1499,8 +1505,8 @@ let screenApplied = "";
 function syncScreen(): void {
   const cameraLive = running && activeRole === "camera";
   document.body.classList.toggle("camera-live", cameraLive);
-  const reverse = activeRole === "camera" && upsideDown;
-  const light = !cameraLive && prefersLight.matches;
+  const reverse = displayNative && activeRole === "camera" && upsideDown;
+  const light = displayNative && !cameraLive && prefersLight.matches;
   upsideDownButton.setAttribute("aria-pressed", String(upsideDown));
   const next = `${reverse}|${light}`;
   if (next === screenApplied) return;
