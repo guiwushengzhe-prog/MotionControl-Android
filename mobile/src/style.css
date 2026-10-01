@@ -64,6 +64,7 @@ html.native-preview body #camera { visibility: hidden; background: transparent; 
 #cameraStage { position: fixed; inset: 0; width: 100%; height: 100%; transform-origin: center; }
 #cameraStage.front-mirror { transform: scaleX(-1); }
 #camera, #overlay, .shade { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+/* 没开摄像头时安卓 WebView 会在 video 上铺一张灰底大播放键，模板里给了透明 poster 把它盖掉。 */
 #camera { background: #000; }
 #overlay { z-index: 2; background: transparent; }
 #inferenceCanvas { display: none; }

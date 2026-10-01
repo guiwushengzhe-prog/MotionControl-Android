@@ -86,7 +86,7 @@ const ICONS = {
   stop: icon('<rect x="6.5" y="6.5" width="11" height="11" rx="2"/>'),
 };
 app.innerHTML = `
-  <div id="cameraStage"><video id="camera" autoplay playsinline muted></video><canvas id="overlay"></canvas><div class="shade"></div><canvas id="inferenceCanvas" aria-hidden="true"></canvas></div>
+  <div id="cameraStage"><video id="camera" autoplay playsinline muted poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAACH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></video><canvas id="overlay"></canvas><div class="shade"></div><canvas id="inferenceCanvas" aria-hidden="true"></canvas></div>
   <header class="app-header"><div class="brand"><h1>MotionControl</h1><span id="brandVersion">${__WEB_VERSION__}</span></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
   <main>
     <section class="sheet role-card" id="roleCard">
