@@ -68,6 +68,8 @@ type NativeAudioApi = {
 };
 const NativeAudio = registerPlugin<NativeAudioApi>("NativeAudio");
 const SensorBridge = registerPlugin<{ start(options?: { mode: string }): Promise<void>; getLatest(): Promise<SensorSample>; stop(): Promise<void> }>("SensorBridge");
+// 倒过来放和状态栏图标颜色只有原生能改；电脑上预览时没有这个插件，调用失败就算了。
+const Display = registerPlugin<{ setOrientation(options: { reverse: boolean }): Promise<void>; setBars(options: { light: boolean }): Promise<void> }>("Display");
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 document.body.dataset.role = "home";
@@ -80,6 +82,7 @@ const ICONS = {
   back: icon('<path d="M15 6l-6 6 6 6"/>'),
   mic: icon('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>'),
   flip: icon('<path d="M20 11a8 8 0 0 0-14.5-4.6L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.5 4.6L20 16"/><path d="M20 20v-4h-4"/>'),
+  upsideDown: icon('<rect x="8" y="2.5" width="8" height="13" rx="2"/><path d="M11 5h2"/><path d="M4.5 16.5a8.5 8.5 0 0 0 15 0"/><path d="M19.5 20.5v-4h-4"/>'),
   frame: icon('<path d="M4 9V6a2 2 0 0 1 2-2h3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3"/>'),
   collapse: icon('<path d="M6 9l6 6 6-6"/>'),
   expand: icon('<path d="M6 15l6-6 6 6"/>'),
@@ -116,6 +119,7 @@ app.innerHTML = `
       <div class="hud-tools">
         <label class="tool" id="voiceControl"><input id="voiceToggle" type="checkbox">${ICONS.mic}<span>语音</span></label>
         <button id="flipCameraButton" class="tool" type="button" aria-label="换镜头">${ICONS.flip}<span>换镜头</span></button>
+        <button id="upsideDownButton" class="tool" type="button" aria-pressed="false" aria-label="倒过来放，充电口朝上">${ICONS.upsideDown}<span>倒过来</span></button>
         <button id="toggleZonesButton" class="tool" type="button" aria-pressed="true">${ICONS.frame}<span>区域框</span></button>
         <button id="hideStatus" class="tool" type="button">${ICONS.collapse}<span>收起</span></button>
         <button id="stopButton" class="tool danger" type="button">${ICONS.stop}<span>停止</span></button>
@@ -175,6 +179,7 @@ function setStartBusy(label: string | null): void {
   startButton.textContent = label ?? START_LABEL;
 }
 const flipCameraButton = document.querySelector<HTMLButtonElement>("#flipCameraButton")!;
+const upsideDownButton = document.querySelector<HTMLButtonElement>("#upsideDownButton")!;
 const cameraSwitchState = document.querySelector<HTMLElement>("#cameraSwitchState")!;
 
 let vision: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
@@ -506,8 +511,7 @@ function renderZoneOverlay(): void {
       context.rect(x, y, w, h);
       labelCx = x + w / 2; labelCy = y;
     }
-    // 闸不是键，左手伸进去不亮。
-    const active = id !== "lookGate" && (Boolean(state.pressed) || heldIds.has(id) || heldIds.has(`zone.${id}`));
+    const active = Boolean(state.pressed) || heldIds.has(id) || heldIds.has(`zone.${id}`);
     const color = active ? "#54f29a" : "#ffb52e";
     context.lineJoin = "round";
     context.fillStyle = active ? "rgba(84,242,154,.28)" : "rgba(255,181,46,.10)";
@@ -1011,7 +1015,7 @@ async function start(): Promise<void> {
   document.querySelector("#securityWarning")!.textContent = "";
   try { overlayRenderingEnabled = true; lastSendStateText = ""; const picked = await pickServer(serverInput.value, setStartBusy);
     if (!picked.found) { await refreshLinkState(true); throw new Error("没找到电脑"); }
-    const socketUrl = picked.url; serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setStartBusy("正在打开摄像头…"); await startCamera(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden");
+    const socketUrl = picked.url; serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setStartBusy("正在打开摄像头…"); await startCamera(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); syncScreen();
     // 先握手，再加载模型。模型要好几秒，那几秒原来是干等；现在连接和加载并行，
     // 等模型就绪时链路通常已经通了，控制配置（要不要跑手部模型）也到了。
     connectSocket(socketUrl);
@@ -1471,7 +1475,7 @@ async function startVoiceControl(): Promise<void> {
   }
 }
 
-async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; releaseHandModel(); handTrackingSides = []; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline");
+async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; releaseHandModel(); handTrackingSides = []; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline"); syncScreen();
   // 回到这一页就重新读一遍。人很可能就是刚刚按着上面那个按钮去把网络共享
   // 打开了再回来的——还给他看一句"两条路都没开"，那句话就从提示变成了错误。
   await refreshLinkState(); }
@@ -1483,7 +1487,29 @@ function showRole(role: "home" | "camera" | "handheld"): void { activeRole = rol
   // 而且两者都是固定定位，横屏时版本号折成两行会把页头撑高压到卡片上——标题整个
   // 被盖住，看着像渲染坏了。
   document.querySelector<HTMLElement>("header")?.classList.toggle("hidden", role === "handheld");
-  renderControlConfig(); }
+  renderControlConfig(); syncScreen(); }
+
+// 屏幕跟着用法走。摄像头开着时整屏是画面，控件一律深色；其余页面跟随系统的白天 / 夜间，
+// 状态栏图标的深浅也要跟着换，不然浅色页面上白图标就看不见了。
+// 「倒过来」只管固定摄像头：立着放时充电口在下面会挡着，倒过来充电口就朝上。拿在手里
+// 的手柄、鼠标不用它——陀螺仪按正着拿算方向。
+const prefersLight = window.matchMedia("(prefers-color-scheme: light)");
+let upsideDown = localStorage.getItem("motionbridge-upside-down") === "1";
+let screenApplied = "";
+function syncScreen(): void {
+  const cameraLive = running && activeRole === "camera";
+  document.body.classList.toggle("camera-live", cameraLive);
+  const reverse = activeRole === "camera" && upsideDown;
+  const light = !cameraLive && prefersLight.matches;
+  upsideDownButton.setAttribute("aria-pressed", String(upsideDown));
+  const next = `${reverse}|${light}`;
+  if (next === screenApplied) return;
+  screenApplied = next;
+  void Display.setOrientation({ reverse }).catch(() => {});
+  void Display.setBars({ light }).catch(() => {});
+}
+prefersLight.addEventListener("change", syncScreen);
+syncScreen();
 
 function controllerError(error: unknown): void {
   document.querySelector("#sensorState")!.textContent = Capacitor.isNativePlatform() ? (error instanceof Error ? error.message : "控制器异常") : "手持控制请使用安卓安装包";
@@ -1859,7 +1885,12 @@ voiceRecognitionSelect.addEventListener("change", () => {
   localStorage.setItem("motionbridge-voice-recognition", voiceRecognitionMode);
   if (voiceEnabled) void (async () => { await stopVoiceControl(false); await startVoiceControl(); })();
 });
-flipCameraButton.addEventListener("click", () => void chooseFacing(facingMode === "user" ? "environment" : "user")); voiceToggle.addEventListener("change", () => { localStorage.setItem("motionbridge-voice-auto", voiceToggle.checked ? "1" : "0"); void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()); });
+flipCameraButton.addEventListener("click", () => void chooseFacing(facingMode === "user" ? "environment" : "user"));
+upsideDownButton.addEventListener("click", () => {
+  upsideDown = !upsideDown;
+  try { localStorage.setItem("motionbridge-upside-down", upsideDown ? "1" : "0"); } catch { /* 存不下只影响下次打开 */ }
+  syncScreen();
+}); voiceToggle.addEventListener("change", () => { localStorage.setItem("motionbridge-voice-auto", voiceToggle.checked ? "1" : "0"); void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()); });
 document.querySelector("#centerSensor")!.addEventListener("click", () => { handheldRecenter = true; gyroCalibrationPending = modeInput.value === "shooter"; gyroMouse.reset(); document.querySelector("#sensorState")!.textContent = modeInput.value === "shooter" ? "请静握 1 秒，校准陀螺仪" : "正在居中"; }); document.querySelector("#stopHandheld")!.addEventListener("click", () => void stopHandheld());
 document.querySelectorAll<HTMLElement>("[data-pad]").forEach((button) => { button.addEventListener("pointerdown", (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); padState.add(button.dataset.pad!); button.classList.add("pressed"); }); const release = () => { padState.delete(button.dataset.pad!); button.classList.remove("pressed"); }; button.addEventListener("pointerup", release); button.addEventListener("pointercancel", release); button.addEventListener("lostpointercapture", release); });
 const stick = document.querySelector<HTMLElement>("#stick")!; stick.addEventListener("pointerdown", (event) => { stick.setPointerCapture(event.pointerId); updateStick(event); }); stick.addEventListener("pointermove", (event) => { if (stick.hasPointerCapture(event.pointerId)) updateStick(event); }); const releaseStick = () => { stickState = { x: 0, y: 0 }; stick.querySelector<HTMLElement>("i")!.style.transform = "translate(0,0)"; }; stick.addEventListener("pointerup", releaseStick); stick.addEventListener("pointercancel", releaseStick);

@@ -1,6 +1,7 @@
-/* 手机端配色和电脑端「石墨」（夜间）是同一套。手机只在玩的时候看：摄像头画面本来就是
-   暗的，手柄握在手里，所以固定用深色，不随系统切换。颜色只在这里定义，下面只用变量。 */
-:root {
+/* 配色和电脑端是同一套：夜间「石墨」、白天「月白」，跟随手机系统切换。
+   摄像头开着的时候整屏是画面，控件一律用石墨（body.camera-live），和相机应用一样。
+   颜色只在这里定义，下面只用变量。 */
+:root, body.camera-live {
   --bg: #0b0b0c;
   --card: #1c1c1e;
   --fill: #2c2c2e;
@@ -24,15 +25,57 @@
   --warn: #ff9f0a;
   --warn-tint: rgba(255, 159, 10, .14);
   --danger: #ff6961;
+  --pad-y: #ffd60a;
+  --pad-x: #64b1ff;
+  --pad-b: #ff6961;
+  --pad-a: #30d158;
   --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a1a1a6' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Noto Sans CJK SC", "Microsoft YaHei UI", system-ui, sans-serif;
 
   color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f2f2f7;
+    --card: #ffffff;
+    --fill: #e9e9ee;
+    --fill-2: #dcdce1;
+    --fill-3: #cfcfd5;
+    --hud: rgba(255, 255, 255, .92);
+    --seg-bg: rgba(118, 118, 128, .12);
+    --seg-on: #ffffff;
+    --line: rgba(60, 60, 67, .12);
+    --line-strong: rgba(60, 60, 67, .24);
+    --text: #1d1d1f;
+    --text-2: #6e6e73;
+    --text-3: #8e8e93;
+    --accent: #0071e3;
+    --accent-press: #005bbf;
+    --tint: rgba(0, 113, 227, .10);
+    --on-tint: #0066cc;
+    --ok: #1f8a3b;
+    --ok-tint: rgba(52, 199, 89, .15);
+    --ok-deep: #dcf3e2;
+    --warn: #b25000;
+    --warn-tint: rgba(255, 149, 0, .14);
+    --danger: #d70015;
+    --pad-y: #b98900;
+    --pad-x: #0066cc;
+    --pad-b: #d70015;
+    --pad-a: #1f8a3b;
+    --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+    color-scheme: light;
+  }
+}
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Noto Sans CJK SC", "Microsoft YaHei UI", system-ui, sans-serif;
+
   color: var(--text);
   background: var(--bg);
   font-family: var(--font);
   -webkit-tap-highlight-color: transparent;
 }
+body.camera-live { color: var(--text); }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100dvh; overflow: hidden; background: var(--bg); font-size: 15px; line-height: 1.4; -webkit-font-smoothing: antialiased; }
 h1, h2, p { margin: 0; }
@@ -62,6 +105,7 @@ html.native-preview body #camera { visibility: hidden; background: transparent; 
 
 /* ---- 摄像头画面 ---------------------------------------------------------------- */
 #cameraStage { position: fixed; inset: 0; width: 100%; height: 100%; transform-origin: center; }
+body:not(.camera-live) #cameraStage { visibility: hidden; }
 #cameraStage.front-mirror { transform: scaleX(-1); }
 #camera, #overlay, .shade { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 /* 没开摄像头时安卓 WebView 会在 video 上铺一张灰底大播放键，模板里给了透明 poster 把它盖掉。 */
@@ -90,19 +134,20 @@ body[data-role="home"] #connectionBadge { display: none; }
 
 main { position: fixed; z-index: 4; inset: 0; display: grid; place-items: center; padding: 64px 16px 20px; pointer-events: none; }
 
-/* ---- 选用法、连接电脑：占满整屏的一页，按钮放在下半屏拇指够得着的地方 ---------------- */
+/* ---- 选用法、连接电脑：整屏一页，按钮放在下半屏拇指够得着的地方 ------------------------ */
 .page { pointer-events: auto; align-self: stretch; display: flex; flex-direction: column; width: min(520px, 100%); min-height: 0; overflow-y: auto; padding: 28px 4px 4px; }
 .page h2 { font-size: 30px; font-weight: 700; letter-spacing: -.01em; line-height: 1.2; }
 
-.role-page h2 { margin: 4px 4px 18px; }
-/* 两个入口平分剩下的高度，一个就是半屏：站着拿手机也一下就点中。 */
-.role-list { flex: 1; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-.role-option { position: relative; flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; width: 100%; min-height: 180px; max-height: 420px; padding: 24px 20px; border-radius: 24px; background: var(--card); text-align: center; font-weight: 400; }
+/* 大标题在上，两个入口各占四分之一屏左右，四周留白——参照 iOS 设置向导、Material 的选择页。
+   入口够大，站着拿手机一下就点中；但不再把整屏塞满。 */
+.role-page h2 { margin: 3vh 4px 22px; }
+.role-list { display: flex; flex-direction: column; gap: 14px; }
+.role-option { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; width: 100%; height: clamp(168px, 25vh, 236px); padding: 22px 20px; border-radius: 24px; background: var(--card); text-align: center; font-weight: 400; }
 .role-option:active { background: var(--fill); }
-.role-icon { display: grid; place-items: center; width: 96px; height: 96px; border-radius: 50%; background: var(--tint); color: var(--on-tint); }
-.role-icon svg { width: 46px; height: 46px; }
+.role-icon { display: grid; place-items: center; width: 80px; height: 80px; border-radius: 50%; background: var(--tint); color: var(--on-tint); }
+.role-icon svg { width: 40px; height: 40px; }
 .role-text { display: grid; gap: 6px; min-width: 0; }
-.role-text strong { font-size: 26px; font-weight: 700; }
+.role-text strong { font-size: 24px; font-weight: 700; }
 .role-text small { color: var(--text-2); font-size: 16px; }
 .role-tag { position: absolute; top: 16px; right: 16px; padding: 4px 11px; border-radius: 999px; background: var(--ok-tint); color: var(--ok); font-size: 13px; font-style: normal; font-weight: 600; }
 
@@ -163,7 +208,7 @@ details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
 .game-control.enabled { background: var(--fill-2); color: var(--text); }
 .game-control:disabled { opacity: 1; background: var(--fill); color: var(--text-2); }
 
-.hud-tools { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.hud-tools { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
 .tool { position: relative; display: grid; justify-items: center; align-content: center; gap: 4px; min-height: 64px; padding: 8px 2px; border-radius: 14px; background: var(--fill); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; }
 .tool span { white-space: nowrap; }
 .tool input { position: absolute; width: 1px; height: 1px; min-height: 0; opacity: 0; pointer-events: none; }
@@ -180,7 +225,7 @@ details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
 .guide span { position: absolute; bottom: 100%; left: 50%; transform: translate(-50%, -10px); padding: 6px 14px; border-radius: 999px; background: var(--hud); font-size: 15px; font-weight: 600; white-space: nowrap; }
 @media (orientation: portrait) { .guide { width: 58vw; aspect-ratio: .5; } }
 
-.loading { position: fixed; z-index: 7; inset: 0; display: grid; place-content: center; justify-items: center; gap: 16px; background: rgba(0, 0, 0, .82); }
+.loading { position: fixed; z-index: 7; inset: 0; display: grid; place-content: center; justify-items: center; gap: 16px; background: color-mix(in srgb, var(--bg) 86%, transparent); }
 .loading i { width: 36px; height: 36px; border: 3px solid var(--fill-2); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 .loading b { font-size: 15px; font-weight: 600; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -240,10 +285,10 @@ details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
 .stick i { width: 42%; aspect-ratio: 1; border-radius: 50%; background: var(--accent); box-shadow: 0 6px 18px rgba(0, 0, 0, .45); }
 .face-buttons { display: grid; justify-self: center; grid-template: repeat(3, 1fr) / repeat(3, 1fr); gap: 6px; width: min(44vw, 240px); aspect-ratio: 1; }
 .face-buttons button { padding: 0; border-radius: 50%; font-size: 26px; font-weight: 800; touch-action: none; }
-.face-buttons [data-pad="y"] { grid-area: 2 / 1; color: #ffd60a; }
-.face-buttons [data-pad="x"] { grid-area: 1 / 2; color: #64b1ff; }
-.face-buttons [data-pad="b"] { grid-area: 2 / 3; color: #ff6961; }
-.face-buttons [data-pad="a"] { grid-area: 3 / 2; color: #30d158; }
+.face-buttons [data-pad="y"] { grid-area: 2 / 1; color: var(--pad-y); }
+.face-buttons [data-pad="x"] { grid-area: 1 / 2; color: var(--pad-x); }
+.face-buttons [data-pad="b"] { grid-area: 2 / 3; color: var(--pad-b); }
+.face-buttons [data-pad="a"] { grid-area: 3 / 2; color: var(--pad-a); }
 .middle-buttons { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .middle-buttons button { min-height: 52px; border-radius: 14px; font-size: 16px; touch-action: none; }
 .handheld-card button.pressed { background: var(--accent); color: #fff; }
