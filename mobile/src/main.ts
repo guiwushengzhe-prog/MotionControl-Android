@@ -481,6 +481,8 @@ function renderZoneOverlay(): void {
   lastZoneAnimationAt = now;
   for (const id of ["leftHand", "rightHand", "leftFoot", "rightFoot", "headJump", "lookGate"]) {
     const raw = zones[id];
+    // 上下视角那道闸只在电脑端开着「抬头低头」时才发过来；没发就是关了，别留着旧的框。
+    if (id === "lookGate" && !raw) { delete animatedZones[id]; continue; }
     const target = zoneGeometry(raw);
     const current = animatedZones[id];
     // Keep the last valid geometry when a low-rate update omits a zone.  This
@@ -504,7 +506,8 @@ function renderZoneOverlay(): void {
       context.rect(x, y, w, h);
       labelCx = x + w / 2; labelCy = y;
     }
-    const active = Boolean(state.pressed) || heldIds.has(id) || heldIds.has(`zone.${id}`);
+    // 闸不是键，左手伸进去不亮。
+    const active = id !== "lookGate" && (Boolean(state.pressed) || heldIds.has(id) || heldIds.has(`zone.${id}`));
     const color = active ? "#54f29a" : "#ffb52e";
     context.lineJoin = "round";
     context.fillStyle = active ? "rgba(84,242,154,.28)" : "rgba(255,181,46,.10)";
