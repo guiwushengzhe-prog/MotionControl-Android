@@ -89,17 +89,17 @@ app.innerHTML = `
   <div id="cameraStage"><video id="camera" autoplay playsinline muted poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAACH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></video><canvas id="overlay"></canvas><div class="shade"></div><canvas id="inferenceCanvas" aria-hidden="true"></canvas></div>
   <header class="app-header"><div class="brand"><h1>MotionControl</h1><span id="brandVersion">${__WEB_VERSION__}</span></div><div id="connectionBadge" class="badge"><i></i><b>未连接电脑</b></div></header>
   <main>
-    <section class="sheet role-card" id="roleCard">
+    <section class="page role-page" id="roleCard">
       <h2>这台手机用来做什么</h2>
       <div class="role-list">
-        <button id="cameraRole" class="role-option" type="button"><span class="role-icon">${ICONS.camera}</span><span class="role-text"><strong>固定摄像头</strong><small>立在面前，识别身体动作</small></span><span class="role-tail"><em class="role-tag">推荐</em>${ICONS.chevron}</span></button>
-        <button id="handheldRole" class="role-option" type="button"><span class="role-icon">${ICONS.gamepad}</span><span class="role-text"><strong>手持控制器</strong><small>拿在手里，当手柄或鼠标用</small></span><span class="role-tail">${ICONS.chevron}</span></button>
+        <button id="cameraRole" class="role-option" type="button"><em class="role-tag">推荐</em><span class="role-icon">${ICONS.camera}</span><span class="role-text"><strong>固定摄像头</strong><small>立在面前，识别身体动作</small></span></button>
+        <button id="handheldRole" class="role-option" type="button"><span class="role-icon">${ICONS.gamepad}</span><span class="role-text"><strong>手持控制器</strong><small>拿在手里，当手柄或鼠标用</small></span></button>
       </div>
     </section>
-    <section class="sheet hidden" id="setupCard">
+    <section class="page setup-page hidden" id="setupCard">
       <button id="cameraHome" class="back-button" type="button">${ICONS.back}返回</button>
       <h2>固定摄像头</h2>
-      <p class="setup-help">电脑上先打开 MotionControl。</p>
+      <div class="setup-hero"><span aria-hidden="true">${ICONS.camera}</span><p>电脑上先打开 MotionControl</p></div>
       <div class="link-state" id="linkState" hidden><p id="linkLine"></p><div class="link-actions" id="linkActions"></div></div>
       <button id="startButton" class="start-primary" type="button">连接并开始</button>
       <p class="warning" id="securityWarning"></p>

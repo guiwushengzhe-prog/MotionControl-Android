@@ -90,27 +90,30 @@ body[data-role="home"] #connectionBadge { display: none; }
 
 main { position: fixed; z-index: 4; inset: 0; display: grid; place-items: center; padding: 64px 16px 20px; pointer-events: none; }
 
-/* ---- 选用法、连接电脑：一张卡片 --------------------------------------------------- */
-.sheet { pointer-events: auto; width: min(460px, 100%); max-height: calc(100dvh - 84px); overflow-y: auto; padding: 22px 18px 18px; border-radius: 22px; background: var(--card); }
-.sheet h2 { font-size: 24px; font-weight: 700; letter-spacing: -.01em; }
+/* ---- 选用法、连接电脑：占满整屏的一页，按钮放在下半屏拇指够得着的地方 ---------------- */
+.page { pointer-events: auto; align-self: stretch; display: flex; flex-direction: column; width: min(520px, 100%); min-height: 0; overflow-y: auto; padding: 8px 4px 4px; }
+.page h2 { font-size: 30px; font-weight: 700; letter-spacing: -.01em; line-height: 1.2; }
 
-.role-card h2 { margin: 2px 4px 16px; }
-.role-list { display: grid; gap: 10px; }
-.role-option { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 14px; width: 100%; min-height: 84px; padding: 16px 12px 16px 14px; border-radius: 16px; background: var(--fill); text-align: left; font-weight: 400; }
-.role-option:active { background: var(--fill-2); }
-.role-icon { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 13px; background: var(--tint); color: var(--on-tint); }
-.role-icon svg { width: 25px; height: 25px; }
-.role-text { display: grid; gap: 3px; min-width: 0; }
-.role-text strong { font-size: 18px; font-weight: 700; }
-.role-text small { color: var(--text-2); font-size: 13px; }
-.role-tail { display: flex; align-items: center; gap: 6px; color: var(--text-3); }
-.role-tail svg { width: 18px; height: 18px; }
-.role-tag { padding: 3px 9px; border-radius: 999px; background: var(--ok-tint); color: var(--ok); font-size: 12px; font-style: normal; font-weight: 600; }
+.role-page h2 { margin: 4px 4px 18px; }
+/* 两个入口平分剩下的高度，一个就是半屏：站着拿手机也一下就点中。 */
+.role-list { flex: 1; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.role-option { position: relative; flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; width: 100%; min-height: 180px; max-height: 420px; padding: 24px 20px; border-radius: 24px; background: var(--card); text-align: center; font-weight: 400; }
+.role-option:active { background: var(--fill); }
+.role-icon { display: grid; place-items: center; width: 96px; height: 96px; border-radius: 50%; background: var(--tint); color: var(--on-tint); }
+.role-icon svg { width: 46px; height: 46px; }
+.role-text { display: grid; gap: 6px; min-width: 0; }
+.role-text strong { font-size: 26px; font-weight: 700; }
+.role-text small { color: var(--text-2); font-size: 16px; }
+.role-tag { position: absolute; top: 16px; right: 16px; padding: 4px 11px; border-radius: 999px; background: var(--ok-tint); color: var(--ok); font-size: 13px; font-style: normal; font-weight: 600; }
 
-.back-button { display: inline-flex; align-items: center; gap: 2px; min-height: 36px; margin: -8px 0 6px -8px; padding: 6px 10px 6px 4px; background: transparent; color: var(--accent); font-size: 16px; font-weight: 500; }
-.back-button svg { width: 20px; height: 20px; }
-.setup-help { margin: 6px 0 18px; color: var(--text-2); font-size: 14px; }
-.start-primary { width: 100%; min-height: 54px; border-radius: 14px; background: var(--accent); color: #fff; font-size: 17px; font-weight: 700; }
+.back-button { align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; min-height: 40px; margin: -6px 0 8px -6px; padding: 6px 10px 6px 4px; background: transparent; color: var(--accent); font-size: 17px; font-weight: 500; }
+.back-button svg { width: 22px; height: 22px; }
+/* 中间放大图标和一句话把空当撑开；「更多设置」展开时它先让位。 */
+.setup-hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; min-height: 200px; padding: 20px 0; text-align: center; }
+.setup-hero span { display: grid; place-items: center; width: 136px; height: 136px; border-radius: 50%; background: var(--tint); color: var(--on-tint); }
+.setup-hero svg { width: 64px; height: 64px; }
+.setup-hero p { color: var(--text-2); font-size: 17px; }
+.start-primary { width: 100%; min-height: 58px; border-radius: 16px; background: var(--accent); color: #fff; font-size: 18px; font-weight: 700; }
 .start-primary:active { background: var(--accent-press); }
 .warning { margin-top: 10px; color: var(--danger); font-size: 14px; }
 .warning:empty { display: none; }
