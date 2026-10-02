@@ -1,43 +1,48 @@
-# MotionBridge
+# MotionControl Android 2.3.0
 
-单手机摄像头体感游戏控制器。手机本地识别人体关键点、手势和语音，电脑端映射为键盘 / Xbox 虚拟手柄 / DSU 体感输出，并支持宏。
+配套 MotionControl 的手机应用：本地 Full 姿态与手部识别、Vosk 语音、手持传感器和蓝牙控制。手机摄像头发送控制关键点，由电脑统一映射和输出。
 
-这是手机端。电脑端、云端和参与开发的说明在主仓库：
-<https://github.com/guiwushengzhe-prog/MotionControl>
+当前手机入口在 `mobile/`；电脑端和云端在 [MotionControl](https://github.com/guiwushengzhe-prog/MotionControl) 的 `server.py`、`motioncontrol/`、`web/` 与 `cloud/`。PC 管理界面是 `http://127.0.0.1:8766`，手机接入 `ws://<电脑地址>:8765/ws/input`。
+
+本轮保留界面和 2.3.0 版本，尚未正式发布新 APK 或完整 PC 便携包。逐项进度、本轮 Worker 等改动、后置的实机/兼容/长期稳定性验收，以及双仓配套、网页更新和回退边界，见[优化进度与维护](mobile/docs/optimization-progress.md)。此前协调改动与验证命令见[协调优化记录](mobile/docs/coordination-optimization.md)。
 
 ## 目录
 
-- `mobile/`：手机端（Capacitor + Android），网页版 MediaPipe 人体/手势识别，原生 AudioRecord 语音采集。
-- `motionbridge/`：电脑端 Python 服务（FastAPI + Vosk + ONNX + ViGEm）。
-- `desktop/`：电脑端网页面板。
-- `docs/`：架构、踩坑记录与长期决策。
-- `scripts/`：构建与验证脚本。
-- `tests/`：Python 测试。
+- `mobile/`：当前手机端（Capacitor + Android），MediaPipe 视觉与原生 Vosk `SpeechService` 语音，包含网页和原生测试。
+- `motionbridge/`：保留的早期电脑 Python 服务，见[历史目录说明](motionbridge/README.md)。
+- `desktop/`：早期电脑网页面板，见[历史目录说明](desktop/README.md)。
+- `mobile/docs/`：当前手机优化与维护记录。
+- `docs/`：架构与历史实验记录，阅读时核对所描述的版本。
+- `scripts/`、`tests/`：包含历史桌面脚本/测试，当前 Android 构建入口如下。
 
-## 构建
+## 源码开发与构建
 
-电脑端便携包：
+从本仓根目录进入 `mobile/`，与 CI 一致使用 Node 24、JDK 21、Android SDK 36 和 build-tools 35.0.0：
 
-```powershell
-.\scripts\build-pc.ps1
+```text
+cd mobile
+npm ci
+npm run check
+npm test
+npm run test:controller
+npm run android:sync
 ```
 
-手机端 APK：
+再运行原生测试和 Debug 构建：
 
 ```powershell
-.\scripts\build-android.ps1
+.\android\gradlew.bat -p android testDebugUnitTest assembleDebug --no-daemon
 ```
 
-运行开发环境：
+Linux 对应命令为 `bash android/gradlew -p android testDebugUnitTest assembleDebug --no-daemon`。输出在 `mobile/android/app/build/outputs/apk/debug/app-debug.apk`，使用调试签名；根目录 `scripts/build-android.ps1` 同样生成 Debug。正式 Release 构建要求已有发行密钥配置，见 `mobile/android/keystore.properties.example`，不要将密钥提交到仓库。
 
-```powershell
-.\scripts\setup.ps1
-.\scripts\start.ps1
-```
+网页开发从 `mobile/` 运行 `npm run dev`，相机使用需要浏览器允许的安全上下文。验证 Android 原生插件使用 APK 路径。`scripts/start.ps1`、`scripts/setup.ps1`、`scripts/build-pc.ps1` 和 `scripts/verify-release.py` 面向历史 MotionBridge 桌面实验，不是当前 PC 启动或打包入口。
 
 ## 说明
 
-人体识别当前使用网页版 MediaPipe；语音使用手机原生 AudioRecord，失败时回退 WebAudio。详见 `docs/`。
+人体与手部识别在手机本地运行；主要语音路径为原生 Vosk `SpeechService`，最终 `voice_text` 交给 PC 同一映射边界。生产网页构建写入 `dist/build-provenance.json`，PC 装配须显式选择该 dist，不能只凭相同版本号判断配套。
+
+签名网页更新下次启动才切换，启动健康确认失败时回到 APK 内置网页；网页更新不会更新或回退原生 APK。涉及原生能力应安装配套 APK。完整流程及验证边界见[维护文档](mobile/docs/optimization-progress.md)。
 
 ## 许可证
 

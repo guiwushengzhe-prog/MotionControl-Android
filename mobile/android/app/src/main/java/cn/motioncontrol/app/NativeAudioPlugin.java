@@ -5,6 +5,8 @@ import android.content.pm.PackageManager;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Base64;
 
 import androidx.core.content.ContextCompat;
@@ -33,6 +35,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * MotionControl 1.00 audio bridge.  The default mode keeps the older Vosk
@@ -74,48 +81,126 @@ public class NativeAudioPlugin extends Plugin {
             + "\"体 感 设 置 中 心\",\"体 感 立 即 设 置 中 心\",\"[unk]\"]";
 
     private final Object lock = new Object();
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private final NativeSessionGate sessions = new NativeSessionGate();
+    private final ExecutorService modelWorker = Executors.newSingleThreadExecutor(command -> new Thread(command, "voice-model"));
+    private final ExecutorService cleanupWorker = Executors.newSingleThreadExecutor(command -> new Thread(command, "voice-cleanup"));
+    private AudioStart pendingStart;
+    private long activeGeneration;
     private SpeechService speechService;
     private Model model;
     private Recognizer recognizer;
     private volatile boolean running;
-    private AudioRecord remoteAudioRecord;
+    private volatile AudioRecord remoteAudioRecord;
     private Thread remoteAudioThread;
     private volatile boolean remoteRunning;
 
+    private static final class AudioStart {
+        final PluginCall call;
+        final long generation;
+        final boolean remote;
+        final AtomicBoolean settled = new AtomicBoolean();
+        volatile Future<?> task;
+        boolean awaitingPermission;
+        boolean permissionReady;
+
+        AudioStart(PluginCall call, long generation) {
+            this.call = call;
+            this.generation = generation;
+            this.remote = Boolean.TRUE.equals(call.getBoolean("remote", false));
+        }
+
+        void cancel() {
+            if (task != null) task.cancel(true);
+            if (settled.compareAndSet(false, true)) call.reject("语音启动已取消", "START_CANCELLED");
+        }
+    }
+
     @PluginMethod
     public void start(PluginCall call) {
+        ui.post(() -> beginStart(call));
+    }
+
+    private void beginStart(PluginCall call) {
+        boolean remote = Boolean.TRUE.equals(call.getBoolean("remote", false));
+        synchronized (lock) {
+            if ((remote && remoteRunning) || (!remote && running)) {
+                call.resolve(formatResult());
+                return;
+            }
+        }
+        cancelStart();
+        stopRecognizer();
+        stopRemoteAudio();
+        AudioStart start = new AudioStart(call, sessions.begin());
+        synchronized (lock) { pendingStart = start; }
+        if (!isCurrent(start)) {
+            cancelStart();
+            return;
+        }
         if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
+            start.awaitingPermission = true;
             requestPermissionForAlias("microphone", call, "startAfterPermission");
             return;
         }
-        if (Boolean.TRUE.equals(call.getBoolean("remote", false))) {
-            startRemoteAudio(call);
-        } else {
-            startRecognizer(call);
-        }
+        continueStart(start);
     }
 
     @PermissionCallback
     public void startAfterPermission(PluginCall call) {
-        if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.RECORD_AUDIO)
-                != PackageManager.PERMISSION_GRANTED) {
-            call.reject("麦克风未授权");
-            return;
-        }
-        if (Boolean.TRUE.equals(call.getBoolean("remote", false))) {
-            startRemoteAudio(call);
-        } else {
-            startRecognizer(call);
-        }
+        ui.post(() -> {
+            AudioStart start;
+            synchronized (lock) { start = pendingStart; }
+            if (call == null || start == null || start.call != call || !sessions.isGeneration(start.generation)) return;
+            start.awaitingPermission = false;
+            if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) {
+                rejectStart(start, "麦克风未授权", "MICROPHONE_DENIED", null);
+                return;
+            }
+            start.permissionReady = true;
+            continueStart(start);
+        });
     }
 
-    private void startRemoteAudio(PluginCall call) {
+    private void continueStart(AudioStart start) {
+        if (!isCurrent(start)) return;
+        start.permissionReady = false;
+        // Wait asynchronously for the previous microphone owner to release it.
+        queueCleanup(() -> ui.post(() -> {
+            if (!isCurrent(start)) return;
+            if (start.remote) startRemoteAudio(start);
+            else startRecognizer(start);
+        }));
+    }
+
+    private boolean isCurrent(AudioStart start) {
+        synchronized (lock) { return pendingStart == start && sessions.isCurrent(start.generation); }
+    }
+
+    private void cancelStart() {
+        AudioStart previous;
+        synchronized (lock) { previous = pendingStart; pendingStart = null; }
+        if (previous != null) previous.cancel();
+    }
+
+    private void resolveStart(AudioStart start) {
+        synchronized (lock) { if (pendingStart == start) pendingStart = null; }
+        if (start.settled.compareAndSet(false, true)) start.call.resolve(formatResult());
+    }
+
+    private void rejectStart(AudioStart start, String message, String code, Exception error) {
+        synchronized (lock) { if (pendingStart == start) pendingStart = null; }
+        if (start.settled.compareAndSet(false, true)) start.call.reject(message, code, error);
+    }
+
+    private void startRemoteAudio(AudioStart start) {
         // 远程模式只把原始音频发给电脑，不准备手机语音模型。
         stopRecognizer();
         synchronized (lock) {
             if (remoteRunning) {
-                call.resolve(formatResult());
+                resolveStart(start);
                 return;
             }
             int minimum = AudioRecord.getMinBufferSize(
@@ -123,7 +208,7 @@ public class NativeAudioPlugin extends Plugin {
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT);
             if (minimum <= 0) {
-                call.reject("手机不支持 16kHz 单声道录音");
+                rejectStart(start, "手机不支持 16kHz 单声道录音", "AUDIO_UNSUPPORTED", null);
                 return;
             }
             int bufferSize = Math.max(minimum, REMOTE_CHUNK_BYTES * 2);
@@ -142,26 +227,27 @@ public class NativeAudioPlugin extends Plugin {
                 final AudioRecord activeRecorder = recorder;
                 remoteAudioRecord = activeRecorder;
                 remoteRunning = true;
-                remoteAudioThread = new Thread(() -> captureRemoteAudio(activeRecorder), "remote-audio");
+                activeGeneration = start.generation;
+                remoteAudioThread = new Thread(() -> captureRemoteAudio(activeRecorder, start.generation), "remote-audio");
                 remoteAudioThread.start();
                 notifyVoiceState("listening", "远程语音采集已就绪");
-                call.resolve(formatResult());
+                resolveStart(start);
             } catch (Exception error) {
                 if (recorder != null) {
                     try { recorder.release(); } catch (Exception ignored) { }
                 }
                 remoteAudioRecord = null;
                 remoteRunning = false;
-                call.reject("远程语音采集失败: " + safeMessage(error), error);
+                rejectStart(start, "远程语音采集失败: " + safeMessage(error), "AUDIO_START_FAILED", error);
             }
         }
     }
 
-    private void captureRemoteAudio(AudioRecord recorder) {
+    private void captureRemoteAudio(AudioRecord recorder, long generation) {
         byte[] chunk = new byte[REMOTE_CHUNK_BYTES];
         int filled = 0;
         try {
-            while (remoteRunning && remoteAudioRecord == recorder) {
+            while (remoteRunning && remoteAudioRecord == recorder && sessions.isCurrent(generation)) {
                 int count = recorder.read(chunk, filled, chunk.length - filled);
                 if (count < 0) {
                     throw new IOException("手机录音读取失败: " + count);
@@ -173,79 +259,111 @@ public class NativeAudioPlugin extends Plugin {
                 if (filled < chunk.length) {
                     continue;
                 }
+                if (remoteAudioRecord != recorder || !sessions.isCurrent(generation)) break;
                 JSObject event = new JSObject()
                         .put("audio_base64", Base64.encodeToString(chunk, Base64.NO_WRAP))
                         .put("sample_rate", SAMPLE_RATE)
                         .put("channels", 1)
                         .put("format", "pcm16le")
                         .put("captured_at_ms", System.currentTimeMillis());
-                notifyListeners("audioChunk", event);
+                ui.post(() -> {
+                    if (remoteRunning && remoteAudioRecord == recorder && sessions.isCurrent(generation)) {
+                        notifyListeners("audioChunk", event);
+                    }
+                });
                 filled = 0;
             }
         } catch (Exception error) {
-            if (remoteRunning) {
-                notifyListeners("audioError", new JSObject().put("message", "远程语音采集错误: " + safeMessage(error)));
+            if (remoteRunning && remoteAudioRecord == recorder && sessions.isCurrent(generation)) {
+                ui.post(() -> {
+                    if (activeGeneration == generation && sessions.isCurrent(generation)) {
+                        notifyListeners("audioError", new JSObject().put("message", "远程语音采集错误: " + safeMessage(error)));
+                    }
+                });
             }
         } finally {
-            stopRemoteAudio();
+            // A delayed old reader must never stop a replacement recorder.
+            stopRemoteAudio(recorder);
         }
     }
 
-    private void startRecognizer(PluginCall call) {
+    private void startRecognizer(AudioStart start) {
         stopRemoteAudio();
-        synchronized (lock) {
-            if (running) {
-                call.resolve(formatResult());
-                return;
-            }
-        }
-        // 准备模型要下载几十兆再落盘。插件方法跑在主线程上，在这里做就是 ANR
-        // ——解压那版其实已经在卡主线程了，只是没人量过。Vosk 那几步仍然回到
-        // 原来的线程做，不去动它的线程假设。
-        final String baseUrl = call.getString("baseUrl", "");
-        new Thread(() -> {
-            final File modelDirectory;
+        final String baseUrl = start.call.getString("baseUrl", "");
+        final String tokens = grammarFromTokens(start.call.getArray("grammar", null));
+        final String grammar = tokens != null ? tokens : grammarFrom(start.call.getArray("phrases", null));
+        start.task = modelWorker.submit(() -> {
+            Model loadedModel = null;
+            Recognizer loadedRecognizer = null;
+            boolean handedOff = false;
             try {
-                modelDirectory = prepareModel(baseUrl);
+                File modelDirectory = prepareModel(baseUrl, start);
+                if (!isCurrent(start)) return;
+                loadedModel = new Model(modelDirectory.getAbsolutePath());
+                if (!isCurrent(start)) return;
+                loadedRecognizer = new Recognizer(loadedModel, SAMPLE_RATE, grammar);
+                if (!isCurrent(start)) return;
+                final Model readyModel = loadedModel;
+                final Recognizer readyRecognizer = loadedRecognizer;
+                handedOff = true;
+                ui.post(() -> startWithModel(start, readyModel, readyRecognizer));
             } catch (Exception error) {
-                notifyVoiceState("error", safeMessage(error));
-                call.reject(safeMessage(error), error);
-                return;
+                ui.post(() -> {
+                    if (!isCurrent(start)) return;
+                    notifyVoiceState("error", safeMessage(error));
+                    rejectStart(start, safeMessage(error), "VOICE_MODEL_FAILED", error);
+                });
+            } catch (LinkageError error) {
+                IOException failure = new IOException("手机语音库无法加载: " + safeMessage(error), error);
+                ui.post(() -> {
+                    if (!isCurrent(start)) return;
+                    notifyVoiceState("error", failure.getMessage());
+                    rejectStart(start, failure.getMessage(), "VOICE_LIBRARY_UNAVAILABLE", failure);
+                });
+            } finally {
+                if (!handedOff) closeModel(loadedRecognizer, loadedModel);
             }
-            getActivity().runOnUiThread(() -> startWithModel(call, modelDirectory));
-        }, "voice-model").start();
+        });
     }
 
-    private void startWithModel(PluginCall call, File modelDirectory) {
+    private void startWithModel(AudioStart start, Model loadedModel, Recognizer loadedRecognizer) {
+        if (!isCurrent(start)) {
+            queueCleanup(() -> closeModel(loadedRecognizer, loadedModel));
+            return;
+        }
+        boolean installed = false;
         synchronized (lock) {
-            if (running) {
-                call.resolve(formatResult());
-                return;
-            }
             try {
-                model = new Model(modelDirectory.getAbsolutePath());
-                String grammar = grammarFromTokens(call.getArray("grammar", null));
-                recognizer = new Recognizer(model, SAMPLE_RATE,
-                        grammar != null ? grammar : grammarFrom(call.getArray("phrases", null)));
-                speechService = new SpeechService(recognizer, SAMPLE_RATE);
+                // Keep SpeechService's creation and start on the UI thread; the
+                // expensive model/recognizer loading is already complete.
+                speechService = new SpeechService(loadedRecognizer, SAMPLE_RATE);
+                model = loadedModel;
+                recognizer = loadedRecognizer;
+                installed = true;
+                activeGeneration = start.generation;
                 running = true;
-                if (!speechService.startListening(new VoiceListener())) {
+                if (!speechService.startListening(new VoiceListener(start.generation))) {
                     throw new IOException("语音服务已经在运行");
                 }
                 notifyVoiceState("listening", "Vosk 受限语法已就绪");
-                call.resolve(formatResult());
+                resolveStart(start);
             } catch (Exception error) {
                 stopRecognizer();
-                call.reject("语音模型错误: " + safeMessage(error), error);
+                if (!installed) queueCleanup(() -> closeModel(loadedRecognizer, loadedModel));
+                rejectStart(start, "语音模型错误: " + safeMessage(error), "VOICE_START_FAILED", error);
             }
         }
     }
 
     @PluginMethod
     public void stop(PluginCall call) {
-        stopRecognizer();
-        stopRemoteAudio();
-        call.resolve();
+        ui.post(() -> {
+            sessions.cancel();
+            cancelStart();
+            stopRecognizer();
+            stopRemoteAudio();
+            call.resolve();
+        });
     }
 
     /**
@@ -328,6 +446,13 @@ public class NativeAudioPlugin extends Plugin {
     }
 
     private final class VoiceListener implements RecognitionListener {
+        private final long generation;
+
+        VoiceListener(long generation) { this.generation = generation; }
+
+        private boolean current() {
+            synchronized (lock) { return running && activeGeneration == generation && sessions.isCurrent(generation); }
+        }
         @Override
         public void onPartialResult(String hypothesis) {
             // Partial hypotheses never become commands.
@@ -335,23 +460,25 @@ public class NativeAudioPlugin extends Plugin {
 
         @Override
         public void onResult(String hypothesis) {
-            emitFinalText(hypothesis);
+            if (current()) emitFinalText(hypothesis);
         }
 
         @Override
         public void onFinalResult(String hypothesis) {
-            emitFinalText(hypothesis);
+            if (current()) emitFinalText(hypothesis);
         }
 
         @Override
         public void onError(Exception error) {
-            running = false;
+            if (!current()) return;
+            stopRecognizer();
             notifyListeners("audioError", new JSObject().put("message", "语音识别错误: " + safeMessage(error)));
         }
 
         @Override
         public void onTimeout() {
-            running = false;
+            if (!current()) return;
+            stopRecognizer();
             notifyListeners("audioError", new JSObject().put("message", "语音识别超时"));
         }
     }
@@ -384,8 +511,8 @@ public class NativeAudioPlugin extends Plugin {
         SpeechService activeService;
         Recognizer activeRecognizer;
         Model activeModel;
-        running = false;
         synchronized (lock) {
+            running = false;
             activeService = speechService;
             speechService = null;
             activeRecognizer = recognizer;
@@ -393,36 +520,50 @@ public class NativeAudioPlugin extends Plugin {
             activeModel = model;
             model = null;
         }
-        if (activeService != null) {
-            try { activeService.stop(); } catch (Exception ignored) { }
-            try { activeService.shutdown(); } catch (Exception ignored) { }
-        }
-        if (activeRecognizer != null) {
-            try { activeRecognizer.close(); } catch (Exception ignored) { }
-        }
-        if (activeModel != null) {
-            try { activeModel.close(); } catch (Exception ignored) { }
+        if (activeService != null || activeRecognizer != null || activeModel != null) queueCleanup(() -> {
+            if (activeService != null) {
+                try { activeService.stop(); } catch (Exception ignored) { }
+                try { activeService.shutdown(); } catch (Exception ignored) { }
+            }
+            closeModel(activeRecognizer, activeModel);
+        });
+    }
+
+    private static void closeModel(Recognizer activeRecognizer, Model activeModel) {
+        if (activeRecognizer != null) try { activeRecognizer.close(); } catch (Exception | LinkageError ignored) { }
+        if (activeModel != null) try { activeModel.close(); } catch (Exception | LinkageError ignored) { }
+    }
+
+    private void queueCleanup(Runnable task) {
+        try { cleanupWorker.execute(task); }
+        catch (RejectedExecutionException error) {
+            // A model may finish loading just after activity destruction.
+            new Thread(task, "voice-final-cleanup").start();
         }
     }
 
     private void stopRemoteAudio() {
+        stopRemoteAudio(null);
+    }
+
+    private void stopRemoteAudio(AudioRecord expected) {
         AudioRecord activeRecord;
         Thread activeThread;
         synchronized (lock) {
+            if (expected != null && remoteAudioRecord != expected) return;
             remoteRunning = false;
             activeRecord = remoteAudioRecord;
             remoteAudioRecord = null;
             activeThread = remoteAudioThread;
             remoteAudioThread = null;
+            // Enqueue release before another start can enqueue its microphone
+            // barrier. The reader's finally block also runs off the UI thread.
+            if (activeRecord != null) queueCleanup(() -> {
+                try { activeRecord.stop(); } catch (Exception ignored) { }
+                try { activeRecord.release(); } catch (Exception ignored) { }
+            });
         }
-        if (activeRecord != null) {
-            try { activeRecord.stop(); } catch (Exception ignored) { }
-            try { activeRecord.release(); } catch (Exception ignored) { }
-        }
-        if (activeThread != null && activeThread != Thread.currentThread()) {
-            activeThread.interrupt();
-            try { activeThread.join(250L); } catch (InterruptedException error) { Thread.currentThread().interrupt(); }
-        }
+        if (activeThread != null && activeThread != Thread.currentThread()) activeThread.interrupt();
     }
 
     /**
@@ -437,7 +578,7 @@ public class NativeAudioPlugin extends Plugin {
      * <p>The directory name comes from the manifest too, so switching models is
      * a change on the PC alone.
      */
-    private File prepareModel(String baseUrl) throws IOException {
+    private File prepareModel(String baseUrl, AudioStart start) throws IOException {
         File filesRoot = getContext().getFilesDir().getCanonicalFile();
         String rootPath = filesRoot.getPath() + File.separator;
         String base = baseUrl == null ? "" : baseUrl.trim();
@@ -450,7 +591,7 @@ public class NativeAudioPlugin extends Plugin {
             throw new IOException("语音模型还没下载。先连上电脑，再打开语音控制。");
         }
 
-        JSONObject manifest = ManifestSync.manifest(base, MANIFEST_ROUTE);
+        JSONObject manifest = ManifestSync.manifest(base, MANIFEST_ROUTE, () -> !isCurrent(start));
         if (!manifest.optBoolean("available", false)) {
             throw new IOException("电脑上没有中文语音模型。检查电脑端的 models/vosk-model-small-cn-0.22。");
         }
@@ -467,13 +608,13 @@ public class NativeAudioPlugin extends Plugin {
             throw new IOException("无法创建语音模型目录");
         }
         ManifestSync.clearMarker(modelDirectory);   // 换模型中途被打断，残局不能看着像下好了
-        final long[] seen = {0L, 0L};
         String settled = ManifestSync.sync(manifest, modelDirectory,
                 modelDirectory.getPath() + File.separator, base, FILE_ROUTE,
                 (done, total) -> {
-                    seen[0] = done; seen[1] = total;
-                    notifyVoiceState("connecting", progressText(done, total));
-                });
+                    ui.post(() -> {
+                        if (isCurrent(start)) notifyVoiceState("connecting", progressText(done, total));
+                    });
+                }, () -> !isCurrent(start));
         if (!isUsableModel(modelDirectory)) {
             deleteTree(modelDirectory);
             throw new IOException("语音模型文件不完整");
@@ -508,22 +649,51 @@ public class NativeAudioPlugin extends Plugin {
         if (!target.delete()) target.deleteOnExit();
     }
 
-    private static String safeMessage(Exception error) {
+    private static String safeMessage(Throwable error) {
         String message = error.getMessage();
         return message == null || message.trim().isEmpty() ? error.getClass().getSimpleName() : message;
     }
 
     @Override
     protected void handleOnPause() {
+        AudioStart start;
+        synchronized (lock) { start = pendingStart; }
+        if (start != null && start.awaitingPermission) sessions.suspend();
+        else {
+            sessions.pause();
+            cancelStart();
+        }
         stopRecognizer();
         stopRemoteAudio();
         super.handleOnPause();
     }
 
     @Override
-    protected void handleOnDestroy() {
+    protected void handleOnResume() {
+        sessions.resume();
+        AudioStart start;
+        synchronized (lock) { start = pendingStart; }
+        if (start != null && start.permissionReady) continueStart(start);
+        super.handleOnResume();
+    }
+
+    @Override
+    protected void handleOnStop() {
+        sessions.pause();
+        cancelStart();
         stopRecognizer();
         stopRemoteAudio();
+        super.handleOnStop();
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        sessions.destroy();
+        cancelStart();
+        stopRecognizer();
+        stopRemoteAudio();
+        modelWorker.shutdownNow();
+        cleanupWorker.shutdown();
         super.handleOnDestroy();
     }
 }

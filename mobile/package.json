@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "prebuild": "node scripts/prepare-assets.mjs",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node scripts/write-build-provenance.mjs",
     "check": "tsc --noEmit",
     "android:add": "cap add android",
     "android:sync": "npm run build && cap sync android && node scripts/fix-capacitor-java.mjs",

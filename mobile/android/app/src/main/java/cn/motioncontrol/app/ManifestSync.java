@@ -8,6 +8,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -17,6 +18,7 @@ import java.security.MessageDigest;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 /**
  * Brings a directory on this phone into line with one the PC is offering.
@@ -53,15 +55,22 @@ public final class ManifestSync {
     }
 
     public static JSONObject manifest(String baseUrl, String route) throws IOException {
+        return manifest(baseUrl, route, () -> false);
+    }
+
+    public static JSONObject manifest(String baseUrl, String route, BooleanSupplier cancelled) throws IOException {
+        checkCancelled(cancelled);
         HttpURLConnection connection = open(baseUrl + route);
         try (InputStream stream = connection.getInputStream()) {
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             byte[] chunk = new byte[8192];
             int count;
             while ((count = stream.read(chunk)) != -1) {
+                checkCancelled(cancelled);
                 buffer.write(chunk, 0, count);
                 if (buffer.size() > MANIFEST_LIMIT) throw new IOException("清单异常地大");
             }
+            checkCancelled(cancelled);
             return new JSONObject(new String(buffer.toByteArray(), StandardCharsets.UTF_8));
         } catch (IOException error) {
             throw error;
@@ -82,6 +91,13 @@ public final class ManifestSync {
     public static String sync(JSONObject manifest, File target, String allowedPrefix,
                               String baseUrl, String fileRoute, Progress progress)
             throws IOException {
+        return sync(manifest, target, allowedPrefix, baseUrl, fileRoute, progress, () -> false);
+    }
+
+    public static String sync(JSONObject manifest, File target, String allowedPrefix,
+                              String baseUrl, String fileRoute, Progress progress, BooleanSupplier cancelled)
+            throws IOException {
+        checkCancelled(cancelled);
         JSONArray files = manifest.optJSONArray("files");
         if (files == null || files.length() == 0) throw new IOException("清单是空的");
         long total = Math.max(1L, manifest.optLong("total_bytes", 0L));
@@ -89,6 +105,7 @@ public final class ManifestSync {
         Set<String> wanted = new HashSet<>();
 
         for (int index = 0; index < files.length(); index++) {
+            checkCancelled(cancelled);
             JSONObject entry = files.optJSONObject(index);
             if (entry == null) throw new IOException("清单有坏条目");
             String relative = entry.optString("path", "").replace('\\', '/');
@@ -102,7 +119,7 @@ public final class ManifestSync {
             if (!output.getPath().startsWith(allowedPrefix)) {
                 throw new IOException("清单里的路径无效：" + relative);
             }
-            if (output.isFile() && output.length() == size && expected.equalsIgnoreCase(digestOf(output))) {
+            if (output.isFile() && output.length() == size && expected.equalsIgnoreCase(digestOf(output, cancelled))) {
                 done += size;
                 if (progress != null) progress.at(done, total);
                 continue;
@@ -111,7 +128,7 @@ public final class ManifestSync {
             if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
                 throw new IOException("无法创建目录 " + relative);
             }
-            String actual = fetchTo(baseUrl + fileRoute + URLEncoder.encode(relative, "UTF-8"), output);
+            String actual = fetchTo(baseUrl + fileRoute + URLEncoder.encode(relative, "UTF-8"), output, cancelled);
             if (!expected.equalsIgnoreCase(actual)) {
                 // 校验不过就删掉，否则下次"续传"会把这个坏文件当成下好的跳过去。
                 output.delete();
@@ -120,6 +137,7 @@ public final class ManifestSync {
             done += size;
             if (progress != null) progress.at(done, total);
         }
+        checkCancelled(cancelled);
         prune(target, target, wanted);
         return manifest.optString("digest", "");
     }
@@ -187,7 +205,8 @@ public final class ManifestSync {
     }
 
     /** Stream a file to disk, returning what it actually hashed to. */
-    private static String fetchTo(String url, File output) throws IOException {
+    private static String fetchTo(String url, File output, BooleanSupplier cancelled) throws IOException {
+        checkCancelled(cancelled);
         HttpURLConnection connection = open(url);
         try (InputStream stream = connection.getInputStream();
              FileOutputStream file = new FileOutputStream(output)) {
@@ -195,9 +214,11 @@ public final class ManifestSync {
             byte[] chunk = new byte[65536];
             int count;
             while ((count = stream.read(chunk)) != -1) {
+                checkCancelled(cancelled);
                 file.write(chunk, 0, count);
                 digest.update(chunk, 0, count);
             }
+            checkCancelled(cancelled);
             return hex(digest.digest());
         } catch (IOException error) {
             throw error;
@@ -209,16 +230,29 @@ public final class ManifestSync {
     }
 
     public static String digestOf(File file) throws IOException {
+        return digestOf(file, () -> false);
+    }
+
+    private static String digestOf(File file, BooleanSupplier cancelled) throws IOException {
         try (FileInputStream stream = new FileInputStream(file)) {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] chunk = new byte[65536];
             int count;
-            while ((count = stream.read(chunk)) != -1) digest.update(chunk, 0, count);
+            while ((count = stream.read(chunk)) != -1) {
+                checkCancelled(cancelled);
+                digest.update(chunk, 0, count);
+            }
             return hex(digest.digest());
         } catch (IOException error) {
             throw error;
         } catch (Exception error) {
             throw new IOException("无法校验已有文件", error);
+        }
+    }
+
+    private static void checkCancelled(BooleanSupplier cancelled) throws InterruptedIOException {
+        if (Thread.currentThread().isInterrupted() || cancelled.getAsBoolean()) {
+            throw new InterruptedIOException("下载已取消");
         }
     }
 

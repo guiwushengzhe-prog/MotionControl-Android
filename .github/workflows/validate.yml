@@ -1,0 +1,43 @@
+name: Validate Android
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  mobile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run test:controller
+      - run: npm run android:sync
+      - run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+      - run: bash android/gradlew -p android testDebugUnitTest assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-validation
+          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

@@ -6,12 +6,33 @@ import { describe, expect, it } from "vitest";
 
 import {
   CANDIDATE_CAP, MAX_MISSES, candidatesOf, dedupeServers, forgetFailures,
-  lastOctetHint, mergeCandidates, pickBest, rankCandidates, sameSubnet,
+  lastOctetHint, mergeCandidates, parseCandidates, replaceCandidates, pickBest, rankCandidates, sameSubnet,
   type ServerCandidate,
 } from "./discovery";
 
 const usb = (host: string): ServerCandidate => ({ host, port: 8765, kind: "usb" });
 const lan = (host: string): ServerCandidate => ({ host, port: 8765, kind: "lan" });
+
+describe("跨启动缓存历史", () => {
+  it("读回失败次数后，第三次失败确实淘汰死地址", () => {
+    let list = mergeCandidates([], [lan("192.168.1.9")], 1234);
+    for (let attempt = 0; attempt < MAX_MISSES; attempt++) {
+      list = parseCandidates(JSON.parse(JSON.stringify(forgetFailures(list, [lan("192.168.1.9")]))));
+    }
+    expect(list).toEqual([]);
+  });
+  it("完整地址声明保留已探测历史，而真实成功探测清除失败次数", () => {
+    const previous = [{ ...lan("192.168.1.9"), seenAt: 1234, misses: 2 }, lan("192.168.1.10")];
+    const declared = replaceCandidates(previous, [usb("192.168.1.9"), lan("10.0.0.2")]);
+    expect(declared[0]).toMatchObject({ kind: "usb", seenAt: 1234, misses: 2 });
+    expect(declared.map(item => item.host)).not.toContain("192.168.1.10");
+    expect(mergeCandidates(declared, [usb("192.168.1.9")], 4567)[0]).toMatchObject({ seenAt: 4567, misses: 0 });
+  });
+  it("过滤坏端口或字段，不让缓存污染耗尽探测名额", () => {
+    expect(parseCandidates([null, { host: "", port: 8765 }, { host: "a", port: 65536 }, { host: "b", port: 2.5 }])).toEqual([]);
+    expect(parseCandidates([{ host: " pc ", port: 8765, misses: -5, seenAt: Infinity }])[0]).toEqual({ host: "pc", port: 8765, kind: "lan", misses: 0, seenAt: undefined });
+  });
+});
 
 describe("合并候选地址", () => {
   it("不把已有的地址冲掉", () => {
