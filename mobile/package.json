@@ -17,7 +17,8 @@
   "dependencies": {
     "@capacitor/app": "6.0.3",
     "@capacitor/core": "6.2.1",
-    "@mediapipe/tasks-vision": "0.10.22-rc.20250304"
+    "@mediapipe/tasks-vision": "0.10.22-rc.20250304",
+    "jsqr": "1.4.0"
   },
   "devDependencies": {
     "@capacitor/android": "6.2.1",

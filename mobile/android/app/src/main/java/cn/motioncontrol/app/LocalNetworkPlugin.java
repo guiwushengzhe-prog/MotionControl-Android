@@ -180,10 +180,12 @@ public class LocalNetworkPlugin extends Plugin {
         new Thread(() -> {
             long started = System.nanoTime();
             JSObject answer = new JSObject();
-            String version = identify(host, port, timeoutMs);
-            answer.put("ok", version != null);
-            if (version != null) {
-                answer.put("version", version);
+            JSONObject identity = identify(host, port, timeoutMs);
+            answer.put("ok", identity != null);
+            if (identity != null) {
+                answer.put("version", identity.optString("version"));
+                answer.put("instance", identity.optString("instance", ""));
+                answer.put("name", identity.optString("name", ""));
             }
             answer.put("rttMs", (System.nanoTime() - started) / 1_000_000);
             call.resolve(answer);
@@ -196,7 +198,7 @@ public class LocalNetworkPlugin extends Plugin {
     }
 
     /** GET /api/models and decide whether the answer is ours. Null when it is not. */
-    private static String identify(String host, int port, int timeoutMs) {
+    private static JSONObject identify(String host, int port, int timeoutMs) {
         HttpURLConnection connection = null;
         try {
             URL url = new URL("http://" + host + ":" + port + "/api/models");
@@ -221,7 +223,7 @@ public class LocalNetworkPlugin extends Plugin {
             if (!(parsed.opt("version") instanceof String) || parsed.optJSONArray("models") == null) {
                 return null;
             }
-            return parsed.getString("version");
+            return parsed;
         } catch (Exception error) {
             return null;
         } finally {

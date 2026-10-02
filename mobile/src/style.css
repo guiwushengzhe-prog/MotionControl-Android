@@ -321,3 +321,7 @@ details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
   .shooter-mouse-buttons { top: 14px; height: auto; }
   .shooter-instructions { right: 160px; }
 }
+.connection-scanner{position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;padding:20px}
+.connection-scanner section{width:min(100%,480px);text-align:center}
+.connection-scanner video{width:100%;max-height:65vh;object-fit:contain;border-radius:12px;background:#111}
+.scan-computer{margin-top:12px;width:100%}

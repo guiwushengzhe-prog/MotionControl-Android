@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ plugins: {} as Record<string, any>, createPose: vi.fn(), createHand: vi.fn(), createWorker: vi.fn() }));
+const mocks = vi.hoisted(() => ({ plugins: {} as Record<string, any>, createPose: vi.fn(), createHand: vi.fn(), createWorker: vi.fn(), scan: vi.fn() }));
+vi.mock("./qr-scanner", () => ({ scanConnectionCode: mocks.scan }));
 vi.mock("./vision.worker?worker", () => ({ default: class { constructor() { return mocks.createWorker(); } } }));
 vi.mock("@capacitor/core", () => ({
   Capacitor: { isNativePlatform: () => true, isPluginAvailable: () => true },
@@ -134,6 +135,7 @@ beforeEach(async () => {
   vi.stubGlobal("navigator", { mediaDevices: { getUserMedia, enumerateDevices: async () => [{ kind: "videoinput", deviceId: "front", label: "front" }] } });
   mocks.createPose.mockReset().mockImplementation(async () => emptyModel()); mocks.createHand.mockReset();
   mocks.createWorker.mockReset().mockImplementation(() => new VisionWorkerStub());
+  mocks.scan.mockReset().mockResolvedValue(null);
   mocks.plugins = {
     LocalNetwork: { interfaces: async () => ({ interfaces: [] }), probe: async () => ({ ok: true }), discover: async () => ({ servers: [] }) },
     NativeAudio: { addListener: vi.fn(async () => ({ remove: vi.fn(async () => {}) })), start: vi.fn(async () => ({ audioReady: true, recognizerReady: true })), stop: vi.fn(async () => {}) },
@@ -153,6 +155,27 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("camera lifecycle through actual UI events", () => {
+  it("扫码选机保存电脑，停止按钮取消离线自动重试", async () => {
+    const instance = "0123456789ab";
+    mocks.plugins.LocalNetwork.probe = vi.fn(async () => ({ ok: false, instance }));
+    mocks.scan.mockResolvedValue(JSON.stringify({ type: "motioncontrol-connect", version: 1, instance,
+      name: "我的电脑", candidates: [{ host: "192.168.1.2", port: 8765, kind: "lan" }] }));
+    await enterCamera(); click("#scanComputerCamera"); await vi.dynamicImportSettled(); await flush();
+    expect(JSON.parse(localStorage.getItem("motionbridge-remembered-computer")!).instance).toBe(instance);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    click("#stopButton"); await flush();
+    const probes = mocks.plugins.LocalNetwork.probe.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(mocks.plugins.LocalNetwork.probe.mock.calls.length).toBe(probes);
+  });
+  it("运行中取消扫码会恢复原来的摄像头，扫码前已释放原镜头", async () => {
+    const first = cameraStream(); getUserMedia.mockResolvedValueOnce(first.stream);
+    await enterCamera(); await beginCamera();
+    mocks.scan.mockImplementation(async () => { expect(first.track.stop).toHaveBeenCalledOnce(); return null; });
+    click("#scanComputerRuntime"); await vi.dynamicImportSettled(); await flush();
+    await vi.advanceTimersByTimeAsync(110); await flush();
+    expect(mocks.scan).toHaveBeenCalledOnce(); expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
   it("stops a late camera open after the user returns home", async () => {
     const pending = deferred<MediaStream>(); const late = cameraStream(); getUserMedia.mockReturnValueOnce(pending.promise);
     await enterCamera(); await beginCamera(); click("#cameraHome"); await flush();

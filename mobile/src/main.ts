@@ -14,6 +14,7 @@ import { VisionWorkerClient, supportsVisionWorker } from "./vision-worker-client
 import { HAND_CROP_SIDE, handCropBox, inferenceSize, packHandCrop, type HandSide, type PackedHand } from "./vision-core";
 import type { VisionResult } from "./vision-protocol";
 import "./style.css";
+import { ComputerReconnect, matchesComputer, parseConnectionCode, readComputer, saveComputer } from "./connection-code";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
 type VoiceStatus = "off" | "connecting" | "listening" | "error" | "unauthorized";
@@ -129,6 +130,7 @@ app.innerHTML = `
       <div class="setup-hero"><span aria-hidden="true">${ICONS.camera}</span><p>电脑上先打开 MotionControl</p></div>
       <div class="link-state" id="linkState" hidden><p id="linkLine"></p><div class="link-actions" id="linkActions"></div></div>
       <button id="startButton" class="start-primary" type="button">连接并开始</button>
+      <button id="scanComputerCamera" class="scan-computer" type="button">扫码连接电脑</button>
       <p class="warning" id="securityWarning"></p>
       <details class="more" id="setupMore"><summary>更多设置</summary>
         <label class="field">电脑地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="自动查找"></label>
@@ -141,6 +143,7 @@ app.innerHTML = `
       <div class="hud-status"><i class="dot"></i><strong id="sendState">等待完整人体</strong><span id="voiceState" class="voice-state off">关闭</span><b id="panelConnection">未连接</b></div>
       <button id="gameControlButton" class="game-control" type="button" disabled>连接电脑中</button>
       <div class="hud-tools">
+        <button id="scanComputerRuntime" class="tool" type="button"><span>换电脑</span></button>
         <label class="tool" id="voiceControl"><input id="voiceToggle" type="checkbox">${ICONS.mic}<span>语音</span></label>
         <button id="flipCameraButton" class="tool" type="button" aria-label="换镜头">${ICONS.flip}<span>换镜头</span></button>
         <button id="upsideDownButton" class="tool" type="button" aria-pressed="false" aria-label="倒过来放，充电口朝上">${ICONS.upsideDown}<span>倒过来</span></button>
@@ -154,7 +157,7 @@ app.innerHTML = `
     <div class="trigger-board camera-trigger-board hidden" id="cameraTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
     <button id="showStatus" class="status-show hidden" type="button">${ICONS.expand}显示控制</button>
     <section class="handheld-card hidden" id="handheldCard">
-      <div class="pad-bar handheld-connection-row"><button id="stopHandheld" class="back-button" type="button">${ICONS.back}停止</button><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><button id="centerSensor" class="pill-button" type="button">重新居中</button></div>
+      <div class="pad-bar handheld-connection-row"><button id="stopHandheld" class="back-button" type="button">${ICONS.back}停止</button><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><button id="scanComputerHandheld" class="pill-button" type="button">扫码连接电脑</button><button id="centerSensor" class="pill-button" type="button">重新居中</button></div>
       <div class="pad-mode"><div class="seg" id="modeSeg" role="group" aria-label="用法"><button type="button" data-mode="gamepad">手柄</button><button type="button" data-mode="shooter">鼠标</button></div><div class="controller-options"><select id="handheldMode" hidden><option value="gamepad">手柄</option><option value="shooter">鼠标</option></select><select id="handheldTransport" aria-label="连接方式"><option value="network">网络连接</option><option value="bluetooth">蓝牙连接</option></select></div></div>
       <small id="sensorState">等待传感器</small>
       <details id="bluetoothPanel" class="panel bluetooth-panel hidden" open><summary>蓝牙连接</summary><p id="bluetoothStatus">先在电脑的蓝牙设置里添加这台手机，再选电脑连接。</p><div class="bluetooth-actions"><button id="bluetoothPair" type="button">允许电脑配对</button><button id="bluetoothRefresh" type="button">刷新设备</button><select id="bluetoothDevice" aria-label="已配对电脑"></select><button id="bluetoothConnect" type="button">连接电脑</button></div><small>蓝牙模拟的是通用手柄；只认 Xbox 手柄的游戏请用网络连接。</small></details>
@@ -230,6 +233,8 @@ let nativeAudioChunkListener: PluginListenerHandle | null = null;
 let nativeAudioErrorListener: PluginListenerHandle | null = null;
 let running = false;
 let activeRole: "home" | "camera" | "handheld" = "home";
+let scannerAbort: AbortController | null = null;
+let connectionTouched = false;
 // 前置是默认。这个模式叫「固定摄像头」：手机架在玩家前方，屏幕朝着玩家，所以
 // 对着人的那个镜头就是前置。默认后置的话，第一次用的人看到的是身后的墙，
 // 界面一直写「等待完整人体」——他看不出是没装好还是镜头反了。
@@ -751,6 +756,7 @@ const deviceId = getDeviceId();
 const SERVER_CANDIDATES_KEY = "motionbridge-server-candidates";
 // 电脑那边设备口固定在这个端口上。扫描时没有别的线索可用，只能按它来。
 const DEVICE_PORT = 8765;
+let rememberedComputer = readComputer();
 // 一个够到的地址在局域网里几毫秒就答应了。这个时限是留给"根本不通"的那些：
 // 超过就别等了，后面还有别的要试。
 const SERVER_PROBE_TIMEOUT_MS = 800;
@@ -803,9 +809,16 @@ async function answers(candidate: ServerCandidate, timeoutMs = SERVER_PROBE_TIME
     const result = await LocalNetwork.probe({
       host: candidate.host, port: candidate.port, timeoutMs,
     });
-    return Boolean(result?.ok);
+    return matchesComputer(result, rememberedComputer);
   } catch { /* 旧壳子，往下走 */ }
   try {
+    if (rememberedComputer) {
+      const response = await fetch(`http://${candidate.host}:${candidate.port}/api/models`, {
+        cache: "no-store", signal: AbortSignal.timeout(timeoutMs),
+      });
+      const identity = await response.json();
+      return matchesComputer({ ok: response.ok && Array.isArray(identity.models), instance: identity.instance }, rememberedComputer);
+    }
     await fetch(`http://${candidate.host}:${candidate.port}/`, {
       mode: "no-cors", cache: "no-store",
       signal: AbortSignal.timeout(timeoutMs),
@@ -835,7 +848,7 @@ const LocalNetwork = registerPlugin<{
   // 这份新网页——调用处必须接住"没有这个方法"，退回原来那套，不能崩在这里。
   discover(options: { timeoutMs?: number }): Promise<{ servers: Discovered[] }>;
   probe(options: { host: string; port: number; timeoutMs?: number }):
-    Promise<{ ok: boolean; version?: string; rttMs: number }>;
+    Promise<{ ok: boolean; version?: string; instance?: string; name?: string; rttMs: number }>;
 }>("LocalNetwork");
 
 // ---- 这台手机现在有没有一条能到电脑的路 ------------------------------------
@@ -965,7 +978,7 @@ async function probeAll(candidates: ServerCandidate[]): Promise<ProbeResult[]> {
 async function broadcastFind(): Promise<Discovered[]> {
   try {
     const result = await LocalNetwork.discover({ timeoutMs: DISCOVER_TIMEOUT_MS });
-    return dedupeServers(result?.servers ?? []);
+    return dedupeServers(result?.servers ?? []).filter(server => !rememberedComputer || server.instance === rememberedComputer.instance);
   } catch {
     return [];
   }
@@ -977,11 +990,11 @@ async function broadcastFind(): Promise<Discovered[]> {
 async function pickServer(typed: string, onPhase: (text: string) => void = () => {}):
     Promise<{ url: string; found: boolean; servers: Discovered[]; udpSilent: boolean }> {
   const links = await ownLinks();
-  let cached = readCandidates();
+  let cached = mergeCandidates(rememberedComputer?.candidates ?? [], readCandidates());
 
   // 一、上次能连上的地址。网段没变的话这一步就结束了，约一百多毫秒。
   if (cached.length) {
-    onPhase("正在试上次的地址…");
+    onPhase(rememberedComputer ? `正在连接 ${rememberedComputer.name}…` : "正在试上次的地址…");
     const ranked = rankCandidates(cached, links);
     const results = await probeAll(ranked);
     const best = pickBest(results);
@@ -1001,8 +1014,8 @@ async function pickServer(typed: string, onPhase: (text: string) => void = () =>
   if (servers.length) {
     const flat = servers.flatMap(candidatesOf);
     addCandidates(flat);
-    const best = pickBest(await probeAll(rankCandidates(flat, links))) ?? flat[0];
-    return { url: normalizeSocketUrl(`${best.host}:${best.port}`), found: true, servers, udpSilent: false };
+    const best = pickBest(await probeAll(rankCandidates(flat, links))) ?? (!rememberedComputer ? flat[0] : null);
+    if (best) return { url: normalizeSocketUrl(`${best.host}:${best.port}`), found: true, servers, udpSilent: false };
   }
 
   // 三、手填的地址。排在广播后面：广播拿到的是此刻的真相，比任何存下来的都新鲜。
@@ -1969,6 +1982,7 @@ function renderControllerMode(): void {
   if (shooter) transportInput.value = "bluetooth";
   transportInput.querySelector<HTMLOptionElement>('[value="network"]')!.disabled = shooter;
   const bluetooth = transportInput.value === "bluetooth";
+  document.querySelector<HTMLElement>("#scanComputerHandheld")!.hidden = bluetooth;
   handheldCard.classList.toggle("shooter-mode", shooter);
   for (const button of modeButtons) button.setAttribute("aria-pressed", String(button.dataset.mode === modeInput.value));
   handheldCard.classList.toggle("bluetooth-mode", bluetooth);
@@ -2229,8 +2243,67 @@ async function suspendHandheld(): Promise<void> {
   await wakeLock?.release().catch(() => {}); wakeLock = null;
   document.querySelector("#sensorState")!.textContent = "已暂停";
 }
-async function stopHandheld(): Promise<void> { await suspendHandheld(); showRole("home"); document.querySelector<HTMLElement>("header")!.classList.remove("hidden"); setConnection("offline"); }
-async function handleBackButton(): Promise<void> { if (activeRole === "home") { await App.exitApp(); return; } if (activeRole === "camera") { await stop(); showRole("home"); return; } await stopHandheld(); }
+async function stopHandheld(): Promise<void> { computerReconnect.cancel(); await suspendHandheld(); showRole("home"); document.querySelector<HTMLElement>("header")!.classList.remove("hidden"); setConnection("offline"); }
+async function handleBackButton(): Promise<void> {
+  connectionTouched = true;
+  if (scannerAbort) { scannerAbort.abort(); return; }
+  computerReconnect.cancel();
+  if (activeRole === "home") { await App.exitApp(); return; }
+  if (activeRole === "camera") { await stop(); showRole("home"); return; }
+  await stopHandheld();
+}
+
+const computerReconnect = new ComputerReconnect(
+  () => !document.hidden && controllerAppActive && !scannerAbort,
+  role => role === "camera" ? running : handheldRunning,
+  async (role, current) => {
+    if (!current()) return;
+    if (role === "camera") { showRole("camera"); await start(); }
+    else if (transportInput.value === "network") {
+      await controllerSuspendTask; await controllerStartTask;
+      if (current()) await startHandheld();
+    }
+  },
+);
+function rememberRole(role: "camera" | "handheld"): void {
+  if (!rememberedComputer || (role === "handheld" && transportInput.value !== "network")) return;
+  rememberedComputer = { ...rememberedComputer, role }; saveComputer(rememberedComputer);
+}
+async function openComputerScanner(role: "camera" | "handheld"): Promise<void> {
+  if (scannerAbort || (role === "handheld" && transportInput.value !== "network")) return;
+  const controller = new AbortController(); scannerAbort = controller;
+  connectionTouched = true;
+  const wasRunning = role === "camera" ? running || Boolean(cameraStartTask) : handheldRunning || Boolean(controllerStartTask);
+  computerReconnect.cancel();
+  let selected = false;
+  try {
+    if (role === "camera") { await stop(); await cameraStartTask; }
+    else { await suspendHandheld(); await controllerStartTask; }
+    if (controller.signal.aborted || document.hidden || !controllerAppActive) return;
+    const { scanConnectionCode } = await import("./qr-scanner");
+    const text = await scanConnectionCode(controller.signal);
+    if (!text || controller.signal.aborted || document.hidden || !controllerAppActive) return;
+    const computer = parseConnectionCode(text);
+    rememberedComputer = { ...computer, role }; saveComputer(rememberedComputer);
+    saveCandidates(computer.candidates);
+    const first = computer.candidates[0];
+    const address = normalizeSocketUrl(`${first.host}:${first.port}`);
+    serverInput.value = handheldServerInput.value = address;
+    try { localStorage.setItem("motionbridge-server", address); } catch { /* 本次仍可连接。 */ }
+    selected = true;
+  } catch (error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    const hint = /permission|NotAllowed/i.test(raw) ? "请在系统设置中允许摄像头扫码" : raw;
+    document.querySelector(role === "camera" ? "#securityWarning" : "#sensorState")!.textContent = hint;
+  } finally {
+    if (scannerAbort === controller) scannerAbort = null;
+    if (controller.signal.reason !== "unload" && activeRole === role && (selected || wasRunning)) {
+      if (rememberedComputer) computerReconnect.activate(role);
+      else if (!document.hidden && controllerAppActive) { if (role === "camera") void start(); else void startHandheld(); }
+      else if (role === "camera") resumeCameraOnReturn = true;
+    }
+  }
+}
 function updateStick(event: PointerEvent): void { const stick = document.querySelector<HTMLElement>("#stick")!; const rect = stick.getBoundingClientRect(); const x = Math.max(-1, Math.min(1, (event.clientX - (rect.left + rect.width / 2)) / (rect.width * 0.38))); const y = Math.max(-1, Math.min(1, (event.clientY - (rect.top + rect.height / 2)) / (rect.height * 0.38))); stickState = { x, y }; stick.querySelector<HTMLElement>("i")!.style.transform = `translate(${x * 34}px,${y * 34}px)`; }
 
 // 把上面那个判断说给用户听——但只在有话说的时候。
@@ -2293,11 +2366,14 @@ async function refreshLinkState(failed = false): Promise<void> {
 }
 
 renderControlConfig();
-document.querySelector("#cameraRole")!.addEventListener("click", () => { void (running ? stop() : Promise.resolve()).then(() => { showRole("camera"); void refreshLinkState(); return refreshCameraDevices(); }).catch((error) => { document.querySelector("#securityWarning")!.textContent = error instanceof Error ? error.message : String(error); }); });
-document.querySelector("#handheldRole")!.addEventListener("click", () => { void (running || voiceEnabled ? stop() : Promise.resolve()).then(() => startHandheld()); });
+document.querySelector("#cameraRole")!.addEventListener("click", () => { connectionTouched = true; computerReconnect.cancel(); void (running ? stop() : Promise.resolve()).then(() => { showRole("camera"); rememberRole("camera"); void refreshLinkState(); return refreshCameraDevices(); }).catch((error) => { document.querySelector("#securityWarning")!.textContent = error instanceof Error ? error.message : String(error); }); });
+document.querySelector("#handheldRole")!.addEventListener("click", () => { connectionTouched = true; computerReconnect.cancel(); void (running || voiceEnabled ? stop() : Promise.resolve()).then(() => { rememberRole("handheld"); if (rememberedComputer && transportInput.value === "network") computerReconnect.activate("handheld"); else return startHandheld(); }); });
 const restartController = async () => { await suspendHandheld(); await controllerStartTask; await startHandheld(); };
 modeInput.addEventListener("change", () => { void restartController(); });
-transportInput.addEventListener("change", () => { void restartController(); });
+transportInput.addEventListener("change", () => { computerReconnect.cancel(); rememberRole("handheld"); void restartController(); });
+document.querySelector("#scanComputerCamera")!.addEventListener("click", () => void openComputerScanner("camera"));
+document.querySelector("#scanComputerRuntime")!.addEventListener("click", () => void openComputerScanner("camera"));
+document.querySelector("#scanComputerHandheld")!.addEventListener("click", () => void openComputerScanner("handheld"));
 document.querySelector("#bluetoothRefresh")!.addEventListener("click", () => {
   const generation = controllerGeneration;
   void BluetoothController.getStatus().then((state) => { if (generation === controllerGeneration) applyBluetoothState(state); })
@@ -2333,8 +2409,8 @@ document.querySelector("#bluetoothConnect")!.addEventListener("click", () => {
     void connectBluetooth(address);
   }
 });
-document.querySelector("#cameraHome")!.addEventListener("click", () => { void stop().then(() => showRole("home")); });
-document.querySelector("#startButton")!.addEventListener("click", () => void start()); document.querySelector("#stopButton")!.addEventListener("click", () => void stop());
+document.querySelector("#cameraHome")!.addEventListener("click", () => { computerReconnect.cancel(); void stop().then(() => showRole("home")); });
+document.querySelector("#startButton")!.addEventListener("click", () => { rememberRole("camera"); if (rememberedComputer) computerReconnect.activate("camera"); else void start(); }); document.querySelector("#stopButton")!.addEventListener("click", () => { computerReconnect.cancel(); void stop(); });
 gameControlButton.addEventListener("click", () => { if (gameOutputEnabled !== null) requestGameOutput(!gameOutputEnabled); });
 function updateZoneToggle(): void {
   toggleZonesButton.setAttribute("aria-pressed", String(zoneOverlayEnabled));
@@ -2379,6 +2455,7 @@ let resumeCameraOnReturn = false;
 let cameraSuspending: Promise<void> | null = null;
 function onVisibilityChange(): void {
   if (document.hidden) {
+    computerReconnect.pause(); scannerAbort?.abort();
     cancelBluetoothReconnect();
     if ((running || cameraStartTask) && activeRole === "camera") {
       resumeCameraOnReturn = true;
@@ -2405,9 +2482,10 @@ function onVisibilityChange(): void {
     })();
   }
   if ((running || activeRole === "handheld") && !wakeLock) void navigator.wakeLock?.request("screen").then((lock) => { wakeLock = lock; }).catch(() => {});
+  computerReconnect.resume();
 }
 document.addEventListener("visibilitychange", onVisibilityChange);
-window.addEventListener("beforeunload", () => { cancelBluetoothReconnect(); ++controllerGeneration; clearTouches(); void BluetoothController.releaseAll().catch(() => {}); void BluetoothController.stop().catch(() => {}); void stop(); });
+window.addEventListener("beforeunload", () => { computerReconnect.cancel(); scannerAbort?.abort("unload"); cancelBluetoothReconnect(); ++controllerGeneration; clearTouches(); void BluetoothController.releaseAll().catch(() => {}); void BluetoothController.stop().catch(() => {}); void stop(); });
 void // 装的 APK 是一个版本，跑的网页可能是另一个。一半的修复走热更，APK 不会
 // 跟着变，所以只报 APK 版本的话，"我这版有没有那个修复"就只能靠猜——而反馈
 // 表单里恰好要填这个数。两个一样时只写一个，不一样才把网页那个也写出来。
@@ -2424,6 +2502,11 @@ App.addListener("backButton", () => { void handleBackButton(); });
 // 那行字会停在"两条路都没开"，而他刚刚照做了。
 void App.addListener("appStateChange", ({ isActive }) => {
   controllerAppActive = isActive;
+  if (!isActive) {
+    computerReconnect.pause(); scannerAbort?.abort();
+    if (activeRole === "handheld" && !bluetoothSystemDialog) controllerSuspendTask = suspendHandheld();
+  }
+  else computerReconnect.resume();
   if (!isActive) cancelBluetoothReconnect();
   else if (activeRole === "handheld") scheduleBluetoothReconnect();
   // Some WebViews delay visibilitychange; the native Activity is authoritative.
@@ -2434,6 +2517,13 @@ void App.addListener("appStateChange", ({ isActive }) => {
 });
 
 // A boot is healthy after controls and lifecycle listeners have initialized.
-void nativeCapabilitiesReady.then(() => WebUpdate.bootOk()).catch(error => {
+void nativeCapabilitiesReady.then(async () => {
+  await WebUpdate.bootOk();
+  if (!connectionTouched && activeRole === "home" && rememberedComputer?.role && !scannerAbort) {
+    if (rememberedComputer.role === "camera" || transportInput.value === "network") {
+      showRole(rememberedComputer.role); computerReconnect.activate(rememberedComputer.role);
+    }
+  }
+}).catch(error => {
   if (Capacitor.isPluginAvailable("WebUpdate")) motionDebug.bootHealthError = error instanceof Error ? error.message : String(error);
 });
