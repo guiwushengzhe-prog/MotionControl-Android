@@ -11,6 +11,7 @@ const webVersion = JSON.parse(readFileSync("package.json", "utf-8")).version;
 export default defineConfig({
   base: "./",
   define: { __WEB_VERSION__: JSON.stringify(webVersion) },
+  worker: { format: "iife" },
   build: {
     target: "es2022",
     // release 包里的日志是关的，产物里的 source map 我们根本读不到，只是白占

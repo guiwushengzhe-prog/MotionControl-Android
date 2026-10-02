@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ plugins: {} as Record<string, any>, createPose: vi.fn(), createHand: vi.fn() }));
+const mocks = vi.hoisted(() => ({ plugins: {} as Record<string, any>, createPose: vi.fn(), createHand: vi.fn(), createWorker: vi.fn() }));
+vi.mock("./vision.worker?worker", () => ({ default: class { constructor() { return mocks.createWorker(); } } }));
 vi.mock("@capacitor/core", () => ({
   Capacitor: { isNativePlatform: () => true, isPluginAvailable: () => true },
   registerPlugin: (name: string) => mocks.plugins[name],
@@ -60,6 +61,22 @@ class SocketStub extends EventTarget {
   open() { this.readyState = 1; this.dispatchEvent(new Event("open")); }
   message(body: unknown) { this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(body) })); }
 }
+class VisionWorkerStub extends EventTarget {
+  messages: any[] = []; terminate = vi.fn();
+  postMessage(message: unknown) { this.messages.push(message); }
+  receive(data: unknown) { this.dispatchEvent(new MessageEvent("message", { data })); }
+  ready() { this.receive({ type: "ready", delegate: "GPU", fallbackError: null }); }
+  result(id: number) {
+    const points = Array.from({ length: 33 }, () => ({ x: .5, y: .5, z: 0, visibility: 1 }));
+    this.receive({ type: "result", id, landmarks: [points], worldLandmarks: [points],
+      hands: ["Left", "Right"].map(handedness => ({ handedness, points: Array.from({ length: 21 }, () => [.5, .5, 0, 1]) })),
+      timings: { copyMs: 1, poseMs: 20, handsMs: 10, totalMs: 31 } });
+  }
+}
+function workerPlatform() {
+  vi.stubGlobal("Worker", VisionWorkerStub); vi.stubGlobal("OffscreenCanvas", class {});
+  vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 384, height: 512, close: vi.fn() })));
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -116,6 +133,7 @@ beforeEach(async () => {
   getUserMedia = vi.fn(async () => cameraStream().stream);
   vi.stubGlobal("navigator", { mediaDevices: { getUserMedia, enumerateDevices: async () => [{ kind: "videoinput", deviceId: "front", label: "front" }] } });
   mocks.createPose.mockReset().mockImplementation(async () => emptyModel()); mocks.createHand.mockReset();
+  mocks.createWorker.mockReset().mockImplementation(() => new VisionWorkerStub());
   mocks.plugins = {
     LocalNetwork: { interfaces: async () => ({ interfaces: [] }), probe: async () => ({ ok: true }), discover: async () => ({ servers: [] }) },
     NativeAudio: { addListener: vi.fn(async () => ({ remove: vi.fn(async () => {}) })), start: vi.fn(async () => ({ audioReady: true, recognizerReady: true })), stop: vi.fn(async () => {}) },
@@ -317,5 +335,67 @@ describe("camera lifecycle through actual UI events", () => {
     await vi.advanceTimersByTimeAsync(30050); await flush(); clearInterval(frames);
     expect(mocks.plugins.WebUpdate.sync).toHaveBeenCalledTimes(2);
     expect(ws.readyState).toBe(SocketStub.OPEN);
+  });
+});
+
+describe("worker inference through actual camera events", () => {
+  it("terminates a worker immediately when stopping before its model is ready", async () => {
+    workerPlatform(); await enterCamera(); await beginCamera();
+    const worker = mocks.createWorker.mock.results[0].value as VisionWorkerStub;
+    expect(worker.messages[0]).toMatchObject({ type: "init", poseModelUrl: "http://localhost/models/pose_landmarker_full.task" });
+    click("#stopButton"); await flush(); expect(worker.terminate).toHaveBeenCalledOnce();
+    worker.ready(); await flush(); expect(window.__motionDebug.modelState).toBe("idle");
+    expect(mocks.createPose).not.toHaveBeenCalled();
+  });
+  it("uses same-frame pose and both hands with the captured frame time while inference is asynchronous", async () => {
+    workerPlatform(); await enterCamera(); await beginCamera();
+    const worker = mocks.createWorker.mock.results[0].value as VisionWorkerStub;
+    worker.ready(); await flush(); const ws = SocketStub.sockets[0]; ws.open();
+    ws.message({ type: "control_config_v1", hand_tracking: { enabled: true, hands: ["left", "right"] } });
+    await vi.advanceTimersByTimeAsync(35); element("#camera").currentTime = .035; videoFrame(); await flush();
+    const frame = worker.messages.find(message => message.type === "frame");
+    expect(frame.hands).toEqual(["left", "right"]); expect(frame.inferenceSide).toBe(512);
+    expect(mocks.createPose).not.toHaveBeenCalled(); expect(mocks.createHand).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60); worker.result(frame.id); await flush();
+    const sent = ws.sent.map(body => JSON.parse(body)).find(message => message.type === "pose_features_v1");
+    expect(sent.captured_at_ms).toBe(frame.capturedAtMs); expect(sent.sent_at_ms - sent.captured_at_ms).toBe(60);
+    expect(sent.width).toBe(480); expect(sent.height).toBe(640); expect(sent.points).toHaveLength(33);
+    expect(sent.world_points).toHaveLength(33); expect(sent.hands.map((hand: any) => hand.handedness)).toEqual(["Left", "Right"]);
+    expect(window.__motionDebug.inferenceBackend).toBe("worker");
+    click("#stopButton"); await flush();
+  });
+  it("discards a completed inference from the old lens after switching the camera", async () => {
+    workerPlatform(); await enterCamera(); await beginCamera();
+    const worker = mocks.createWorker.mock.results[0].value as VisionWorkerStub;
+    worker.ready(); await flush(); const ws = SocketStub.sockets[0]; ws.open();
+    await vi.advanceTimersByTimeAsync(35); element("#camera").currentTime = .035; videoFrame(); await flush();
+    const old = worker.messages.find(message => message.type === "frame");
+    click("#flipCameraButton"); await vi.advanceTimersByTimeAsync(110); await flush();
+    worker.result(old.id); await flush();
+    expect(ws.sent.map(body => JSON.parse(body)).filter(message => message.type === "pose_features_v1")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(35); element("#camera").currentTime = .2; videoFrame(); await flush();
+    const replacement = worker.messages.filter(message => message.type === "frame").at(-1);
+    worker.result(replacement.id); await flush();
+    expect(ws.sent.map(body => JSON.parse(body)).filter(message => message.type === "pose_features_v1")).toHaveLength(1);
+    expect(mocks.createWorker).toHaveBeenCalledOnce(); click("#stopButton"); await flush();
+  });
+  it("closes a bitmap captured after stop without sending it to the terminated worker", async () => {
+    workerPlatform(); const pending = deferred<ImageBitmap>(); const bitmap = { width: 384, height: 512, close: vi.fn() } as unknown as ImageBitmap;
+    vi.mocked(createImageBitmap).mockReturnValueOnce(pending.promise);
+    await enterCamera(); await beginCamera(); const worker = mocks.createWorker.mock.results[0].value as VisionWorkerStub;
+    worker.ready(); await flush(); SocketStub.sockets[0].open();
+    await vi.advanceTimersByTimeAsync(35); element("#camera").currentTime = .035; videoFrame(); await flush();
+    click("#stopButton"); await flush(); pending.resolve(bitmap); await flush();
+    expect(bitmap.close).toHaveBeenCalledOnce(); expect(worker.messages.filter(message => message.type === "frame")).toHaveLength(0);
+  });
+  it("falls back once to the main-thread CPU path after a worker runtime failure", async () => {
+    workerPlatform(); await enterCamera(); await beginCamera();
+    const worker = mocks.createWorker.mock.results[0].value as VisionWorkerStub;
+    worker.ready(); await flush(); worker.receive({ type: "error", message: "worker GPU context lost" }); await flush();
+    expect(worker.terminate).toHaveBeenCalledOnce(); expect(mocks.createWorker).toHaveBeenCalledOnce();
+    expect(mocks.createPose).toHaveBeenCalledOnce(); expect(mocks.createPose.mock.calls[0][1].baseOptions.delegate).toBe("CPU");
+    expect(window.__motionDebug.inferenceBackend).toBe("main");
+    expect(window.__motionDebug.workerFallbackError).toContain("context lost");
+    expect(window.__motionDebug.modelRecoveries).toBe(1); click("#stopButton"); await flush();
   });
 });

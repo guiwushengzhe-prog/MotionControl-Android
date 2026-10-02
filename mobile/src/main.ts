@@ -9,6 +9,10 @@ import { BluetoothController, bluetoothButtons, relativeTilt, StickMouse, type B
 import { GyroMouse } from "./gyro-mouse";
 import { SHOOTER_CONTROLS_HTML, createShooterControls, type ShooterControlState } from "./shooter-controls";
 import { SessionCancelled, SessionGeneration, SocketLiveness, isSessionCancelled, optionalSensorFresh, sampleCapturedAt, sensorSampleFresh } from "./session";
+import VisionWorker from "./vision.worker?worker";
+import { VisionWorkerClient, supportsVisionWorker } from "./vision-worker-client";
+import { HAND_CROP_SIDE, handCropBox, inferenceSize, packHandCrop, type HandSide, type PackedHand } from "./vision-core";
+import type { VisionResult } from "./vision-protocol";
 import "./style.css";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
@@ -56,6 +60,11 @@ type MotionDebug = {
   lastDetectError: string | null;
   lastPoseCount: number;
   lastInferenceMs: number;
+  inferenceBackend: "main" | "worker" | "unknown";
+  workerFallbackError: string | null;
+  workerDroppedFrames: number;
+  workerQueueMs: number;
+  mainBusyMs: number;
   timings: { cameraOpenMs: number; modelLoadMs: number; copyMs: number; poseMs: number; handsMs: number; overlayMs: number; encodeMs: number; frameToSendMs: number; totalMs: number };
   networkDroppedFrames: number;
   sensorDroppedFrames: number;
@@ -201,6 +210,12 @@ const cameraSwitchState = document.querySelector<HTMLElement>("#cameraSwitchStat
 let vision: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
 let visionTask: Promise<Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>> | null = null;
 let poseLandmarker: PoseLandmarker | null = null;
+type CameraInferenceFrame = { session: number; source: number; model: number; connection: number;
+  timestampMs: number; capturedAtMs: number; startedAt: number; width: number; height: number;
+  facing: "user" | "environment"; cameraId: string; inferenceSide: number; captureMs: number; captureMainMs: number };
+let visionWorker: VisionWorkerClient<CameraInferenceFrame> | null = null;
+let workerFailed = false;
+let workerCaptureToken: object | null = null;
 let stream: MediaStream | null = null;
 let socket: WebSocket | null = null;
 let handheldSocket: WebSocket | null = null;
@@ -712,6 +727,7 @@ const motionDebug: MotionDebug = window.__motionDebug = {
   lastDetectError: null,
   lastPoseCount: 0,
   lastInferenceMs: 0,
+  inferenceBackend: "unknown", workerFallbackError: null, workerDroppedFrames: 0, workerQueueMs: 0, mainBusyMs: 0,
   timings: { cameraOpenMs: 0, modelLoadMs: 0, copyMs: 0, poseMs: 0, handsMs: 0, overlayMs: 0, encodeMs: 0, frameToSendMs: 0, totalMs: 0 },
   networkDroppedFrames: 0,
   sensorDroppedFrames: 0,
@@ -1034,6 +1050,7 @@ function setVoiceStatus(status: VoiceStatus, detail?: string): void { voiceState
 function poseVoiceState(): "not_connected" | "connected" | "enabled" | "unauthorized" | "failed" { return voiceState === "off" ? "not_connected" : voiceState === "connecting" ? "connected" : voiceState === "listening" ? "enabled" : voiceState === "unauthorized" ? "unauthorized" : "failed"; }
 function clearWebCamera(): void {
   cameraSource.next();
+  visionWorker?.clearPending(); workerCaptureToken = null;
   cameraFrameLoop = false;
   if (cameraFrameCallback != null) video.cancelVideoFrameCallback?.(cameraFrameCallback);
   cameraFrameCallback = null;
@@ -1098,16 +1115,52 @@ async function loadPoseModel(session = cameraSession.current): Promise<void> {
   if (!forceCpuDelegate) motionDebug.fallbackError = null;
   motionDebug.detectCalls = 0; motionDebug.lastPoseCount = 0; motionDebug.lastInferenceMs = 0; motionDebug.lastDetectError = null;
   const previous = poseLandmarker; poseLandmarker = null; previous?.close();
+  const previousWorker = visionWorker; visionWorker = null; previousWorker?.close();
   let loaded: PoseLandmarker | null = null;
   try {
-    const result = await poseModelSession.resolveResource(modelGeneration, createPose(motionDebug.modelUrl, forceCpuDelegate, modelGeneration), result => result.model.close());
-    loaded = result.model;
-    cameraSession.assertCurrent(session); poseModelSession.assertCurrent(modelGeneration);
-    poseLandmarker = loaded; loaded = null;
-    motionDebug.delegate = result.delegate;
-    if (result.fallbackError) motionDebug.fallbackError = result.fallbackError;
+    if (!workerFailed && supportsVisionWorker()) {
+      let worker: VisionWorkerClient<CameraInferenceFrame> | null = null;
+      try {
+        worker = new VisionWorkerClient(new VisionWorker(), { type: "init", wasmBaseUrl: new URL("./wasm", location.href).href,
+          poseModelUrl: motionDebug.modelUrl, handModelUrl: new URL("./models/hand_landmarker.task", location.href).href,
+          cpuOnly: forceCpuDelegate },
+          (frame, result, queueMs) => {
+            if (currentInferenceFrame(frame)) {
+              motionDebug.workerQueueMs = queueMs;
+              consumeVisionResult(frame, result, frame.captureMs + result.timings.copyMs, frame.captureMainMs);
+            }
+          }, error => {
+            if (!cameraSession.isCurrent(session) || !poseModelSession.isCurrent(modelGeneration) || !running) return;
+            workerFailed = true; motionDebug.workerFallbackError = error.message;
+            void recoverModel(error);
+          });
+        // Keep ownership during initialization so stop can terminate immediately.
+        visionWorker = worker;
+        const ready = await worker.ready;
+        cameraSession.assertCurrent(session); poseModelSession.assertCurrent(modelGeneration);
+        visionWorker = worker; worker = null; releaseHandModel();
+        motionDebug.inferenceBackend = "worker"; motionDebug.delegate = ready.delegate;
+        motionDebug.fallbackError = ready.fallbackError;
+      } catch (error) {
+        if (visionWorker === worker) visionWorker = null;
+        worker?.close();
+        cameraSession.assertCurrent(session); poseModelSession.assertCurrent(modelGeneration);
+        if (isSessionCancelled(error)) throw error;
+        workerFailed = true; motionDebug.workerFallbackError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (!visionWorker) {
+      const result = await poseModelSession.resolveResource(modelGeneration, createPose(motionDebug.modelUrl, forceCpuDelegate, modelGeneration), result => result.model.close());
+      loaded = result.model;
+      cameraSession.assertCurrent(session); poseModelSession.assertCurrent(modelGeneration);
+      poseLandmarker = loaded; loaded = null;
+      motionDebug.delegate = result.delegate;
+      motionDebug.inferenceBackend = "main";
+      if (result.fallbackError) motionDebug.fallbackError = result.fallbackError;
+    }
     motionDebug.timings.modelLoadMs = performance.now() - started;
     motionDebug.modelState = "ready";
+    if (!visionWorker) syncHandTracking();
     document.querySelector("#delegateStatus")!.textContent = motionDebug.fallbackError ? "CPU·GPU回退" : motionDebug.delegate;
     document.querySelector("#modelError")!.textContent = motionDebug.fallbackError ? `GPU回退：${motionDebug.fallbackError}` : "";
   } catch (error) {
@@ -1209,6 +1262,7 @@ async function start(): Promise<void> {
   if (!cameraSession.isCurrent(intent) || cameraStartTask || running || activeRole !== "camera" || document.hidden) return;
   const session = cameraSession.next();
   modelRecoveryAttempts = cameraRecoveryAttempts = 0; forceCpuDelegate = false;
+  workerFailed = false; motionDebug.workerFallbackError = null; motionDebug.workerDroppedFrames = 0;
   motionDebug.modelRecoveries = motionDebug.cameraRecoveries = 0;
   setStartBusy("正在找电脑…"); setConnection("connecting");
   document.querySelector("#securityWarning")!.textContent = "";
@@ -1423,7 +1477,7 @@ function packWorldPoints(points: readonly WorldPoseLandmark[] | undefined): numb
     roundPose(point.visibility ?? 1),
   ]);
 }
-function resizeInferenceCanvas(): void { const sourceWidth = video.videoWidth; const sourceHeight = video.videoHeight; if (!sourceWidth || !sourceHeight) return; const scale = Math.min(1, inferenceMaxSide / Math.max(sourceWidth, sourceHeight)); const width = Math.max(1, Math.round(sourceWidth * scale)); const height = Math.max(1, Math.round(sourceHeight * scale)); if (inferenceCanvas.width !== width || inferenceCanvas.height !== height) { inferenceCanvas.width = width; inferenceCanvas.height = height; } inferenceContext.drawImage(video, 0, 0, width, height); }
+function resizeInferenceCanvas(): void { const sourceWidth = video.videoWidth; const sourceHeight = video.videoHeight; if (!sourceWidth || !sourceHeight) return; const { width, height } = inferenceSize(sourceWidth, sourceHeight, inferenceMaxSide); if (inferenceCanvas.width !== width || inferenceCanvas.height !== height) { inferenceCanvas.width = width; inferenceCanvas.height = height; } inferenceContext.drawImage(video, 0, 0, width, height); }
 // 档位要瞄准的是"整帧塞进摄像头的帧距"，不是某个绝对毫秒数。
 //
 // 摄像头 30 帧 = 每 33.3ms 一帧，推理只在有新一帧时才跑：一旦整帧超过 33.3ms，
@@ -1474,11 +1528,6 @@ function currentInferenceIntervalMs(): number {
 // 耗时一样（那两个网络内部本来就把输入缩到固定大小），但最慢的一帧从 70 毫秒
 // 降到 36——整幅画面偶尔要满图重新找手，裁过之后搜索范围只有巴掌大。另外裁
 // 哪里是电脑说了算的，所以不存在把左右手认反。
-type HandSide = "left" | "right";
-const POSE_WRIST: Record<HandSide, number> = { left: 15, right: 16 };
-const POSE_ELBOW: Record<HandSide, number> = { left: 13, right: 14 };
-const HAND_CROP_SIDE = 256;
-type PackedHand = { handedness: "Left" | "Right"; points: number[][] };
 let handTrackingSides: HandSide[] = [];
 let handLandmarker: HandLandmarker | null = null;
 let handModelLoading = false;
@@ -1492,6 +1541,7 @@ function syncHandTracking(): void {
   const requested = request?.hands ?? [request?.hand];
   handTrackingSides = request?.enabled ? [...new Set(requested.filter((hand): hand is HandSide => hand === "left" || hand === "right"))] : [];
   if (!handTrackingSides.length) { releaseHandModel(); return; }
+  if (visionWorker) return;
   if (handLandmarker || handModelLoading || !running) return;
   void loadHandModel(cameraSession.current);
 }
@@ -1522,46 +1572,13 @@ async function loadHandModel(session: number): Promise<void> {
 
 // 手掌在手腕之外，所以框心要沿着"手肘指向手腕"这个方向再往外推一点；框的大小
 // 跟着前臂长度走，人离摄像头远近就不影响它。
-function handCropBox(points: NormalizedLandmark[], side: HandSide, width: number, height: number):
-    { sx: number; sy: number; side: number } | null {
-  const elbow = points[POSE_ELBOW[side]];
-  const wrist = points[POSE_WRIST[side]];
-  if (!elbow || !wrist) return null;
-  const dx = (wrist.x - elbow.x) * width;
-  const dy = (wrist.y - elbow.y) * height;
-  const forearm = Math.hypot(dx, dy);
-  if (forearm < 8) return null;
-  const box = Math.min(Math.max(forearm * 1.5, 48), Math.min(width, height));
-  const centerX = wrist.x * width + dx * 0.35;
-  const centerY = wrist.y * height + dy * 0.35;
-  return {
-    sx: Math.min(Math.max(centerX - box / 2, 0), width - box),
-    sy: Math.min(Math.max(centerY - box / 2, 0), height - box),
-    side: box,
-  };
-}
-
 function detectHand(points: NormalizedLandmark[], side: HandSide): PackedHand | null {
   if (!handLandmarker) return null;
   const box = handCropBox(points, side, inferenceCanvas.width, inferenceCanvas.height);
   if (!box) return null;
   handCropContext.drawImage(inferenceCanvas, box.sx, box.sy, box.side, box.side,
                             0, 0, HAND_CROP_SIDE, HAND_CROP_SIDE);
-  const landmarks = handLandmarker.detect(handCropCanvas).landmarks[0];
-  if (!landmarks || landmarks.length !== 21) return null;
-  return {
-    handedness: side === "left" ? "Left" : "Right",
-    // 坐标换算回整幅画面，电脑那边只认整幅画面的归一化坐标。
-    // 第四个数是置信度：手部模型不给每个点单独的置信度，一只手要通过检测和跟踪
-    // 两道门槛才会出现在结果里，所以它返回的点是同一个置信度。电脑靠"点得在画
-    // 面里"这条硬规矩过滤，不靠这个数。
-    points: landmarks.map((point) => [
-      roundPose((box.sx + point.x * box.side) / inferenceCanvas.width),
-      roundPose((box.sy + point.y * box.side) / inferenceCanvas.height),
-      roundPose(point.z * box.side / inferenceCanvas.width),
-      1,
-    ]),
-  };
+  return packHandCrop(handLandmarker.detect(handCropCanvas).landmarks[0], side, box, inferenceCanvas.width, inferenceCanvas.height);
 }
 // ==== 手部关节到此为止 =====================================================
 
@@ -1598,106 +1615,122 @@ async function recoverModel(error: unknown): Promise<void> {
   try { await task; } finally { if (modelRecoveryTask === task) modelRecoveryTask = null; }
 }
 
+function currentInferenceFrame(frame: CameraInferenceFrame): boolean {
+  return running && cameraSession.isCurrent(frame.session) && cameraSource.isCurrent(frame.source)
+    && poseModelSession.isCurrent(frame.model) && cameraSocketSession.isCurrent(frame.connection);
+}
+function inferenceFrame(now: number): CameraInferenceFrame {
+  return { session: cameraSession.current, source: cameraSource.current, model: poseModelSession.current,
+    connection: cameraSocketSession.current, timestampMs: now, capturedAtMs: lastCameraCapturedAtMs,
+    startedAt: performance.now(), width: video.videoWidth, height: video.videoHeight,
+    facing: facingMode, cameraId: selectedCameraDeviceId === "__auto__" ? "logical" : selectedCameraDeviceId,
+    inferenceSide: inferenceMaxSide, captureMs: 0, captureMainMs: 0 };
+}
+async function captureWorkerFrame(worker: VisionWorkerClient<CameraInferenceFrame>, frame: CameraInferenceFrame): Promise<void> {
+  const token = {}; workerCaptureToken = token;
+  let bitmap: ImageBitmap | null = null;
+  try {
+    // Transfer a snapshot without resizing on the UI thread. The worker uses
+    // the same 2D drawImage scaling as the original inference canvas.
+    const pending = createImageBitmap(video);
+    frame.captureMainMs = performance.now() - frame.startedAt;
+    bitmap = await pending; frame.captureMs = performance.now() - frame.startedAt;
+    if (!currentInferenceFrame(frame) || visionWorker !== worker) return;
+    worker.submit({ bitmap, timestampMs: frame.timestampMs, capturedAtMs: frame.capturedAtMs, width: frame.width,
+      height: frame.height, inferenceSide: frame.inferenceSide,
+      hands: socket?.readyState === WebSocket.OPEN ? [...handTrackingSides] : [] }, frame);
+    bitmap = null; motionDebug.workerDroppedFrames = worker.droppedFrames;
+  } catch (error) {
+    if (currentInferenceFrame(frame) && visionWorker === worker) {
+      workerFailed = true; motionDebug.workerFallbackError = error instanceof Error ? error.message : String(error);
+      void recoverModel(error);
+    }
+  } finally {
+    bitmap?.close();
+    if (workerCaptureToken === token) workerCaptureToken = null;
+  }
+}
 function predict(now: number): void {
   if (!running) return;
   schedulePredict();
-  if (inferenceBusy || !poseLandmarker || video.readyState < 2 || video.currentTime === lastVideoTime || now - lastInferenceAt < currentInferenceIntervalMs()) return;
-  lastVideoTime = video.currentTime;
-  lastInferenceAt = now;
+  if (inferenceBusy || (!poseLandmarker && !visionWorker) || motionDebug.modelState !== "ready"
+      || video.readyState < 2 || video.currentTime === lastVideoTime || now - lastInferenceAt < currentInferenceIntervalMs()) return;
+  if (visionWorker && workerCaptureToken) return;
+  lastVideoTime = video.currentTime; lastInferenceAt = now;
+  const frame = inferenceFrame(now);
+  if (visionWorker) { void captureWorkerFrame(visionWorker, frame); return; }
   inferenceBusy = true;
-  const started = performance.now();
-  motionDebug.timings.encodeMs = motionDebug.timings.frameToSendMs = 0;
-  motionDebug.detectCalls++;
-  let stage: "copy" | "pose" | "hands" | "overlay" | "send" = "copy";
+  let stage: "copy" | "pose" | "hands" = "copy";
   try {
-    resizeInferenceCanvas(); motionDebug.timings.copyMs = performance.now() - started;
+    resizeInferenceCanvas(); const copyMs = performance.now() - frame.startedAt;
     stage = "pose"; const poseStarted = performance.now();
-    const poseResult = poseLandmarker.detectForVideo(inferenceCanvas, now);
-    motionDebug.timings.poseMs = performance.now() - poseStarted;
+    const poseResult = poseLandmarker!.detectForVideo(inferenceCanvas, now);
+    const poseMs = performance.now() - poseStarted;
     stage = "hands"; const handsStarted = performance.now();
-    const firstPose = poseResult.landmarks[0];
-    // 手部关节只在电脑正用手控鼠标、并且连着的时候才跑：断开时这些点没地方去，
-    // 白费一次推理和一份电。
-    // 同一视频帧顺序识别两只手，不复用上一帧的握拳状态；同手双轴只识别一次。
-    const packedHands = firstPose && socket?.readyState === WebSocket.OPEN
-      ? handTrackingSides.map(side => detectHand(firstPose, side))
-          .filter((hand): hand is PackedHand => hand !== null) : [];
-    motionDebug.timings.handsMs = performance.now() - handsStarted;
-    const elapsed = performance.now() - started;
-    updateInferenceBudget(elapsed, now);
-    motionDebug.lastInferenceMs = elapsed;
-    motionDebug.lastPoseCount = poseResult.landmarks.length;
-    motionDebug.lastDetectError = null;
-
-    // Drawing is presentation only.  Throttle it so canvas work cannot steal
-    // the frame budget from control inference.  When the user hides the mobile
-    // control overlay during gameplay, stop skeleton rendering entirely.
-    stage = "overlay"; const overlayStarted = performance.now();
-    if ((overlayRenderingEnabled || zoneOverlayEnabled) && now - lastOverlayAt >= OVERLAY_INTERVAL_MS) {
-      draw(poseResult.landmarks, overlayRenderingEnabled);
-      lastOverlayAt = now;
-    }
-
-    motionDebug.timings.overlayMs = performance.now() - overlayStarted;
-    stage = "send"; const encodeStarted = performance.now();
-    if (firstPose && socket?.readyState === WebSocket.OPEN) {
-      // Sequence is allocated before congestion handling so the PC can observe
-      // gaps as dropped real-time frames instead of mistaking them for a slower
-      // camera.
-      const frameSequence = sequence++;
-      if (socket.bufferedAmount <= MAX_SOCKET_BUFFERED_BYTES) {
-        const worldPoints = packWorldPoints(poseResult.worldLandmarks?.[0]);
-        const frame: Record<string, unknown> = {
-          type: "pose_features_v1", role: "camera", layout: POSE_LAYOUT,
-          device_id: deviceId, sequence: frameSequence,
-          captured_at_ms: lastCameraCapturedAtMs + serverClockOffsetMs,
-          sent_at_ms: Date.now() + serverClockOffsetMs,
-          width: video.videoWidth, height: video.videoHeight,
-          camera_facing: facingMode,
-          camera_id: selectedCameraDeviceId === "__auto__" ? "logical" : selectedCameraDeviceId,
-          preview_mirrored: facingMode === "user", coordinates_mirrored: false,
-          actual_model: modelChoice, voice_state: poseVoiceState(),
-          delegate: motionDebug.delegate,
-          // 自适应档位走到了哪一档。降档到底有没有让推理变快，不报出来只能猜。
-          inference_side: inferenceMaxSide,
-          points: packControlLandmarks(firstPose), inference_ms: Math.round(elapsed * 10) / 10,
-        };
-        // 保持紧凑控制载荷不变，同时为新版电脑携带可选的米制世界坐标。
-        if (worldPoints.length === 33) frame.world_points = worldPoints;
-        if (packedHands.length) frame.hands = packedHands;
-        const payload = JSON.stringify(frame);
-        motionDebug.timings.encodeMs = performance.now() - encodeStarted;
-        motionDebug.timings.frameToSendMs = Math.max(0, Date.now() - lastCameraCapturedAtMs);
-        socket.send(payload);
-      } else {
-        // Real-time control must prefer freshness over completeness. Never add
-        // another stale pose to a congested WebSocket queue.
-        motionDebug.networkDroppedFrames = ++networkDroppedFrames;
-      }
-    }
-    motionDebug.timings.totalMs = performance.now() - started;
-    motionDebug.timingSamples.push({ atMs: Date.now(), copyMs: motionDebug.timings.copyMs, poseMs: motionDebug.timings.poseMs,
-      handsMs: motionDebug.timings.handsMs, overlayMs: motionDebug.timings.overlayMs, encodeMs: motionDebug.timings.encodeMs,
-      frameToSendMs: motionDebug.timings.frameToSendMs, totalMs: motionDebug.timings.totalMs });
-    if (motionDebug.timingSamples.length > 300) motionDebug.timingSamples.shift();
-    const nextSendState = firstPose ? "人体已识别" : "等待完整人体";
-    if (nextSendState !== lastSendStateText) {
-      document.querySelector("#sendState")!.textContent = nextSendState;
-      lastSendStateText = nextSendState;
-      document.querySelector("#guide")!.classList.toggle("hidden", !!firstPose);
-    }
-    fpsCounter++;
-    if (performance.now() - fpsStarted >= 1000) {
-      const fps = Math.round(fpsCounter * 1000 / (performance.now() - fpsStarted));
-      document.querySelector("#localFps")!.textContent = `${fps} FPS`;
-      fpsCounter = 0; fpsStarted = performance.now();
-    }
-    if (performance.now() - lastClockSyncAt > 5000) syncClock();
+    const packedHands = poseResult.landmarks[0] && socket?.readyState === WebSocket.OPEN
+      ? handTrackingSides.map(side => detectHand(poseResult.landmarks[0], side)).filter((hand): hand is PackedHand => hand !== null) : [];
+    consumeVisionResult(frame, { type: "result", id: 0, landmarks: poseResult.landmarks, worldLandmarks: poseResult.worldLandmarks,
+      hands: packedHands, timings: { copyMs, poseMs, handsMs: performance.now() - handsStarted, totalMs: performance.now() - frame.startedAt } }, copyMs, copyMs + poseMs + performance.now() - handsStarted);
   } catch (error) {
     motionDebug.lastDetectError = error instanceof Error ? error.message : String(error);
     document.querySelector("#sendState")!.textContent = `模型错误：${motionDebug.lastDetectError}`;
     if (stage === "pose" || stage === "hands") void recoverModel(error);
   } finally { inferenceBusy = false; }
+}
+function consumeVisionResult(frame: CameraInferenceFrame, result: VisionResult, copyMs: number, captureMainMs: number): void {
+  if (!currentInferenceFrame(frame)) return;
+  const mainStarted = performance.now();
+  motionDebug.timings.copyMs = copyMs; motionDebug.timings.poseMs = result.timings.poseMs;
+  motionDebug.timings.handsMs = result.timings.handsMs;
+  motionDebug.timings.encodeMs = motionDebug.timings.frameToSendMs = 0;
+  motionDebug.detectCalls++;
+  const elapsed = copyMs + result.timings.poseMs + result.timings.handsMs;
+  updateInferenceBudget(elapsed, performance.now()); motionDebug.lastInferenceMs = elapsed;
+  motionDebug.lastPoseCount = result.landmarks.length; motionDebug.lastDetectError = null;
+  if (result.handError) document.querySelector("#modelError")!.textContent = result.handError;
+  const firstPose = result.landmarks[0];
+  const overlayStarted = performance.now();
+  if ((overlayRenderingEnabled || zoneOverlayEnabled) && overlayStarted - lastOverlayAt >= OVERLAY_INTERVAL_MS) {
+    draw(result.landmarks, overlayRenderingEnabled); lastOverlayAt = overlayStarted;
+  }
+  motionDebug.timings.overlayMs = performance.now() - overlayStarted;
+  const encodeStarted = performance.now();
+  if (firstPose && socket?.readyState === WebSocket.OPEN) {
+    const frameSequence = sequence++;
+    if (socket.bufferedAmount <= MAX_SOCKET_BUFFERED_BYTES) {
+      const worldPoints = packWorldPoints(result.worldLandmarks?.[0]);
+      const payload: Record<string, unknown> = {
+        type: "pose_features_v1", role: "camera", layout: POSE_LAYOUT, device_id: deviceId, sequence: frameSequence,
+        captured_at_ms: frame.capturedAtMs + serverClockOffsetMs, sent_at_ms: Date.now() + serverClockOffsetMs,
+        width: frame.width, height: frame.height, camera_facing: frame.facing, camera_id: frame.cameraId,
+        preview_mirrored: frame.facing === "user", coordinates_mirrored: false,
+        actual_model: modelChoice, voice_state: poseVoiceState(), delegate: motionDebug.delegate,
+        inference_side: frame.inferenceSide, points: packControlLandmarks(firstPose), inference_ms: Math.round(elapsed * 10) / 10,
+      };
+      if (worldPoints.length === 33) payload.world_points = worldPoints;
+      const hands = result.hands.filter(hand => handTrackingSides.includes(hand.handedness === "Left" ? "left" : "right"));
+      if (hands.length) payload.hands = hands;
+      const encoded = JSON.stringify(payload); motionDebug.timings.encodeMs = performance.now() - encodeStarted;
+      motionDebug.timings.frameToSendMs = Math.max(0, Date.now() - frame.capturedAtMs); socket.send(encoded);
+    } else motionDebug.networkDroppedFrames = ++networkDroppedFrames;
+  }
+  motionDebug.timings.totalMs = performance.now() - frame.startedAt;
+  motionDebug.mainBusyMs = captureMainMs + performance.now() - mainStarted;
+  motionDebug.timingSamples.push({ atMs: Date.now(), copyMs, poseMs: result.timings.poseMs, handsMs: result.timings.handsMs,
+    overlayMs: motionDebug.timings.overlayMs, encodeMs: motionDebug.timings.encodeMs,
+    frameToSendMs: motionDebug.timings.frameToSendMs, totalMs: motionDebug.timings.totalMs });
+  if (motionDebug.timingSamples.length > 300) motionDebug.timingSamples.shift();
+  const nextSendState = firstPose ? "人体已识别" : "等待完整人体";
+  if (nextSendState !== lastSendStateText) {
+    document.querySelector("#sendState")!.textContent = nextSendState; lastSendStateText = nextSendState;
+    document.querySelector("#guide")!.classList.toggle("hidden", !!firstPose);
+  }
+  fpsCounter++;
+  if (performance.now() - fpsStarted >= 1000) {
+    document.querySelector("#localFps")!.textContent = `${Math.round(fpsCounter * 1000 / (performance.now() - fpsStarted))} FPS`;
+    fpsCounter = 0; fpsStarted = performance.now();
+  }
+  if (performance.now() - lastClockSyncAt > 5000) syncClock();
 }
 function poseStatusText(playerLocked: boolean): string { if (lastServerPoseCount > 0) return playerLocked ? "已识别" : "人体已识别·动作模型准备中"; return "相机正常·未发现完整人体"; }
 function draw(poses: NormalizedLandmark[][], showSkeleton = true): void { resizeCanvas(); context.clearRect(0, 0, canvas.width, canvas.height); drawingUtils ||= new DrawingUtils(context); const pose = poses[0]; if (showSkeleton && pose) { drawingUtils.drawConnectors(pose, PoseLandmarker.POSE_CONNECTIONS, { color: "#c8ff38", lineWidth: 2 * overlayCssPx }); drawingUtils.drawLandmarks(pose, { color: "#fff", fillColor: "#0b1014", radius: 2 * overlayCssPx }); } renderZoneOverlay(); }
@@ -1850,9 +1883,11 @@ async function stop(): Promise<void> {
   gameControlButton.textContent = "连接电脑中"; gameControlButton.classList.remove("enabled"); gameControlButton.title = "";
   triggerLast = null; triggerLastAt = 0; clearTriggerState(); markControlConfigCached();
   const model = poseLandmarker; poseLandmarker = null; model?.close();
+  const worker = visionWorker; visionWorker = null; worker?.close(); workerCaptureToken = null;
   releaseHandModel(); handTrackingSides = []; clearWebCamera();
   motionDebug.videoReady = false; motionDebug.videoWidth = motionDebug.videoHeight = 0;
   motionDebug.modelState = "idle";
+  motionDebug.inferenceBackend = "unknown";
   overlayRenderingEnabled = true; lastSendStateText = "";
   const lock = wakeLock; wakeLock = null;
   context.clearRect(0, 0, canvas.width, canvas.height);
