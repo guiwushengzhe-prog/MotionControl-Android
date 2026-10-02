@@ -35,6 +35,18 @@ public class WebUpdatePlugin extends Plugin {
     private static final String MANIFEST_ROUTE = "/api/bundle/phone-web";
     private static final String FILE_ROUTE = "/api/bundle/phone-web/file?path=";
 
+    @PluginMethod
+    public void getCapabilities(PluginCall call) {
+        JSObject capabilities = new JSObject()
+                .put("audio_start_cancellation", true)
+                .put("sensor_sample_age", true)
+                .put("bluetooth_release_result", true)
+                .put("display_orientation", true)
+                .put("web_update_boot_health", true);
+        call.resolve(new JSObject().put("native_api", NativeCapabilities.API)
+                .put("protocol", NativeCapabilities.PROTOCOL).put("capabilities", capabilities));
+    }
+
     /**
      * The web app reached the point where it runs, so this bundle is not a
      * brick. Clears the mark {@link MainActivity} leaves at launch; if that
@@ -43,7 +55,11 @@ public class WebUpdatePlugin extends Plugin {
      */
     @PluginMethod
     public void bootOk(PluginCall call) {
-        new File(getContext().getFilesDir(), MainActivity.BOOT_MARK).delete();
+        File mark = new File(getContext().getFilesDir(), MainActivity.BOOT_MARK);
+        if (mark.exists() && !mark.delete()) {
+            call.reject("无法确认网页启动状态", "BOOT_CONFIRM_FAILED");
+            return;
+        }
         call.resolve();
     }
 
@@ -82,6 +98,12 @@ public class WebUpdatePlugin extends Plugin {
             result.put("state", "none");
             return result;
         }
+        if (!NativeCapabilities.supports(NativeCapabilities.minimum(manifest.opt("min_native_api")),
+                NativeCapabilities.minimum(manifest.opt("min_protocol")))) {
+            result.put("state", "incompatible");
+            result.put("message", "此网页更新需要更新手机安装包");
+            return result;
+        }
         String digest = manifest.optString("digest", "");
         result.put("digest", digest);
 
@@ -94,6 +116,11 @@ public class WebUpdatePlugin extends Plugin {
 
         // 验签排在下载之前：连一个字节都不该为没签名的包花出去。
         long issuedAt = BundleSignature.accept(manifest, digest, BundleSignature.readIssued(live));
+        if (issuedAt == BundleSignature.INCOMPATIBLE) {
+            result.put("state", "incompatible");
+            result.put("message", "此网页更新需要更新手机安装包");
+            return result;
+        }
         if (issuedAt < 0) {
             result.put("state", "unsigned");
             return result;

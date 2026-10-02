@@ -185,7 +185,11 @@ public class BluetoothControllerPlugin extends Plugin {
                 call.reject("请等待蓝牙输入设备就绪后再配对");
                 return;
             }
-            releaseReports();
+            if (!releaseReports()) {
+                recoverInput("蓝牙输入释放失败，正在重新建立连接");
+                call.reject("输入释放未送达，请等待蓝牙恢复后再配对");
+                return;
+            }
             systemPrompt = true;
             activePromptEpoch = promptEpoch;
             Intent intent = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
@@ -350,7 +354,10 @@ public class BluetoothControllerPlugin extends Plugin {
                     connectionEpoch++;
                     protocol = BluetoothHidDevice.PROTOCOL_REPORT_MODE;
                     sessionId++;
-                    releaseReports();
+                    if (!releaseReports()) {
+                        recoverInput("蓝牙输入初始状态发送失败，正在自动恢复");
+                        return;
+                    }
                     message = "已连接 " + deviceName(device);
                 } else if (state == BluetoothProfile.STATE_CONNECTING) {
                     if (connectedDevice == null && connectingDevice == null) {
@@ -412,7 +419,10 @@ public class BluetoothControllerPlugin extends Plugin {
             @Override
             public void onSetProtocol(BluetoothDevice device, byte nextProtocol) {
                 if (!current() || !isConnectedHost(device)) return;
-                releaseReports();
+                if (!releaseReports()) {
+                    recoverInput("蓝牙输入释放失败，正在自动恢复");
+                    return;
+                }
                 protocol = nextProtocol;
                 message = nextProtocol == BluetoothHidDevice.PROTOCOL_REPORT_MODE
                         ? "已连接 " + deviceName(device) : "电脑当前使用启动输入协议，请进入正常系统后重连";
@@ -545,8 +555,9 @@ public class BluetoothControllerPlugin extends Plugin {
     @PluginMethod
     public void releaseAll(PluginCall call) {
         ui.post(() -> {
-            releaseReports();
-            call.resolve(status());
+            boolean released = releaseReports();
+            if (!released) recoverInput("蓝牙输入释放失败，连接已关闭，正在自动恢复");
+            call.resolve(status().put("released", released));
         });
     }
 
@@ -563,17 +574,13 @@ public class BluetoothControllerPlugin extends Plugin {
         keyboardLeds = 0;
     }
 
-    private void releaseReports() {
+    private boolean releaseReports() {
         reportEpoch++;
         resetReports();
-        if (hid == null || connectedDevice == null || !hasPermissions()
-                || !acceptsHost(connectedDevice)
-                || protocol != BluetoothHidDevice.PROTOCOL_REPORT_MODE) return;
-        try {
-            for (int id = 1; id < reports.length; id++) hid.sendReport(connectedDevice, id, reports[id]);
-        } catch (RuntimeException ignored) {
-            // 连接断掉时本机仍必须清空；电脑也会在输入设备断开时释放按键。
-        }
+        if (hid == null || connectedDevice == null) return true;
+        if (!hasPermissions() || !acceptsHost(connectedDevice)
+                || protocol != BluetoothHidDevice.PROTOCOL_REPORT_MODE) return false;
+        return ReportRelease.sendAll(reports, (id, report) -> hid.sendReport(connectedDevice, id, report));
     }
 
     private void recoverInput(String reason) {
@@ -728,7 +735,9 @@ public class BluetoothControllerPlugin extends Plugin {
     protected void handleOnPause() {
         foreground = false;
         // 系统配对弹窗也会暂停活动；可见时保留服务，先释放全部输入。
-        releaseReports();
+        if (!releaseReports()) {
+            stopInternal("蓝牙输入释放失败，连接已关闭；返回后自动恢复", requested);
+        }
         super.handleOnPause();
     }
 

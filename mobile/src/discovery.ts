@@ -31,6 +31,28 @@ const KIND_RANK: Record<string, number> = { usb: 0, lan: 1 };
 export const CANDIDATE_CAP = 12;
 export const MAX_MISSES = 3;
 
+/** Keep failure history across storage reads; otherwise misses never reach 3. */
+export function parseCandidates(raw: unknown): ServerCandidate[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap(item => {
+    const host = typeof item?.host === "string" ? item.host.trim() : "";
+    const port = Number(item?.port);
+    if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return [];
+    return [{ host, port, kind: typeof item.kind === "string" ? item.kind : "lan",
+      seenAt: typeof item.seenAt === "number" && Number.isFinite(item.seenAt) && item.seenAt >= 0 ? item.seenAt : undefined,
+      misses: typeof item.misses === "number" && Number.isInteger(item.misses) && item.misses >= 0 ? item.misses : 0 }];
+  }).slice(0, CANDIDATE_CAP);
+}
+
+/** The server's full address list replaces leads, without inventing probe success. */
+export function replaceCandidates(existing: ServerCandidate[], incoming: unknown): ServerCandidate[] {
+  const valid = parseCandidates(incoming);
+  if (!valid.length) return existing;
+  const previous = new Map(existing.map(item => [keyOf(item), item]));
+  return valid.map(item => ({ ...item, seenAt: previous.get(keyOf(item))?.seenAt ?? item.seenAt,
+    misses: previous.get(keyOf(item))?.misses ?? item.misses }));
+}
+
 function rankOf(kind: string): number {
   return KIND_RANK[kind] ?? 9;
 }

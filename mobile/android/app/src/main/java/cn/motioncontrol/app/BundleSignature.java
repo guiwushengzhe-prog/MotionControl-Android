@@ -43,6 +43,7 @@ public final class BundleSignature {
 
     /** 上一次装上的是什么时候签的。旧的东西不许往回装。 */
     static final String ISSUED_MARKER = ".issued";
+    static final long INCOMPATIBLE = -2;
 
     private BundleSignature() {
     }
@@ -78,6 +79,12 @@ public final class BundleSignature {
                 // 你自己的旧包也是签对的。没有这一条，邻居可以把上个月那版递过来
                 // 并且被相信。
                 return -1;
+            }
+            // Optional requirements are authoritative only inside the verified
+            // payload. Legacy signed payloads have neither field and stay valid.
+            if (!NativeCapabilities.supports(NativeCapabilities.minimum(signed.opt("min_native_api")),
+                    NativeCapabilities.minimum(signed.opt("min_protocol")))) {
+                return INCOMPATIBLE;
             }
             return issuedAt;
         } catch (Exception error) {

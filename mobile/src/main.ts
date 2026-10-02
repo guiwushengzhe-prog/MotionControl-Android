@@ -3,11 +3,12 @@ import { App } from "@capacitor/app";
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import {
   candidatesOf, dedupeServers, forgetFailures, lastOctetHint, mergeCandidates,
-  pickBest, rankCandidates, type Discovered, type ProbeResult, type ServerCandidate,
+  pickBest, rankCandidates, parseCandidates, replaceCandidates, type Discovered, type ProbeResult, type ServerCandidate,
 } from "./discovery";
 import { BluetoothController, bluetoothButtons, relativeTilt, StickMouse, type BluetoothState } from "./bluetooth-controller";
 import { GyroMouse } from "./gyro-mouse";
 import { SHOOTER_CONTROLS_HTML, createShooterControls, type ShooterControlState } from "./shooter-controls";
+import { SessionCancelled, SessionGeneration, SocketLiveness, isSessionCancelled, optionalSensorFresh, sampleCapturedAt, sensorSampleFresh } from "./session";
 import "./style.css";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
@@ -40,7 +41,7 @@ type ControlConfigV1 = {
   // Every address the desktop can be reached at, best link first.
   server_candidates?: { host?: string; port?: number; kind?: string }[];
 };
-type SensorSample = { qx: number; qy: number; qz: number; qw: number; gx: number; gy: number; gz: number; ax: number; ay: number; az: number; timestamp: number; running: boolean; accelerationIncludesGravity?: boolean; rotationAvailable?: boolean };
+type SensorSample = { qx: number; qy: number; qz: number; qw: number; gx: number; gy: number; gz: number; ax: number; ay: number; az: number; timestamp: number; running: boolean; accelerationIncludesGravity?: boolean; rotationAvailable?: boolean; sample_age_ms?: number; gyro_age_ms?: number; rotation_age_ms?: number; acceleration_age_ms?: number; accelerationAvailable?: boolean };
 type MotionDebug = {
   videoReady: boolean;
   videoWidth: number;
@@ -55,6 +56,15 @@ type MotionDebug = {
   lastDetectError: string | null;
   lastPoseCount: number;
   lastInferenceMs: number;
+  timings: { cameraOpenMs: number; modelLoadMs: number; copyMs: number; poseMs: number; handsMs: number; overlayMs: number; encodeMs: number; frameToSendMs: number; totalMs: number };
+  networkDroppedFrames: number;
+  sensorDroppedFrames: number;
+  modelRecoveries: number;
+  cameraRecoveries: number;
+  nativeApi: number;
+  webUpdateState: string;
+  bootHealthError: string | null;
+  timingSamples: { atMs: number; copyMs: number; poseMs: number; handsMs: number; overlayMs: number; encodeMs: number; frameToSendMs: number; totalMs: number }[];
 };
 declare global { interface Window { __motionDebug: MotionDebug; } }
 type LocalVoiceText = { text: string; confidence?: number; final: boolean; recognizer: string; recognizedAtMs: number };
@@ -189,6 +199,7 @@ upsideDownButton.classList.toggle("hidden", !displayNative);
 const cameraSwitchState = document.querySelector<HTMLElement>("#cameraSwitchState")!;
 
 let vision: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
+let visionTask: Promise<Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>> | null = null;
 let poseLandmarker: PoseLandmarker | null = null;
 let stream: MediaStream | null = null;
 let socket: WebSocket | null = null;
@@ -229,6 +240,32 @@ let fpsStarted = performance.now();
 let cameraFrameCount = 0;
 let cameraFpsStarted = performance.now();
 let cameraFrameLoop = false;
+const cameraSession = new SessionGeneration();
+const cameraSource = new SessionGeneration();
+const poseModelSession = new SessionGeneration();
+const handModelSession = new SessionGeneration();
+const voiceSession = new SessionGeneration();
+const cameraSocketSession = new SessionGeneration();
+let cameraStartTask: Promise<void> | null = null;
+let cameraStopTask: Promise<void> | null = null;
+let voiceStartTask: Promise<void> | null = null;
+let voiceStopTask: Promise<void> | null = null;
+let nativeVoiceStartBarrier: Promise<void> = Promise.resolve();
+let cameraFrameCallback: number | null = null;
+let predictAnimationFrame: number | null = null;
+let cameraHealthTimer: number | null = null;
+let socketHealthTimer: number | null = null;
+let handheldHealthTimer: number | null = null;
+let lastCameraVideoTime = -1;
+let lastCameraFrameAt = 0;
+let lastCameraCapturedAtMs = 0;
+let modelRecoveryTask: Promise<void> | null = null;
+let cameraRecoveryTask: Promise<void> | null = null;
+let forceCpuDelegate = false;
+let modelRecoveryAttempts = 0;
+let cameraRecoveryAttempts = 0;
+let sensorDroppedFrames = 0;
+let sensorStaleSince = 0;
 let serverClockOffsetMs = 0;
 let lastClockSyncAt = 0;
 let lastServerPoseCount = 0;
@@ -236,7 +273,7 @@ let handheldSequence = 0;
 let handheldRecenter = false;
 let handheldFrames = 0;
 let handheldFpsStarted = performance.now();
-let sensorPolling = false;
+let sensorPollingGeneration: number | null = null;
 let stickState = { x: 0, y: 0 };
 const modeInput = document.querySelector<HTMLSelectElement>("#handheldMode")!;
 const transportInput = document.querySelector<HTMLSelectElement>("#handheldTransport")!;
@@ -614,7 +651,7 @@ function applyControlConfig(message: unknown): void {
   // the desktop only becomes audible after a rebuild.  Restart just for a real
   // change: config arrives on every edit and on every reconnect.
   const phrases = [...voicePhrases(), ...voiceGrammar()].join("\u0000");
-  if (voiceEnabled && voiceRecognitionMode === "phone" && phrases !== activeVoicePhrases) {
+  if ((voiceEnabled || voiceStartTask) && voiceRecognitionMode === "phone" && phrases !== activeVoicePhrases) {
     void (async () => { await stopVoiceControl(false); await startVoiceControl(); })();
   }
 }
@@ -675,6 +712,15 @@ const motionDebug: MotionDebug = window.__motionDebug = {
   lastDetectError: null,
   lastPoseCount: 0,
   lastInferenceMs: 0,
+  timings: { cameraOpenMs: 0, modelLoadMs: 0, copyMs: 0, poseMs: 0, handsMs: 0, overlayMs: 0, encodeMs: 0, frameToSendMs: 0, totalMs: 0 },
+  networkDroppedFrames: 0,
+  sensorDroppedFrames: 0,
+  modelRecoveries: 0,
+  cameraRecoveries: 0,
+  nativeApi: 1,
+  webUpdateState: "idle",
+  bootHealthError: null,
+  timingSamples: [],
 };
 
 function getDeviceId(): string { let value = localStorage.getItem("motionbridge-device-id"); if (!value) { value = `camera-${crypto.randomUUID()}`; localStorage.setItem("motionbridge-device-id", value); } return value; }
@@ -701,18 +747,8 @@ const PROBE_GRACE_MS = 150;
 const DISCOVER_TIMEOUT_MS = 900;
 
 function readCandidates(): ServerCandidate[] {
-  try {
-    const raw = JSON.parse(localStorage.getItem(SERVER_CANDIDATES_KEY) || "[]");
-    if (!Array.isArray(raw)) return [];
-    return raw.flatMap((item) => {
-      const host = typeof item?.host === "string" ? item.host.trim() : "";
-      const port = Number(item?.port);
-      if (!host || !Number.isFinite(port) || port <= 0) return [];
-      return [{ host, port, kind: typeof item?.kind === "string" ? item.kind : "lan" }];
-    });
-  } catch {
-    return [];
-  }
+  try { return parseCandidates(JSON.parse(localStorage.getItem(SERVER_CANDIDATES_KEY) || "[]")); }
+  catch { return []; }
 }
 
 /** 原样写下去，包括写成空的——淘汰完最后一条死地址时要用到。 */
@@ -728,7 +764,7 @@ function saveCandidates(list: ServerCandidate[]): void {
  */
 function rememberCandidates(list: unknown): void {
   if (!Array.isArray(list) || !list.length) return;
-  saveCandidates(list as ServerCandidate[]);
+  saveCandidates(replaceCandidates(readCandidates(), list));
 }
 
 /** 自己找到的是单条线索，只能往里加——覆盖会把电脑报的那份完整地址表冲掉。 */
@@ -816,15 +852,23 @@ async function readLinkState(): Promise<LinkState> {
 }
 
 // 网页包更新。下到暂存目录，下次启动才换上去——不在页面跑着的时候动它脚下的文件。
-type WebUpdateResult = { state: "skipped" | "none" | "current" | "ready" | "failed"; message?: string };
+type WebUpdateResult = { state: "skipped" | "none" | "current" | "ready" | "failed" | "incompatible"; message?: string };
 const WebUpdate = registerPlugin<{
   sync(options: { baseUrl: string }): Promise<WebUpdateResult>;
   bootOk(): Promise<void>;
+  getCapabilities(): Promise<{ native_api: number; protocol: number; capabilities: Record<string, boolean> }>;
 }>("WebUpdate");
 // 脚本跑到这里，说明这份网页包至少不是砖。壳子在启动时留了个记号，这一句把它
 // 清掉；记号要是活到下次启动，壳子就把这个包丢掉、退回 APK 自带的那份。
-void WebUpdate.bootOk().catch(() => {});
+let nativeCapabilities: Record<string, boolean> = {};
+const nativeCapabilitiesReady = WebUpdate.getCapabilities().then(info => {
+  nativeCapabilities = info.capabilities ?? {};
+  motionDebug.nativeApi = info.native_api ?? 1;
+}).catch(() => { /* Legacy APKs retain their existing feature fallbacks. */ });
 let webUpdateChecked = false;
+let webUpdateBase = "";
+let webUpdateTask: Promise<void> | null = null;
+let webUpdateRetryTimer: number | null = null;
 
 // 只扫 /24 和更小的网段。USB 网络共享永远是 /24，254 个地址，几秒扫得完；学校
 // 和公司的 WiFi 常常是 /20 起步，几千个地址，扫它没有意义也扫不完。
@@ -988,8 +1032,28 @@ handheldServerInput.addEventListener("change", () => { const value = handheldSer
 function setConnection(state: ConnectionState): void { const text = ({ offline: "未连接电脑", connecting: "连接中", online: "已连接电脑", error: "连接异常" })[state]; badge.className = `badge ${state}`; badge.querySelector("b")!.textContent = text; runtimeCard.dataset.link = state; const panel = document.querySelector<HTMLElement>("#panelConnection"); if (panel) panel.textContent = text; }
 function setVoiceStatus(status: VoiceStatus, detail?: string): void { voiceState = status; voiceStateLabel.textContent = detail || ({ off: "关闭", connecting: "连接中", listening: "正在听", error: "错误", unauthorized: "未授权" })[status]; voiceStateLabel.className = `voice-state ${status}`; }
 function poseVoiceState(): "not_connected" | "connected" | "enabled" | "unauthorized" | "failed" { return voiceState === "off" ? "not_connected" : voiceState === "connecting" ? "connected" : voiceState === "listening" ? "enabled" : voiceState === "unauthorized" ? "unauthorized" : "failed"; }
-function clearWebCamera(): void { cameraFrameLoop = false; stream?.getTracks().forEach((track) => track.stop()); stream = null; video.pause(); video.srcObject = null; video.removeAttribute("src"); video.load(); video.style.display = "none"; }
-async function openWebStream(constraints: MediaStreamConstraints): Promise<MediaStream> { return await new Promise<MediaStream>((resolve, reject) => { let finished = false; const timer = window.setTimeout(() => { if (!finished) { finished = true; reject(new Error("摄像头打开超时")); } }, 5000); navigator.mediaDevices.getUserMedia(constraints).then((value) => { if (finished) { value.getTracks().forEach((track) => track.stop()); return; } finished = true; window.clearTimeout(timer); resolve(value); }, (error) => { if (finished) return; finished = true; window.clearTimeout(timer); reject(error); }); }); }
+function clearWebCamera(): void {
+  cameraSource.next();
+  cameraFrameLoop = false;
+  if (cameraFrameCallback != null) video.cancelVideoFrameCallback?.(cameraFrameCallback);
+  cameraFrameCallback = null;
+  if (cameraHealthTimer != null) window.clearInterval(cameraHealthTimer);
+  cameraHealthTimer = null;
+  const oldStream = stream; stream = null;
+  oldStream?.getTracks().forEach(track => track.stop());
+  video.pause(); video.srcObject = null; video.removeAttribute("src"); video.load(); video.style.display = "none";
+  lastCameraVideoTime = lastVideoTime = -1;
+}
+async function openWebStream(constraints: MediaStreamConstraints): Promise<MediaStream> {
+  return await new Promise<MediaStream>((resolve, reject) => {
+    let finished = false;
+    const timer = window.setTimeout(() => { if (!finished) { finished = true; reject(new Error("摄像头打开超时")); } }, 5000);
+    navigator.mediaDevices.getUserMedia(constraints).then(value => {
+      if (finished) { value.getTracks().forEach(track => track.stop()); return; }
+      finished = true; window.clearTimeout(timer); resolve(value);
+    }, error => { if (!finished) { finished = true; window.clearTimeout(timer); reject(error); } });
+  });
+}
 // 重开摄像头时，上一次的 play() 还没落定就被 clearWebCamera 的 pause() 打断，
 // 浏览器把这个 promise reject 成 AbortError。画面本身没问题——下面那句
 // videoWidth 检查才是真正判断能不能用的地方。原来这个 reject 一路冒到 start()
@@ -1002,31 +1066,178 @@ async function playVideo(): Promise<void> {
   }
 }
 
-async function getVision() { vision ||= await FilesetResolver.forVisionTasks(new URL("./wasm", location.href).href); return vision; }
-async function createPose(): Promise<PoseLandmarker> { const files = await getVision(); const options = (delegate: "GPU" | "CPU") => PoseLandmarker.createFromOptions(files, { baseOptions: { modelAssetPath: motionDebug.modelUrl, delegate }, runningMode: "VIDEO", numPoses: 1, minPoseDetectionConfidence: .55, minPosePresenceConfidence: .55, minTrackingConfidence: .55 }); try { motionDebug.delegate = "GPU"; return await options("GPU"); } catch (error) { motionDebug.fallbackError = error instanceof Error ? error.message : String(error); motionDebug.delegate = "CPU"; return await options("CPU"); } }
+async function getVision() {
+  if (vision) return vision;
+  visionTask ??= FilesetResolver.forVisionTasks(new URL("./wasm", location.href).href);
+  const task = visionTask;
+  try { return vision = await task; } finally { if (visionTask === task) visionTask = null; }
+}
+async function createPose(modelUrl: string, cpuOnly: boolean, generation: number): Promise<{ model: PoseLandmarker; delegate: "GPU" | "CPU"; fallbackError: string | null }> {
+  const files = await getVision();
+  poseModelSession.assertCurrent(generation);
+  const options = (delegate: "GPU" | "CPU") => PoseLandmarker.createFromOptions(files, {
+    baseOptions: { modelAssetPath: modelUrl, delegate }, runningMode: "VIDEO", numPoses: 1,
+    minPoseDetectionConfidence: .55, minPosePresenceConfidence: .55, minTrackingConfidence: .55,
+  });
+  let fallbackError: string | null = null;
+  if (!cpuOnly) {
+    try { return { model: await options("GPU"), delegate: "GPU", fallbackError }; }
+    catch (error) { fallbackError = error instanceof Error ? error.message : String(error); }
+  }
+  poseModelSession.assertCurrent(generation);
+  return { model: await options("CPU"), delegate: "CPU", fallbackError };
+}
 function updateModelLabel(): void { modelStatus.textContent = modelChoice === "lite" ? "Lite33" : "Full33"; modelSelect.value = modelChoice; }
-async function loadPoseModel(): Promise<void> { document.querySelector("#loading")!.classList.remove("hidden"); motionDebug.modelState = "loading"; motionDebug.actualModel = modelChoice; motionDebug.modelUrl = new URL(`./models/pose_landmarker_${modelChoice}.task`, location.href).href; updateModelLabel(); motionDebug.delegate = "unknown"; motionDebug.fallbackError = null; motionDebug.detectCalls = 0; motionDebug.lastPoseCount = 0; motionDebug.lastInferenceMs = 0; motionDebug.lastDetectError = null; try { poseLandmarker?.close(); poseLandmarker = await createPose(); motionDebug.modelState = "ready"; document.querySelector("#delegateStatus")!.textContent = motionDebug.fallbackError ? "CPU·GPU回退" : motionDebug.delegate; document.querySelector("#modelError")!.textContent = motionDebug.fallbackError ? `GPU回退：${motionDebug.fallbackError}` : ""; document.querySelector("#loading")!.classList.add("hidden"); } catch (error) { motionDebug.modelState = "error"; motionDebug.lastDetectError = error instanceof Error ? error.message : String(error); document.querySelector("#delegateStatus")!.textContent = "模型错误"; document.querySelector("#modelError")!.textContent = motionDebug.lastDetectError; document.querySelector("#loadingText")!.textContent = `模型错误：${motionDebug.lastDetectError}`; document.querySelector("#loading")!.classList.add("hidden"); throw error; } }
+async function loadPoseModel(session = cameraSession.current): Promise<void> {
+  const modelGeneration = poseModelSession.next();
+  const started = performance.now();
+  document.querySelector("#loading")!.classList.remove("hidden");
+  motionDebug.modelState = "loading"; motionDebug.actualModel = modelChoice;
+  motionDebug.modelUrl = new URL(`./models/pose_landmarker_${modelChoice}.task`, location.href).href;
+  updateModelLabel(); motionDebug.delegate = "unknown";
+  if (!forceCpuDelegate) motionDebug.fallbackError = null;
+  motionDebug.detectCalls = 0; motionDebug.lastPoseCount = 0; motionDebug.lastInferenceMs = 0; motionDebug.lastDetectError = null;
+  const previous = poseLandmarker; poseLandmarker = null; previous?.close();
+  let loaded: PoseLandmarker | null = null;
+  try {
+    const result = await poseModelSession.resolveResource(modelGeneration, createPose(motionDebug.modelUrl, forceCpuDelegate, modelGeneration), result => result.model.close());
+    loaded = result.model;
+    cameraSession.assertCurrent(session); poseModelSession.assertCurrent(modelGeneration);
+    poseLandmarker = loaded; loaded = null;
+    motionDebug.delegate = result.delegate;
+    if (result.fallbackError) motionDebug.fallbackError = result.fallbackError;
+    motionDebug.timings.modelLoadMs = performance.now() - started;
+    motionDebug.modelState = "ready";
+    document.querySelector("#delegateStatus")!.textContent = motionDebug.fallbackError ? "CPU·GPU回退" : motionDebug.delegate;
+    document.querySelector("#modelError")!.textContent = motionDebug.fallbackError ? `GPU回退：${motionDebug.fallbackError}` : "";
+  } catch (error) {
+    loaded?.close();
+    if (!cameraSession.isCurrent(session) || !poseModelSession.isCurrent(modelGeneration)) throw new SessionCancelled();
+    motionDebug.modelState = "error";
+    motionDebug.lastDetectError = error instanceof Error ? error.message : String(error);
+    document.querySelector("#delegateStatus")!.textContent = "模型错误";
+    document.querySelector("#modelError")!.textContent = motionDebug.lastDetectError;
+    throw error;
+  } finally {
+    if (cameraSession.isCurrent(session) && poseModelSession.isCurrent(modelGeneration)) document.querySelector("#loading")!.classList.add("hidden");
+  }
+}
 
 function updateCameraButtons(): void { flipCameraButton.setAttribute("aria-label", facingMode === "user" ? "换成后置镜头" : "换成前置镜头"); }
-async function refreshCameraDevices(): Promise<void> { cameraDevices = (await navigator.mediaDevices.enumerateDevices()).filter((item) => item.kind === "videoinput"); const options = ["<option value=\"__auto__\">自动</option>", ...cameraDevices.map((item, index) => { const lower = item.label.toLowerCase(); const name = lower.includes("front") || lower.includes("user") || lower.includes("前") ? "前置" : lower.includes("back") || lower.includes("environment") || lower.includes("后") ? "后置" : item.label || `镜头 ${index + 1}`; return `<option value=\"${item.deviceId}\">${name}</option>`; })].join(""); cameraDeviceSelect.innerHTML = options; if (!cameraDevices.some((item) => item.deviceId === selectedCameraDeviceId)) selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = selectedCameraDeviceId; }
+async function refreshCameraDevices(current: () => boolean = () => true): Promise<void> { const devices = (await navigator.mediaDevices.enumerateDevices()).filter((item) => item.kind === "videoinput"); if (!current()) return; cameraDevices = devices; const options = ["<option value=\"__auto__\">自动</option>", ...cameraDevices.map((item, index) => { const lower = item.label.toLowerCase(); const name = lower.includes("front") || lower.includes("user") || lower.includes("前") ? "前置" : lower.includes("back") || lower.includes("environment") || lower.includes("后") ? "后置" : item.label || `镜头 ${index + 1}`; return `<option value=\"${item.deviceId}\">${name}</option>`; })].join(""); cameraDeviceSelect.innerHTML = options; if (!cameraDevices.some((item) => item.deviceId === selectedCameraDeviceId)) selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = selectedCameraDeviceId; }
 type CameraRatioProfile = { width: number; height: number; ratio: number };
 function cameraRatioProfiles(): CameraRatioProfile[] { return [{ width: 480, height: 854, ratio: 9 / 16 }, { width: 480, height: 640, ratio: 3 / 4 }]; }
-async function startCamera(): Promise<void> { clearWebCamera(); await new Promise((resolve) => setTimeout(resolve, 100)); const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } }; stream = null; for (const profile of cameraRatioProfiles()) { try { stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height }, aspectRatio: { exact: profile.ratio }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); break; } catch { /* Try the 4:3 fallback, then the device default below. */ } } if (!stream) stream = await openWebStream({ audio: false, video: { ...source, width: { ideal: 480 }, height: { ideal: 854 }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }); const track = stream.getVideoTracks()[0]; try { await track.applyConstraints({ frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } }); } catch { /* Some WebView camera providers ignore frame-rate constraints; keep the real value. */ } const settings = track.getSettings(); if (settings.deviceId) selectedCameraDeviceId = settings.deviceId; if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode; motionDebug.facingMode = facingMode; updateCameraButtons(); video.style.display = "block"; video.srcObject = stream; await playVideo(); if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效"); motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight; await refreshCameraDevices(); resizeCanvas(); applyMirror(); startCameraFrameCounter(); }
+async function startCamera(session = cameraSession.current): Promise<void> {
+  cameraSession.assertCurrent(session);
+  clearWebCamera();
+  const sourceGeneration = cameraSource.current;
+  const current = () => cameraSession.isCurrent(session) && cameraSource.isCurrent(sourceGeneration);
+  const assertCurrent = () => { if (!current()) throw new SessionCancelled(); };
+  const started = performance.now();
+  let opened: MediaStream | null = null;
+  try {
+    await new Promise(resolve => setTimeout(resolve, 100)); assertCurrent();
+    const source = selectedCameraDeviceId !== "__auto__" ? { deviceId: { exact: selectedCameraDeviceId } } : { facingMode: { ideal: facingMode } };
+    for (const profile of cameraRatioProfiles()) {
+      try {
+        opened = await cameraSource.resolveResource(sourceGeneration, openWebStream({ audio: false, video: { ...source,
+          width: { ideal: profile.width, max: profile.width }, height: { ideal: profile.height, max: profile.height },
+          aspectRatio: { exact: profile.ratio }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }), value => value.getTracks().forEach(track => track.stop()));
+        assertCurrent(); break;
+      } catch (error) { if (!current()) throw new SessionCancelled(); if (isSessionCancelled(error)) throw error; }
+    }
+    if (!opened) {
+      opened = await cameraSource.resolveResource(sourceGeneration, openWebStream({ audio: false, video: { ...source, width: { ideal: 480 }, height: { ideal: 854 }, frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } } }), value => value.getTracks().forEach(track => track.stop()));
+      assertCurrent();
+    }
+    const track = opened.getVideoTracks()[0];
+    if (!track) throw new Error("摄像头画面无效");
+    try { await track.applyConstraints({ frameRate: { ideal: CAMERA_TARGET_FPS, max: CAMERA_TARGET_FPS } }); } catch { /* Provider may ignore frame-rate constraints. */ }
+    assertCurrent();
+    const settings = track.getSettings();
+    if (settings.deviceId) selectedCameraDeviceId = settings.deviceId;
+    if (settings.facingMode === "user" || settings.facingMode === "environment") facingMode = settings.facingMode;
+    motionDebug.facingMode = facingMode; updateCameraButtons();
+    stream = opened; video.style.display = "block"; video.srcObject = opened;
+    await playVideo(); assertCurrent();
+    if (!video.videoWidth || !video.videoHeight) throw new Error("摄像头画面无效");
+    motionDebug.videoReady = video.readyState >= 2; motionDebug.videoWidth = video.videoWidth; motionDebug.videoHeight = video.videoHeight;
+    await refreshCameraDevices(current); assertCurrent();
+    motionDebug.timings.cameraOpenMs = performance.now() - started;
+    resizeCanvas(); applyMirror(); startCameraFrameCounter(sourceGeneration);
+    const failed = () => { if (current() && running && !document.hidden) void recoverCamera(session); };
+    track.addEventListener("ended", failed);
+    lastCameraFrameAt = performance.now();
+    cameraHealthTimer = window.setInterval(() => {
+      if (current() && running && !document.hidden && performance.now() - lastCameraFrameAt > 4000) failed();
+    }, 1000);
+    if (running) schedulePredict();
+  } catch (error) {
+    opened?.getTracks().forEach(track => track.stop());
+    const ownedSource = current();
+    if (current()) clearWebCamera();
+    if (!ownedSource) throw new SessionCancelled();
+    throw error;
+  }
+}
+
+async function recoverCamera(session: number): Promise<void> {
+  if (cameraRecoveryTask || !cameraSession.isCurrent(session) || !running || document.hidden) return;
+  if (cameraRecoveryAttempts >= 2) {
+    document.querySelector("#securityWarning")!.textContent = "摄像头暂停了，请确认未被占用后重新开始";
+    await stop(); return;
+  }
+  cameraRecoveryAttempts++; motionDebug.cameraRecoveries = cameraRecoveryAttempts;
+  cameraSwitchState.textContent = "正在恢复摄像头…";
+  const task = (async () => {
+    try { await startCamera(session); if (cameraSession.isCurrent(session)) cameraSwitchState.textContent = ""; }
+    catch (error) {
+      if (cameraSession.isCurrent(session) && !isSessionCancelled(error)) {
+        document.querySelector("#securityWarning")!.textContent = "摄像头恢复失败，请确认未被占用后重新开始";
+        await stop();
+      }
+    }
+  })();
+  cameraRecoveryTask = task;
+  try { await task; } finally { if (cameraRecoveryTask === task) cameraRecoveryTask = null; }
+}
 
 async function start(): Promise<void> {
-  // 徽标和按钮都要在找电脑之前就变。原来 setConnection("connecting") 排在
-  // pickServer 后面，于是全程最慢的那几秒，恰好是唯一没有任何提示的几秒。
-  if (startButton.disabled) return;   // 已经在跑了，别叠第二路
+  if (cameraStartTask || running || activeRole !== "camera" || document.hidden) return;
+  const intent = cameraSession.current;
+  await cameraStopTask;
+  if (!cameraSession.isCurrent(intent) || cameraStartTask || running || activeRole !== "camera" || document.hidden) return;
+  const session = cameraSession.next();
+  modelRecoveryAttempts = cameraRecoveryAttempts = 0; forceCpuDelegate = false;
+  motionDebug.modelRecoveries = motionDebug.cameraRecoveries = 0;
   setStartBusy("正在找电脑…"); setConnection("connecting");
   document.querySelector("#securityWarning")!.textContent = "";
-  try { overlayRenderingEnabled = true; lastSendStateText = ""; const picked = await pickServer(serverInput.value, setStartBusy);
-    if (!picked.found) { await refreshLinkState(true); throw new Error("没找到电脑"); }
-    const socketUrl = picked.url; serverInput.value = socketUrl; localStorage.setItem("motionbridge-server", socketUrl); setStartBusy("正在打开摄像头…"); await startCamera(); running = true; activeRole = "camera"; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); syncScreen();
-    // 先握手，再加载模型。模型要好几秒，那几秒原来是干等；现在连接和加载并行，
-    // 等模型就绪时链路通常已经通了，控制配置（要不要跑手部模型）也到了。
-    connectSocket(socketUrl);
-    await loadPoseModel();
-    wakeLock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null; schedulePredict(); } catch (error) { setConnection("error"); showStartError(error); await stop(); } finally { setStartBusy(null); } }
+  const task = (async () => {
+    try {
+      overlayRenderingEnabled = true; lastSendStateText = "";
+      const picked = await pickServer(serverInput.value, phase => { if (cameraSession.isCurrent(session)) setStartBusy(phase); });
+      cameraSession.assertCurrent(session);
+      if (activeRole !== "camera" || document.hidden) throw new SessionCancelled();
+      if (!picked.found) { await refreshLinkState(true); cameraSession.assertCurrent(session); throw new Error("没找到电脑"); }
+      const socketUrl = picked.url; serverInput.value = socketUrl;
+      try { localStorage.setItem("motionbridge-server", socketUrl); } catch { /* Storage is optional. */ }
+      setStartBusy("正在打开摄像头…"); await startCamera(session); cameraSession.assertCurrent(session);
+      running = true; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden");
+      showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); syncScreen();
+      connectSocket(socketUrl, session);
+      await loadPoseModel(session); cameraSession.assertCurrent(session);
+      const lock = await navigator.wakeLock?.request("screen").catch(() => null) ?? null;
+      if (!cameraSession.isCurrent(session)) { await lock?.release().catch(() => {}); throw new SessionCancelled(); }
+      wakeLock = lock; schedulePredict();
+    } catch (error) {
+      if (cameraSession.isCurrent(session) && !isSessionCancelled(error)) { showStartError(error); await stop(); }
+    } finally {
+      if (cameraSession.isCurrent(session)) setStartBusy(null);
+    }
+  })();
+  cameraStartTask = task;
+  try { await task; } finally { if (cameraStartTask === task) cameraStartTask = null; }
+}
 
 function showStartError(error: unknown): void {
   const raw = error instanceof Error ? error.message : String(error);
@@ -1041,21 +1252,69 @@ function showStartError(error: unknown): void {
   setupCard.classList.remove("hidden");
   runtimeCard.classList.add("hidden");
 }
-function connectSocket(url: string): void { if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); setConnection("connecting"); socket = new WebSocket(url); socket.addEventListener("open", () => { setConnection("online"); syncClock(); if (voiceToggle.checked && !voiceEnabled) void startVoiceControl(); else if (voiceEnabled) setVoiceStatus("listening", "正在听"); }); socket.addEventListener("close", () => { gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "重新连接中"; setConnection("offline"); markControlConfigCached(); clearTriggerState(); if (voiceEnabled) void stopVoiceControl(false); if (running) reconnectTimer = window.setTimeout(() => { void reconnectToBestServer(); }, 1500); }); socket.addEventListener("error", () => setConnection("error")); socket.addEventListener("message", (event) => { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") { const sent = Number(message.client_sent_ms); serverClockOffsetMs = Number(message.server_ms) - (Date.now() - (received - sent) / 2); } if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "voice_result" && voiceEnabled) { const text = String(message.final || message.partial || message.text || "").trim(); const command = String(message.command || message.result?.command || "").trim(); if (command) setVoiceStatus("listening", `已执行：${command}`); else if (text) setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); else if (message.matched === false) setVoiceStatus("listening", "语音未匹配到电脑口令"); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }); }
-// 重连时重新挑一次，而不是死守断掉的那个地址：拔掉数据线就该自动落回 WiFi，
-// 换了网段也该自己找回来。
-async function reconnectToBestServer(): Promise<void> {
-  if (!running) return;
-  const picked = await pickServer(serverInput.value);
-  if (!running) return;
-  // 重连时找不到也要接着试：线可能只是松了一下。但地址不该存下来——
-  // 存一个没人应答的地址，下次开机只会把人卡在同一个地方。
-  const url = picked.url;
-  serverInput.value = url;
-  if (picked.found) {
-    try { localStorage.setItem("motionbridge-server", url); } catch { /* 存不下不影响连接 */ }
-  }
-  if (url) connectSocket(url);
+function startSocketHealth(ws: WebSocket, onTimeout: () => void, current: () => boolean): number {
+  const liveness = new SocketLiveness(performance.now());
+  ws.addEventListener("open", () => { if (current()) liveness.open(performance.now()); });
+  ws.addEventListener("message", () => { if (current()) liveness.response(performance.now()); });
+  return window.setInterval(() => {
+    if (!current()) return;
+    const action = liveness.check(performance.now());
+    if (action === "timeout") onTimeout();
+    else if (action === "ping" && ws.readyState === WebSocket.OPEN) {
+      if (ws.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) { onTimeout(); return; }
+      try { ws.send(JSON.stringify({ type: "clock_sync", client_sent_ms: performance.now() })); }
+      catch { onTimeout(); }
+    }
+  }, 250);
+}
+
+function connectSocket(url: string, session = cameraSession.current): void {
+  if (!cameraSession.isCurrent(session) || !running) return;
+  const connection = cameraSocketSession.next();
+  if (reconnectTimer != null) window.clearTimeout(reconnectTimer); reconnectTimer = null;
+  if (socketHealthTimer != null) window.clearInterval(socketHealthTimer); socketHealthTimer = null;
+  const previous = socket; socket = null; previous?.close();
+  setConnection("connecting");
+  const ws = new WebSocket(url); socket = ws;
+  const current = () => cameraSession.isCurrent(session) && cameraSocketSession.isCurrent(connection) && socket === ws && running;
+  let failed = false;
+  const disconnected = () => {
+    if (!current() || failed) return;
+    failed = true;
+    if (socketHealthTimer != null) window.clearInterval(socketHealthTimer); socketHealthTimer = null;
+    socket = null; ws.close();
+    gameOutputEnabled = null; gameControlButton.disabled = true; gameControlButton.textContent = "重新连接中";
+    setConnection("offline"); markControlConfigCached(); clearTriggerState();
+    void stopVoiceControl(false);
+    reconnectTimer = window.setTimeout(() => { reconnectTimer = null; void reconnectToBestServer(session, connection); }, 1500);
+  };
+  ws.addEventListener("open", () => {
+    if (!current()) { ws.close(); return; }
+    setConnection("online"); syncClock();
+    if (voiceToggle.checked && !voiceEnabled) void startVoiceControl();
+  });
+  ws.addEventListener("close", disconnected);
+  ws.addEventListener("error", disconnected);
+  ws.addEventListener("message", event => { if (current()) handleCameraMessage(event); });
+  socketHealthTimer = startSocketHealth(ws, disconnected, current);
+}
+
+function handleCameraMessage(event: MessageEvent): void { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") applyClockSync(message, received); if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "voice_result" && voiceEnabled) { const text = String(message.final || message.partial || message.text || "").trim(); const command = String(message.command || message.result?.command || "").trim(); if (command) setVoiceStatus("listening", `已执行：${command}`); else if (text) setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); else if (message.matched === false) setVoiceStatus("listening", "语音未匹配到电脑口令"); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }
+
+async function reconnectToBestServer(session = cameraSession.current, connection = cameraSocketSession.current): Promise<void> {
+  const current = () => cameraSession.isCurrent(session) && cameraSocketSession.isCurrent(connection) && running && !document.hidden;
+  if (!current()) return;
+  try {
+    const picked = await pickServer(serverInput.value);
+    if (!current()) return;
+    if (picked.url) {
+      serverInput.value = picked.url;
+      if (picked.found) { try { localStorage.setItem("motionbridge-server", picked.url); } catch { /* Optional cache. */ } }
+      connectSocket(picked.url, session);
+      return;
+    }
+  } catch { /* A transient discovery failure must not end the retry loop. */ }
+  if (current()) reconnectTimer = window.setTimeout(() => { reconnectTimer = null; void reconnectToBestServer(session, connection); }, 1500);
 }
 
 // 语音模型从连着的那台电脑取，走的是同一个设备口，只是把 ws:// 换成 http://。
@@ -1070,14 +1329,38 @@ function deviceHttpBase(): string {
 
 // 一次连接只问一次。失败不拦任何事：APK 里那份永远是好的，照样能玩。
 async function checkWebUpdate(): Promise<void> {
-  if (webUpdateChecked) return;
-  webUpdateChecked = true;
   const base = deviceHttpBase();
-  if (!base) return;
-  try {
-    const result = await WebUpdate.sync({ baseUrl: base });
-    if (result.state === "ready") setConnection("online");
-  } catch { /* 旧壳子没有这个插件，当作没有更新 */ }
+  if (!base || socket?.readyState !== WebSocket.OPEN) return;
+  if (base !== webUpdateBase) { webUpdateBase = base; webUpdateChecked = false; }
+  if (webUpdateChecked || webUpdateTask || webUpdateRetryTimer != null) return;
+  const session = cameraSession.current;
+  const task = (async () => {
+    let retry = false;
+    try {
+      const result = await WebUpdate.sync({ baseUrl: base });
+      if (webUpdateBase !== base || !cameraSession.isCurrent(session)) return;
+      motionDebug.webUpdateState = result.state;
+      webUpdateChecked = result.state !== "failed";
+      retry = result.state === "failed";
+    } catch { retry = Capacitor.isPluginAvailable("WebUpdate"); }
+    if (retry && cameraSession.isCurrent(session)) webUpdateRetryTimer = window.setTimeout(() => {
+      webUpdateRetryTimer = null; void checkWebUpdate();
+    }, 30000);
+  })();
+  webUpdateTask = task;
+  try { await task; } finally {
+    if (webUpdateTask === task) {
+      webUpdateTask = null;
+      if (!cameraSession.isCurrent(session) && socket?.readyState === WebSocket.OPEN && !webUpdateChecked) void checkWebUpdate();
+    }
+  }
+}
+
+function applyClockSync(message: { client_sent_ms?: unknown; server_ms?: unknown }, received: number): void {
+  const sent = Number(message.client_sent_ms); const server = Number(message.server_ms);
+  const rtt = received - sent;
+  if (!Number.isFinite(sent) || !Number.isFinite(server) || rtt < 0 || rtt > 8000) return;
+  serverClockOffsetMs = server - (Date.now() - rtt / 2);
 }
 
 function syncClock(): void { if (socket?.readyState !== WebSocket.OPEN) return; lastClockSyncAt = performance.now(); socket.send(JSON.stringify({ type: "clock_sync", client_sent_ms: lastClockSyncAt })); }
@@ -1207,41 +1490,34 @@ const handCropContext = handCropCanvas.getContext("2d")!;
 function syncHandTracking(): void {
   const request = syncedControlConfig?.hand_tracking;
   const requested = request?.hands ?? [request?.hand];
-  handTrackingSides = request?.enabled
-    ? [...new Set(requested.filter((hand): hand is HandSide => hand === "left" || hand === "right"))]
-    : [];
+  handTrackingSides = request?.enabled ? [...new Set(requested.filter((hand): hand is HandSide => hand === "left" || hand === "right"))] : [];
   if (!handTrackingSides.length) { releaseHandModel(); return; }
-  if (handLandmarker || handModelLoading) return;
-  handModelLoading = true;
-  void loadHandModel().finally(() => { handModelLoading = false; });
+  if (handLandmarker || handModelLoading || !running) return;
+  void loadHandModel(cameraSession.current);
 }
-
 function releaseHandModel(): void {
-  handLandmarker?.close();
-  handLandmarker = null;
+  handModelSession.next(); handModelLoading = false;
+  const model = handLandmarker; handLandmarker = null; model?.close();
 }
-
-async function loadHandModel(): Promise<void> {
-  const files = await getVision();
-  const options = (delegate: "GPU" | "CPU") => HandLandmarker.createFromOptions(files, {
-    baseOptions: { modelAssetPath: new URL("./models/hand_landmarker.task", location.href).href, delegate },
-    // IMAGE 而不是 VIDEO。VIDEO 模式会记住上一帧手在画面里的位置，靠这个省掉
-    // 重新找手的开销——那个前提是喂进去的是一段连续的视频。这里喂的是按手腕
-    // 裁出来的一小块，位置和大小每帧都在变，它记住的坐标下一帧指向的已经是别
-    // 的地方了。实测后果：一只静止的手，读数在 0.8 和 1.8 之间逐帧翻，握拳判
-    // 定随之乱跳。每帧独立识别就没有可以被搞坏的跨帧状态，代价是每帧都要重新
-    // 找一次手，但找的范围只有 256x256。
-    runningMode: "IMAGE", numHands: 1,
-  });
+async function loadHandModel(session: number): Promise<void> {
+  const generation = handModelSession.next(); handModelLoading = true;
+  let loaded: HandLandmarker | null = null;
   try {
-    handLandmarker = await options("GPU");
-  } catch {
-    // 和姿态模型同一条回退路线：这台机器的 GPU 代理不可用就退到 CPU，而不是
-    // 让手控鼠标整个失效。
-    try { handLandmarker = await options("CPU"); } catch { handLandmarker = null; }
-  }
-  // 加载期间电脑可能已经把手控鼠标关掉了。
-  if (!handTrackingSides.length) releaseHandModel();
+    const files = await getVision();
+    if (!cameraSession.isCurrent(session) || !handModelSession.isCurrent(generation) || !handTrackingSides.length) return;
+    const options = (delegate: "GPU" | "CPU") => HandLandmarker.createFromOptions(files, {
+      baseOptions: { modelAssetPath: new URL("./models/hand_landmarker.task", location.href).href, delegate },
+      // Each crop changes position and size; IMAGE mode avoids stale VIDEO tracking.
+      runningMode: "IMAGE", numHands: 1,
+    });
+    if (forceCpuDelegate) loaded = await options("CPU");
+    else { try { loaded = await options("GPU"); } catch { loaded = await options("CPU"); } }
+    if (!cameraSession.isCurrent(session) || !handModelSession.isCurrent(generation) || !handTrackingSides.length) { loaded.close(); return; }
+    handLandmarker = loaded; loaded = null;
+  } catch (error) {
+    loaded?.close();
+    if (cameraSession.isCurrent(session) && handModelSession.isCurrent(generation)) document.querySelector("#modelError")!.textContent = "手部模型暂不可用，身体识别仍可使用";
+  } finally { if (handModelSession.isCurrent(generation)) handModelLoading = false; }
 }
 
 // 手掌在手腕之外，所以框心要沿着"手肘指向手腕"这个方向再往外推一点；框的大小
@@ -1290,18 +1566,38 @@ function detectHand(points: NormalizedLandmark[], side: HandSide): PackedHand | 
 // ==== 手部关节到此为止 =====================================================
 
 function schedulePredict(): void {
-  if (!running) return;
-  // requestVideoFrameCallback is driven by the cameraFrame loop below.  Keep
-  // one callback per decoded frame instead of registering a second callback
-  // chain just for inference.  The rAF path also owns the camera counter when
-  // older WebViews do not expose requestVideoFrameCallback.
-  if (cameraFrameLoop) return;
-  requestAnimationFrame((now) => {
-    if (!running) return;
-    recordCameraFrame(now);
-    predict(now);
+  if (!running || cameraFrameLoop || predictAnimationFrame != null) return;
+  const session = cameraSession.current;
+  predictAnimationFrame = requestAnimationFrame(now => {
+    predictAnimationFrame = null;
+    if (!running || !cameraSession.isCurrent(session)) return;
+    recordCameraFrame(now); predict(now);
   });
 }
+async function recoverModel(error: unknown): Promise<void> {
+  if (modelRecoveryTask || !running) return;
+  const session = cameraSession.current;
+  const message = error instanceof Error ? error.message : String(error);
+  if (modelRecoveryAttempts >= 2) {
+    document.querySelector("#securityWarning")!.textContent = "模型连续出错，请重新开始";
+    await stop(); return;
+  }
+  modelRecoveryAttempts++; motionDebug.modelRecoveries = modelRecoveryAttempts;
+  forceCpuDelegate = true; motionDebug.fallbackError = message;
+  const task = (async () => {
+    try {
+      releaseHandModel(); await loadPoseModel(session);
+      if (cameraSession.isCurrent(session)) { syncHandTracking(); schedulePredict(); }
+    } catch (recoveryError) {
+      if (!cameraSession.isCurrent(session) || isSessionCancelled(recoveryError)) return;
+      document.querySelector("#securityWarning")!.textContent = "模型恢复失败，请重新开始";
+      await stop();
+    }
+  })();
+  modelRecoveryTask = task;
+  try { await task; } finally { if (modelRecoveryTask === task) modelRecoveryTask = null; }
+}
+
 function predict(now: number): void {
   if (!running) return;
   schedulePredict();
@@ -1310,10 +1606,15 @@ function predict(now: number): void {
   lastInferenceAt = now;
   inferenceBusy = true;
   const started = performance.now();
+  motionDebug.timings.encodeMs = motionDebug.timings.frameToSendMs = 0;
   motionDebug.detectCalls++;
+  let stage: "copy" | "pose" | "hands" | "overlay" | "send" = "copy";
   try {
-    resizeInferenceCanvas();
+    resizeInferenceCanvas(); motionDebug.timings.copyMs = performance.now() - started;
+    stage = "pose"; const poseStarted = performance.now();
     const poseResult = poseLandmarker.detectForVideo(inferenceCanvas, now);
+    motionDebug.timings.poseMs = performance.now() - poseStarted;
+    stage = "hands"; const handsStarted = performance.now();
     const firstPose = poseResult.landmarks[0];
     // 手部关节只在电脑正用手控鼠标、并且连着的时候才跑：断开时这些点没地方去，
     // 白费一次推理和一份电。
@@ -1321,6 +1622,7 @@ function predict(now: number): void {
     const packedHands = firstPose && socket?.readyState === WebSocket.OPEN
       ? handTrackingSides.map(side => detectHand(firstPose, side))
           .filter((hand): hand is PackedHand => hand !== null) : [];
+    motionDebug.timings.handsMs = performance.now() - handsStarted;
     const elapsed = performance.now() - started;
     updateInferenceBudget(elapsed, now);
     motionDebug.lastInferenceMs = elapsed;
@@ -1330,11 +1632,14 @@ function predict(now: number): void {
     // Drawing is presentation only.  Throttle it so canvas work cannot steal
     // the frame budget from control inference.  When the user hides the mobile
     // control overlay during gameplay, stop skeleton rendering entirely.
+    stage = "overlay"; const overlayStarted = performance.now();
     if ((overlayRenderingEnabled || zoneOverlayEnabled) && now - lastOverlayAt >= OVERLAY_INTERVAL_MS) {
       draw(poseResult.landmarks, overlayRenderingEnabled);
       lastOverlayAt = now;
     }
 
+    motionDebug.timings.overlayMs = performance.now() - overlayStarted;
+    stage = "send"; const encodeStarted = performance.now();
     if (firstPose && socket?.readyState === WebSocket.OPEN) {
       // Sequence is allocated before congestion handling so the PC can observe
       // gaps as dropped real-time frames instead of mistaking them for a slower
@@ -1345,7 +1650,7 @@ function predict(now: number): void {
         const frame: Record<string, unknown> = {
           type: "pose_features_v1", role: "camera", layout: POSE_LAYOUT,
           device_id: deviceId, sequence: frameSequence,
-          captured_at_ms: Date.now() + serverClockOffsetMs,
+          captured_at_ms: lastCameraCapturedAtMs + serverClockOffsetMs,
           sent_at_ms: Date.now() + serverClockOffsetMs,
           width: video.videoWidth, height: video.videoHeight,
           camera_facing: facingMode,
@@ -1360,13 +1665,21 @@ function predict(now: number): void {
         // 保持紧凑控制载荷不变，同时为新版电脑携带可选的米制世界坐标。
         if (worldPoints.length === 33) frame.world_points = worldPoints;
         if (packedHands.length) frame.hands = packedHands;
-        socket.send(JSON.stringify(frame));
+        const payload = JSON.stringify(frame);
+        motionDebug.timings.encodeMs = performance.now() - encodeStarted;
+        motionDebug.timings.frameToSendMs = Math.max(0, Date.now() - lastCameraCapturedAtMs);
+        socket.send(payload);
       } else {
         // Real-time control must prefer freshness over completeness. Never add
         // another stale pose to a congested WebSocket queue.
-        networkDroppedFrames++;
+        motionDebug.networkDroppedFrames = ++networkDroppedFrames;
       }
     }
+    motionDebug.timings.totalMs = performance.now() - started;
+    motionDebug.timingSamples.push({ atMs: Date.now(), copyMs: motionDebug.timings.copyMs, poseMs: motionDebug.timings.poseMs,
+      handsMs: motionDebug.timings.handsMs, overlayMs: motionDebug.timings.overlayMs, encodeMs: motionDebug.timings.encodeMs,
+      frameToSendMs: motionDebug.timings.frameToSendMs, totalMs: motionDebug.timings.totalMs });
+    if (motionDebug.timingSamples.length > 300) motionDebug.timingSamples.shift();
     const nextSendState = firstPose ? "人体已识别" : "等待完整人体";
     if (nextSendState !== lastSendStateText) {
       document.querySelector("#sendState")!.textContent = nextSendState;
@@ -1383,6 +1696,7 @@ function predict(now: number): void {
   } catch (error) {
     motionDebug.lastDetectError = error instanceof Error ? error.message : String(error);
     document.querySelector("#sendState")!.textContent = `模型错误：${motionDebug.lastDetectError}`;
+    if (stage === "pose" || stage === "hands") void recoverModel(error);
   } finally { inferenceBusy = false; }
 }
 function poseStatusText(playerLocked: boolean): string { if (lastServerPoseCount > 0) return playerLocked ? "已识别" : "人体已识别·动作模型准备中"; return "相机正常·未发现完整人体"; }
@@ -1396,98 +1710,184 @@ function resizeCanvas(): void {
   const width = Math.round(videoWidth * shown * overlayCssPx), height = Math.round(videoHeight * shown * overlayCssPx);
   if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
 }
-function recordCameraFrame(now: number): void { cameraFrameCount++; if (now - cameraFpsStarted >= 1000) { document.querySelector("#cameraFps")!.textContent = `${Math.round(cameraFrameCount * 1000 / (now - cameraFpsStarted))} FPS`; cameraFrameCount = 0; cameraFpsStarted = now; } }
-function cameraFrame(now: number): void { if (!cameraFrameLoop || !stream) return; recordCameraFrame(now); if (cameraFrameLoop && stream) video.requestVideoFrameCallback(cameraFrame); if (running) predict(now); }
-function startCameraFrameCounter(): void { cameraFrameLoop = typeof video.requestVideoFrameCallback === "function"; cameraFrameCount = 0; cameraFpsStarted = performance.now(); if (cameraFrameLoop) video.requestVideoFrameCallback(cameraFrame); }
+function recordCameraFrame(now: number, metadata?: VideoFrameCallbackMetadata): void {
+  const mediaTime = metadata?.mediaTime ?? video.currentTime;
+  if (video.readyState < 2 || mediaTime === lastCameraVideoTime) return;
+  lastCameraVideoTime = mediaTime; lastCameraFrameAt = performance.now();
+  const captureTime = (metadata as VideoFrameCallbackMetadata & { captureTime?: number } | undefined)?.captureTime;
+  // Some providers expose captureTime; otherwise this measures frame arrival.
+  const capturedAt = typeof captureTime === "number" && Number.isFinite(captureTime) && captureTime >= 0 && captureTime <= now ? captureTime : now;
+  lastCameraCapturedAtMs = Date.now() - Math.max(0, performance.now() - capturedAt);
+  cameraFrameCount++;
+  if (now - cameraFpsStarted >= 1000) {
+    document.querySelector("#cameraFps")!.textContent = `${Math.round(cameraFrameCount * 1000 / (now - cameraFpsStarted))} FPS`;
+    cameraFrameCount = 0; cameraFpsStarted = now;
+  }
+}
+function startCameraFrameCounter(sourceGeneration: number): void {
+  cameraFrameLoop = typeof video.requestVideoFrameCallback === "function";
+  cameraFrameCount = 0; cameraFpsStarted = performance.now(); lastCameraVideoTime = -1;
+  if (!cameraFrameLoop) return;
+  const frame = (now: number, metadata: VideoFrameCallbackMetadata) => {
+    if (!cameraSource.isCurrent(sourceGeneration) || !cameraFrameLoop || !stream) return;
+    cameraFrameCallback = null; recordCameraFrame(now, metadata);
+    cameraFrameCallback = video.requestVideoFrameCallback(frame);
+    if (running) predict(now);
+  };
+  cameraFrameCallback = video.requestVideoFrameCallback(frame);
+}
 function applyMirror(): void { document.querySelector<HTMLElement>("#cameraStage")?.classList.toggle("front-mirror", facingMode === "user"); }
 
 // 复选框保存用户偏好；后台停止或启动报错只更新状态，不能把偏好改成关闭。
 async function stopVoiceControl(showOff = true): Promise<void> {
-  voiceEnabled = false;
-  activeVoicePhrases = "";
-  await nativeVoiceTextListener?.remove().catch(() => {});
-  await nativeVoiceStateListener?.remove().catch(() => {});
-  await nativeAudioChunkListener?.remove().catch(() => {});
-  await nativeAudioErrorListener?.remove().catch(() => {});
-  nativeVoiceTextListener = null;
-  nativeVoiceStateListener = null;
-  nativeAudioChunkListener = null;
-  nativeAudioErrorListener = null;
-  await NativeAudio.stop().catch(() => {});
+  voiceSession.next(); voiceStartTask = null;
+  voiceEnabled = false; activeVoicePhrases = "";
+  const handles = [nativeVoiceTextListener, nativeVoiceStateListener, nativeAudioChunkListener, nativeAudioErrorListener];
+  nativeVoiceTextListener = nativeVoiceStateListener = nativeAudioChunkListener = nativeAudioErrorListener = null;
   if (showOff) setVoiceStatus("off");
+  const previousStop = voiceStopTask;
+  const task = (async () => {
+    await previousStop;
+    await Promise.all(handles.map(handle => handle?.remove().catch(() => {})));
+    await NativeAudio.stop().catch(() => {});
+  })();
+  voiceStopTask = task;
+  try { await task; } finally { if (voiceStopTask === task) voiceStopTask = null; }
 }
+
 async function startVoiceControl(): Promise<void> {
-  if (activeRole !== "camera") { setVoiceStatus("error", "仅摄像头可用"); return; }
-  if (voiceEnabled) return;
-  if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "请先连接电脑"); return; }
+  if (voiceStartTask) return voiceStartTask;
+  if (voiceEnabled || activeRole !== "camera" || !running || !voiceToggle.checked || socket?.readyState !== WebSocket.OPEN) return;
+  const generation = voiceSession.next();
+  const session = cameraSession.current;
+  const ws = socket;
   const remote = voiceRecognitionMode === "computer";
-  setVoiceStatus("connecting", remote ? "准备电脑识别" : "准备手机语音模型");
-  try {
-    const phrases = voicePhrases();
-    const grammar = voiceGrammar();
-    activeVoicePhrases = remote ? "" : [...phrases, ...grammar].join("\u0000");
-    // 先监听再启动，保留第一次下载手机模型时的进度反馈。
-    nativeVoiceStateListener = await NativeAudio.addListener("voiceState", (event) => {
-      if (!voiceEnabled && event.state !== "connecting") return;
-      const detail = event.message?.replace(/^Vosk\s+/, "手机语音") || (event.state === "command" ? "已识别命令" : event.state === "listening" ? "语音识别已就绪" : "等待语音");
-      setVoiceStatus(event.state === "connecting" ? "connecting" : "listening", detail);
-    });
-    nativeAudioErrorListener = await NativeAudio.addListener("audioError", (event) => {
-      setVoiceStatus("error", event.message || "手机语音错误");
-      void stopVoiceControl(false);
-    });
-    if (remote) {
-      nativeAudioChunkListener = await NativeAudio.addListener("audioChunk", (event) => {
-        const frameSequence = voiceSequence++;
-        const audioBase64 = String(event.audio_base64 || "");
-        if (!voiceEnabled || !audioBase64 || socket?.readyState !== WebSocket.OPEN || socket.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) return;
-        socket.send(JSON.stringify({
-          type: "voice_audio", role: "camera", device_id: deviceId, sequence: frameSequence,
-          captured_at_ms: Number(event.captured_at_ms || Date.now()) + serverClockOffsetMs,
-          sample_rate: Number(event.sample_rate || 16000), channels: Number(event.channels || 1),
-          format: event.format || "pcm16le", audio_base64: audioBase64,
-        }));
+  const current = () => voiceSession.isCurrent(generation) && cameraSession.isCurrent(session) && activeRole === "camera"
+    && running && !document.hidden && voiceToggle.checked && socket === ws && ws.readyState === WebSocket.OPEN;
+  const assertCurrent = () => { if (!current()) throw new SessionCancelled(); };
+  const handles: PluginListenerHandle[] = [];
+  const listen = async (event: "voiceState" | "voiceText" | "audioChunk" | "audioError", callback: (value: any) => void) => {
+    // Overloads share the same native event API; callbacks are guarded by the session.
+    const handle = await (NativeAudio.addListener as (event: string, callback: (value: any) => void) => Promise<PluginListenerHandle>)(event, callback);
+    handles.push(handle); assertCurrent(); return handle;
+  };
+  const task = (async () => {
+    try {
+      await voiceStopTask; await nativeVoiceStartBarrier; await nativeCapabilitiesReady; assertCurrent();
+      setVoiceStatus("connecting", remote ? "准备电脑识别" : "准备手机语音模型");
+      const phrases = voicePhrases(); const grammar = voiceGrammar();
+      activeVoicePhrases = remote ? "" : [...phrases, ...grammar].join("\u0000");
+      nativeVoiceStateListener = await listen("voiceState", event => {
+        if (!current() || (!voiceEnabled && event.state !== "connecting")) return;
+        const detail = event.message?.replace(/^Vosk\s+/, "手机语音") || (event.state === "command" ? "已识别命令" : "语音识别已就绪");
+        setVoiceStatus(event.state === "connecting" ? "connecting" : "listening", detail);
       });
-      const ready = await NativeAudio.start({ remote: true });
-      if (!ready.audioReady) throw new Error("手机麦克风采集未就绪");
-      voiceEnabled = true;
-      setVoiceStatus("listening", "电脑识别已就绪");
-    } else {
-      nativeVoiceTextListener = await NativeAudio.addListener("voiceText", (event) => {
-        const text = (event.text || "").trim();
-        if (!voiceEnabled || !event.final || !text) return;
-        setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`);
-        if (socket?.readyState !== WebSocket.OPEN) { setVoiceStatus("error", "电脑已断开"); return; }
-        socket.send(JSON.stringify({
-          type: "voice_text", role: "camera", device_id: deviceId, sequence: sequence++,
-          captured_at_ms: Date.now() + serverClockOffsetMs, text, confidence: event.confidence,
-          final: true, source: "android_vosk_speech_service_v100",
-        }));
+      nativeAudioErrorListener = await listen("audioError", event => {
+        if (!current()) return;
+        setVoiceStatus("error", event.message || "手机语音错误"); void stopVoiceControl(false);
       });
-      const ready = await NativeAudio.start({
-        remote: false, phrases: phrases.length ? phrases : undefined,
-        grammar: grammar.length ? grammar : undefined, baseUrl: deviceHttpBase(),
-      });
-      if (!ready.recognizerReady) throw new Error("手机语音模型错误");
-      voiceEnabled = true;
-      setVoiceStatus("listening", "手机识别已就绪");
+      if (remote) {
+        nativeAudioChunkListener = await listen("audioChunk", event => {
+          if (!current() || !voiceEnabled) return;
+          const frameSequence = voiceSequence++; const audioBase64 = String(event.audio_base64 || "");
+          if (!audioBase64 || ws.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) return;
+          ws.send(JSON.stringify({ type: "voice_audio", role: "camera", device_id: deviceId, sequence: frameSequence,
+            captured_at_ms: Number(event.captured_at_ms || Date.now()) + serverClockOffsetMs,
+            sample_rate: Number(event.sample_rate || 16000), channels: Number(event.channels || 1), format: event.format || "pcm16le", audio_base64: audioBase64 }));
+        });
+      } else {
+        nativeVoiceTextListener = await listen("voiceText", event => {
+          const text = (event.text || "").trim();
+          if (!current() || !voiceEnabled || !event.final || !text) return;
+          setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`);
+          ws.send(JSON.stringify({ type: "voice_text", role: "camera", device_id: deviceId, sequence: sequence++,
+            captured_at_ms: Number(event.recognizedAtMs || Date.now()) + serverClockOffsetMs, text, confidence: event.confidence,
+            final: true, source: "android_vosk_speech_service_v100" }));
+        });
+      }
+      assertCurrent();
+      const nativeStart = (async () => {
+        const ready = await NativeAudio.start({ remote, phrases: phrases.length ? phrases : undefined,
+          grammar: grammar.length ? grammar : undefined, baseUrl: deviceHttpBase() });
+        if (!current() && !nativeCapabilities.audio_start_cancellation) {
+          // Older APKs cannot cancel a download. Serialize replacement starts,
+          // then close the late recorder before the next native session begins.
+          await NativeAudio.stop().catch(() => {});
+        }
+        return ready;
+      })();
+      nativeVoiceStartBarrier = nativeStart.then(() => {}, () => {});
+      const ready = await nativeStart; assertCurrent();
+      if (remote ? !ready.audioReady : !ready.recognizerReady) throw new Error(remote ? "手机麦克风采集未就绪" : "手机语音模型错误");
+      voiceEnabled = true; setVoiceStatus("listening", remote ? "电脑识别已就绪" : "手机识别已就绪");
+    } catch (error) {
+      if (!current() || isSessionCancelled(error)) {
+        await Promise.all(handles.map(handle => handle.remove().catch(() => {}))); return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const denied = /未授权|permission|denied/i.test(message);
+      await stopVoiceControl(false);
+      // A subsequent start owns its own status, even if this cleanup finishes later.
+      if (!voiceStartTask) setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : message || "语音启动失败");
     }
+  })();
+  voiceStartTask = task;
+  try { await task; } finally { if (voiceStartTask === task) voiceStartTask = null; }
+}
+
+async function stop(): Promise<void> {
+  cameraSession.next(); cameraSocketSession.next(); poseModelSession.next();
+  cameraStartTask = null;
+  cameraRecoveryTask = modelRecoveryTask = null;
+  running = false; setStartBusy(null);
+  if (predictAnimationFrame != null) cancelAnimationFrame(predictAnimationFrame); predictAnimationFrame = null;
+  if (reconnectTimer != null) window.clearTimeout(reconnectTimer); reconnectTimer = null;
+  if (socketHealthTimer != null) window.clearInterval(socketHealthTimer); socketHealthTimer = null;
+  if (webUpdateRetryTimer != null) window.clearTimeout(webUpdateRetryTimer); webUpdateRetryTimer = null;
+  webUpdateChecked = false;
+  const ws = socket; socket = null; ws?.close();
+  gameOutputEnabled = null; gameControlButton.disabled = true;
+  gameControlButton.textContent = "连接电脑中"; gameControlButton.classList.remove("enabled"); gameControlButton.title = "";
+  triggerLast = null; triggerLastAt = 0; clearTriggerState(); markControlConfigCached();
+  const model = poseLandmarker; poseLandmarker = null; model?.close();
+  releaseHandModel(); handTrackingSides = []; clearWebCamera();
+  motionDebug.videoReady = false; motionDebug.videoWidth = motionDebug.videoHeight = 0;
+  motionDebug.modelState = "idle";
+  overlayRenderingEnabled = true; lastSendStateText = "";
+  const lock = wakeLock; wakeLock = null;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden");
+  document.querySelector("#guide")!.classList.add("hidden"); document.querySelector("#loading")!.classList.add("hidden");
+  setConnection("offline"); syncScreen();
+  const task = (async () => { await stopVoiceControl(); await lock?.release().catch(() => {}); await refreshLinkState(); })();
+  cameraStopTask = task;
+  try { await task; } finally { if (cameraStopTask === task) cameraStopTask = null; }
+}
+async function chooseCamera(cameraId: string): Promise<void> {
+  if (cameraRecoveryTask) return;
+  const session = cameraSession.current;
+  selectedCameraDeviceId = cameraId; cameraDeviceSelect.value = cameraId;
+  try { if (running) await startCamera(session); if (cameraSession.isCurrent(session)) applyMirror(); }
+  catch (error) { if (!isSessionCancelled(error) && cameraSession.isCurrent(session)) cameraSwitchState.textContent = `切换失败：${error instanceof Error ? error.message : "无法打开镜头"}`; }
+}
+async function chooseFacing(target: "user" | "environment"): Promise<void> {
+  if (!running || facingMode === target || cameraRecoveryTask) { updateCameraButtons(); return; }
+  const session = cameraSession.current;
+  const previousFacing = facingMode; const previousDevice = selectedCameraDeviceId;
+  facingMode = target; selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = "__auto__";
+  cameraSwitchState.textContent = "切换中";
+  try {
+    await startCamera(session); cameraSession.assertCurrent(session); cameraSwitchState.textContent = "";
+    try { localStorage.setItem("motionbridge-facing", facingMode); } catch { /* Optional preference. */ }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const denied = /未授权|permission|denied/i.test(message);
-    await stopVoiceControl(false);
-    // 保留原生插件提供的具体失败原因，以及用户的语音开关偏好。
-    setVoiceStatus(denied ? "unauthorized" : "error", denied ? "未授权" : message || "语音启动失败");
+    if (isSessionCancelled(error) || !cameraSession.isCurrent(session)) return;
+    facingMode = previousFacing; selectedCameraDeviceId = previousDevice;
+    cameraSwitchState.textContent = `切换失败：${error instanceof Error ? error.message : "无法打开镜头"}`;
+    try { await startCamera(session); } catch (restoreError) { if (!isSessionCancelled(restoreError) && cameraSession.isCurrent(session)) cameraSwitchState.textContent += "；原镜头恢复失败"; }
+    if (cameraSession.isCurrent(session)) updateCameraButtons();
   }
 }
 
-async function stop(): Promise<void> { running = false; overlayRenderingEnabled = true; lastSendStateText = ""; cameraFrameLoop = false; if (reconnectTimer != null) window.clearTimeout(reconnectTimer); socket?.close(); socket = null; poseLandmarker?.close(); poseLandmarker = null; releaseHandModel(); handTrackingSides = []; clearWebCamera(); motionDebug.videoReady = false; motionDebug.videoWidth = 0; motionDebug.videoHeight = 0; await stopVoiceControl(); await wakeLock?.release().catch(() => {}); wakeLock = null; context.clearRect(0, 0, canvas.width, canvas.height); setupCard.classList.remove("hidden"); runtimeCard.classList.add("hidden"); showStatus.classList.add("hidden"); document.querySelector("#guide")!.classList.add("hidden"); setConnection("offline"); syncScreen();
-  // 回到这一页就重新读一遍。人很可能就是刚刚按着上面那个按钮去把网络共享
-  // 打开了再回来的——还给他看一句"两条路都没开"，那句话就从提示变成了错误。
-  await refreshLinkState(); }
-async function chooseCamera(cameraId: string): Promise<void> { selectedCameraDeviceId = cameraId; cameraDeviceSelect.value = cameraId; if (running) await startCamera(); applyMirror(); }
-async function chooseFacing(target: "user" | "environment"): Promise<void> { if (!running || facingMode === target) { updateCameraButtons(); return; } const previousFacing = facingMode; const previousDevice = selectedCameraDeviceId; facingMode = target;
-  try { localStorage.setItem("motionbridge-facing", target); } catch { /* 存不下不影响这次切换 */ } selectedCameraDeviceId = "__auto__"; cameraDeviceSelect.value = "__auto__"; cameraSwitchState.textContent = "切换中"; try { await startCamera(); cameraSwitchState.textContent = ""; } catch (error) { facingMode = previousFacing; selectedCameraDeviceId = previousDevice; cameraSwitchState.textContent = `切换失败：${error instanceof Error ? error.message : "无法打开镜头"}`; try { await startCamera(); } catch { cameraSwitchState.textContent += "；原镜头恢复失败"; } updateCameraButtons(); } }
 function showRole(role: "home" | "camera" | "handheld"): void { activeRole = role; document.body.dataset.role = role; roleCard.classList.toggle("hidden", role !== "home"); setupCard.classList.toggle("hidden", role !== "camera"); handheldCard.classList.toggle("hidden", role !== "handheld"); voiceControl.classList.toggle("hidden", role !== "camera");
   // 手柄模式下把页头藏起来。两个理由：卡片自己就有连接状态徽标，页头那个是重复的；
   // 而且两者都是固定定位，横屏时版本号折成两行会把页头撑高压到卡片上——标题整个
@@ -1622,24 +2022,37 @@ async function connectBluetooth(address: string, automatic = false): Promise<voi
 }
 async function sendHandheldFrame(): Promise<void> {
   const bluetooth = transportInput.value === "bluetooth";
-  if (document.hidden || bluetoothSystemDialog || sensorPolling || handheldTimer == null || (bluetooth ? !bluetoothState?.connected : handheldSocket?.readyState !== WebSocket.OPEN)) return;
-  sensorPolling = true;
+  if (document.hidden || bluetoothSystemDialog || sensorPollingGeneration === controllerGeneration || handheldTimer == null || (bluetooth ? !bluetoothState?.connected : handheldSocket?.readyState !== WebSocket.OPEN)) return;
   const generation = controllerGeneration;
+  sensorPollingGeneration = generation;
   try {
     const sample = await SensorBridge.getLatest();
     if (generation !== controllerGeneration || handheldTimer == null) return;
+    if (!sensorSampleFresh(sample, modeInput.value !== "shooter")) {
+      if (!sensorStaleSince) {
+        sensorStaleSince = performance.now();
+        if (bluetooth) void BluetoothController.releaseAll().catch(() => {});
+      }
+      setSensorState("等待有效体感采样，请保持手机前台");
+      // A stalled native stream must not keep the network source alive with old data.
+      if (!bluetooth && performance.now() - sensorStaleSince > 1500) handheldSocket?.close();
+      return;
+    }
+    sensorStaleSince = 0;
     if (bluetooth && bluetoothState?.connected) {
       const sessionId = bluetoothState.sessionId;
       if (modeInput.value === "shooter") {
+        const hasGravity = sample.accelerationIncludesGravity && optionalSensorFresh(sample.accelerationAvailable, sample.acceleration_age_ms);
+        const hasRotation = sample.rotationAvailable && optionalSensorFresh(sample.rotationAvailable, sample.rotation_age_ms);
         const gyroSample = {
           ...sample,
-          ax: sample.accelerationIncludesGravity ? sample.ax : undefined,
-          ay: sample.accelerationIncludesGravity ? sample.ay : undefined,
-          az: sample.accelerationIncludesGravity ? sample.az : undefined,
-          qx: sample.rotationAvailable ? sample.qx : undefined,
-          qy: sample.rotationAvailable ? sample.qy : undefined,
-          qz: sample.rotationAvailable ? sample.qz : undefined,
-          qw: sample.rotationAvailable ? sample.qw : undefined,
+          ax: hasGravity ? sample.ax : undefined,
+          ay: hasGravity ? sample.ay : undefined,
+          az: hasGravity ? sample.az : undefined,
+          qx: hasRotation ? sample.qx : undefined,
+          qy: hasRotation ? sample.qy : undefined,
+          qz: hasRotation ? sample.qz : undefined,
+          qw: hasRotation ? sample.qw : undefined,
         };
         const gyro = gyroMouse.update(gyroSample, !shooterState.stickPressed, {
           sensitivity: Number(document.querySelector<HTMLInputElement>("#gyroSensitivity")!.value),
@@ -1655,6 +2068,7 @@ async function sendHandheldFrame(): Promise<void> {
         const coarse = stickMouse.update(shooterState.stick, shooterState.stickPressed, performance.now(), Number(document.querySelector<HTMLInputElement>("#stickSensitivity")!.value));
         // 按实际握持反馈，两轴沿用陀螺仪计算方向。
         const result = await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx: coarse.dx + gyro.dx, dy: coarse.dy + gyro.dy, sessionId });
+        if (generation !== controllerGeneration || handheldTimer == null) return;
         if (!result.sent) throw new Error("蓝牙鼠标输出未送达，请检查连接");
         setSensorState(shooterState.stickPressed ? "摇杆大移动 · 陀螺仪暂停" : gyro.calibrating ? "请静握 1 秒，校准陀螺仪" : gyroCalibrationSaved ? "陀螺仪微调" : "陀螺仪微调 · 校准没存上，下次要重新校准");
       } else {
@@ -1662,20 +2076,30 @@ async function sendHandheldFrame(): Promise<void> {
         if (!tiltBaseline || handheldRecenter) tiltBaseline = quaternion;
         const tilt = relativeTilt(tiltBaseline, quaternion);
         const result = await BluetoothController.sendGamepad({ buttons: bluetoothButtons(padState), x: stickState.x, y: stickState.y, ...tilt, lt: padState.has("zl") ? 1 : 0, rt: padState.has("zr") ? 1 : 0, sessionId });
+        if (generation !== controllerGeneration || handheldTimer == null) return;
         if (!result.sent) throw new Error("蓝牙手柄输出未送达，请检查连接");
         setSensorState("触摸控制左摇杆 · 转动控制右摇杆");
       }
     } else if (!bluetooth && handheldSocket?.readyState === WebSocket.OPEN) {
+      const frameSequence = handheldSequence++;
+      if (handheldSocket.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) {
+        motionDebug.sensorDroppedFrames = ++sensorDroppedFrames;
+        return;
+      }
       const touches: Record<string, unknown>[] = [...padState].map((control) => ({ control, pressed: true }));
       if (Math.abs(stickState.x) > 0.02 || Math.abs(stickState.y) > 0.02) touches.push({ control: "stick", x: stickState.x, y: stickState.y });
-      handheldSocket.send(JSON.stringify({ type: "sensor_frame", role: "sensor", device_id: deviceId, sequence: handheldSequence++, captured_at_ms: Date.now(), player_slot: Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value), quaternion: { x: sample.qx, y: sample.qy, z: sample.qz, w: sample.qw }, orientation: {}, rotation_rate: { x: sample.gx, y: sample.gy, z: sample.gz }, acceleration: { x: sample.ax, y: sample.ay, z: sample.az }, touches, recenter: handheldRecenter }));
+      const sentAt = Date.now();
+      handheldSocket.send(JSON.stringify({ type: "sensor_frame", role: "sensor", device_id: deviceId, sequence: frameSequence,
+        captured_at_ms: sampleCapturedAt(sentAt, sample.sample_age_ms ?? sample.gyro_age_ms) + serverClockOffsetMs,
+        sent_at_ms: sentAt + serverClockOffsetMs,
+        player_slot: Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value), quaternion: { x: sample.qx, y: sample.qy, z: sample.qz, w: sample.qw }, orientation: {}, rotation_rate: { x: sample.gx, y: sample.gy, z: sample.gz }, acceleration: { x: sample.ax, y: sample.ay, z: sample.az }, touches, recenter: handheldRecenter }));
     }
     handheldRecenter = false;
     handheldFrames++;
     const now = performance.now();
     if (now - handheldFpsStarted >= 1000) { document.querySelector("#sensorFps")!.textContent = `${Math.round(handheldFrames * 1000 / (now - handheldFpsStarted))} 次/秒`; handheldFrames = 0; handheldFpsStarted = now; }
   } catch (error) { if (generation === controllerGeneration) controllerError(error); }
-  finally { sensorPolling = false; }
+  finally { if (sensorPollingGeneration === generation) sensorPollingGeneration = null; }
 }
 function clearTouches(): void {
   padState.clear(); stickState = { x: 0, y: 0 }; shooterControls.reset(); stickMouse.reset();
@@ -1728,11 +2152,17 @@ async function startController(): Promise<void> {
       });
       ws.addEventListener("message", (event) => {
         if (generation !== controllerGeneration) return;
-        try { const message = JSON.parse(event.data); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* 忽略无法解析的消息 */ }
+        try { const message = JSON.parse(event.data); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") applyClockSync(message, performance.now()); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* 忽略无法解析的消息 */ }
       });
-      ws.addEventListener("close", () => { if (generation === controllerGeneration) { markControlConfigCached(); clearTouches(); controllerBadge(false, "电脑已断开");
+      const disconnected = () => { if (generation === controllerGeneration && handheldSocket === ws) {
+        handheldSocket = null;
+        if (handheldHealthTimer != null) window.clearInterval(handheldHealthTimer); handheldHealthTimer = null;
+        ws.close(); markControlConfigCached(); clearTouches(); controllerBadge(false, "电脑已断开");
         if (handheldRunning) window.setTimeout(() => { if (handheldRunning && generation === controllerGeneration) void (async () => { await suspendHandheld(); await startHandheld(); })(); }, 1500);
-      } });
+      } };
+      ws.addEventListener("close", disconnected);
+      ws.addEventListener("error", disconnected);
+      handheldHealthTimer = startSocketHealth(ws, disconnected, () => generation === controllerGeneration && handheldSocket === ws);
     }
     if (generation === controllerGeneration) { handheldRunning = true; handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); }
   } catch (error) { controllerError(error); await SensorBridge.stop().catch(() => {}); }
@@ -1747,6 +2177,8 @@ async function suspendHandheld(): Promise<void> {
   bluetoothSystemDialog = false;
   if (handheldTimer != null) window.clearInterval(handheldTimer);
   handheldTimer = null;
+  if (handheldHealthTimer != null) window.clearInterval(handheldHealthTimer); handheldHealthTimer = null;
+  sensorStaleSince = 0;
   clearTouches(); resetGyroSession(); tiltBaseline = null;
   if (handheldSocket && handheldSocket.readyState <= WebSocket.OPEN) {
     // 断线由电脑收回该来源，尚未建立的连接也要取消。
@@ -1889,7 +2321,7 @@ cameraDeviceSelect.addEventListener("change", () => void chooseCamera(cameraDevi
 voiceRecognitionSelect.addEventListener("change", () => {
   voiceRecognitionMode = voiceRecognitionSelect.value === "phone" ? "phone" : "computer";
   localStorage.setItem("motionbridge-voice-recognition", voiceRecognitionMode);
-  if (voiceEnabled) void (async () => { await stopVoiceControl(false); await startVoiceControl(); })();
+  if (voiceEnabled || voiceStartTask) void (async () => { await stopVoiceControl(false); await startVoiceControl(); })();
 });
 flipCameraButton.addEventListener("click", () => void chooseFacing(facingMode === "user" ? "environment" : "user"));
 upsideDownButton.addEventListener("click", () => {
@@ -1913,7 +2345,7 @@ let cameraSuspending: Promise<void> | null = null;
 function onVisibilityChange(): void {
   if (document.hidden) {
     cancelBluetoothReconnect();
-    if (running && activeRole === "camera") {
+    if ((running || cameraStartTask) && activeRole === "camera") {
       resumeCameraOnReturn = true;
       cameraSuspending = stop();
     } else if (voiceEnabled) {
@@ -1934,13 +2366,13 @@ function onVisibilityChange(): void {
     void (async () => {
       await cameraSuspending;
       cameraSuspending = null;
-      if (!running) await start();
+      if (!running && activeRole === "camera" && !document.hidden) await start();
     })();
   }
   if ((running || activeRole === "handheld") && !wakeLock) void navigator.wakeLock?.request("screen").then((lock) => { wakeLock = lock; }).catch(() => {});
 }
 document.addEventListener("visibilitychange", onVisibilityChange);
-window.addEventListener("beforeunload", () => { cancelBluetoothReconnect(); ++controllerGeneration; clearTouches(); void BluetoothController.releaseAll().catch(() => {}); void BluetoothController.stop().catch(() => {}); void stopVoiceControl(); });
+window.addEventListener("beforeunload", () => { cancelBluetoothReconnect(); ++controllerGeneration; clearTouches(); void BluetoothController.releaseAll().catch(() => {}); void BluetoothController.stop().catch(() => {}); void stop(); });
 void // 装的 APK 是一个版本，跑的网页可能是另一个。一半的修复走热更，APK 不会
 // 跟着变，所以只报 APK 版本的话，"我这版有没有那个修复"就只能靠猜——而反馈
 // 表单里恰好要填这个数。两个一样时只写一个，不一样才把网页那个也写出来。
@@ -1959,5 +2391,14 @@ void App.addListener("appStateChange", ({ isActive }) => {
   controllerAppActive = isActive;
   if (!isActive) cancelBluetoothReconnect();
   else if (activeRole === "handheld") scheduleBluetoothReconnect();
+  // Some WebViews delay visibilitychange; the native Activity is authoritative.
+  if (!isActive && activeRole === "camera" && (running || cameraStartTask)) {
+    resumeCameraOnReturn = true; cameraSuspending = stop();
+  } else if (isActive && !document.hidden && resumeCameraOnReturn) onVisibilityChange();
   if (isActive && !running && activeRole === "camera") void refreshLinkState();
+});
+
+// A boot is healthy after controls and lifecycle listeners have initialized.
+void nativeCapabilitiesReady.then(() => WebUpdate.bootOk()).catch(error => {
+  if (Capacitor.isPluginAvailable("WebUpdate")) motionDebug.bootHealthError = error instanceof Error ? error.message : String(error);
 });
