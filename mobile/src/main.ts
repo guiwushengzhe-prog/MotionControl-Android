@@ -140,33 +140,31 @@ app.innerHTML = `
       </details>
     </section>
     <section class="hud hidden" id="runtimeCard" data-link="offline">
-      <div class="hud-status"><i class="dot"></i><strong id="sendState">等待完整人体</strong><span id="voiceState" class="voice-state off">关闭</span><b id="panelConnection">未连接</b></div>
+      <div class="hud-status"><div class="hud-recognition"><i class="dot"></i><strong id="sendState">等待完整人体</strong></div><div class="hud-connection"><span id="voiceState" class="voice-state off">关闭</span><b id="panelConnection">未连接</b></div><button id="hideStatus" class="hud-collapse" type="button" aria-label="收起摄像头控制" aria-controls="runtimeCard" aria-expanded="true">${ICONS.collapse}</button></div>
       <button id="gameControlButton" class="game-control" type="button" disabled>连接电脑中</button>
       <div class="hud-tools">
-        <button id="scanComputerRuntime" class="tool" type="button"><span>换电脑</span></button>
         <label class="tool" id="voiceControl"><input id="voiceToggle" type="checkbox">${ICONS.mic}<span>语音</span></label>
         <button id="flipCameraButton" class="tool" type="button" aria-label="换镜头">${ICONS.flip}<span>换镜头</span></button>
         <button id="upsideDownButton" class="tool" type="button" aria-pressed="false" aria-label="倒过来放，充电口朝上">${ICONS.upsideDown}<span>倒过来</span></button>
         <button id="toggleZonesButton" class="tool" type="button" aria-pressed="true">${ICONS.frame}<span>区域框</span></button>
-        <button id="hideStatus" class="tool" type="button">${ICONS.collapse}<span>收起</span></button>
         <button id="stopButton" class="tool danger" type="button">${ICONS.stop}<span>停止</span></button>
       </div>
       <small id="cameraSwitchState" class="camera-switch-state"></small>
       <div class="technical"><span>摄像头 <b id="cameraFps">0 FPS</b></span><span>识别 <b id="localFps">0 FPS</b></span><span id="modelStatus">Full33</span><span id="delegateStatus">—</span><small id="modelError"></small></div>
     </section>
     <div class="trigger-board camera-trigger-board hidden" id="cameraTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
-    <button id="showStatus" class="status-show hidden" type="button">${ICONS.expand}显示控制</button>
+    <button id="showStatus" class="status-show hidden" type="button" aria-label="展开摄像头控制" aria-controls="runtimeCard" aria-expanded="false">${ICONS.expand}</button>
     <section class="handheld-card hidden" id="handheldCard">
-      <div class="pad-bar handheld-connection-row"><button id="stopHandheld" class="back-button" type="button">${ICONS.back}停止</button><span id="handheldConnection" class="badge"><i></i><b>未连接电脑</b></span><button id="scanComputerHandheld" class="pill-button" type="button">扫码连接电脑</button><button id="centerSensor" class="pill-button" type="button">重新居中</button></div>
-      <div class="pad-mode"><div class="seg" id="modeSeg" role="group" aria-label="用法"><button type="button" data-mode="gamepad">手柄</button><button type="button" data-mode="shooter">鼠标</button></div><div class="controller-options"><select id="handheldMode" hidden><option value="gamepad">手柄</option><option value="shooter">鼠标</option></select><select id="handheldTransport" aria-label="连接方式"><option value="network">网络连接</option><option value="bluetooth">蓝牙连接</option></select></div></div>
+      <div class="pad-bar handheld-connection-row"><button id="stopHandheld" class="back-button" type="button">${ICONS.back}停止</button><button id="handheldConnection" class="badge" type="button" aria-label="连接设置" aria-controls="handheldMore" aria-expanded="false"><i></i><b>未连接电脑</b></button><div class="handheld-primary-action"><button id="scanComputerHandheld" class="pill-button" type="button">扫码连接</button><button id="centerSensor" class="pill-button" type="button" hidden>重新居中</button></div></div>
+      <div class="pad-mode"><div class="seg" id="modeSeg" role="group" aria-label="用法"><button type="button" data-mode="gamepad">手柄</button><button type="button" data-mode="shooter">鼠标</button></div><select id="handheldMode" hidden><option value="gamepad">手柄</option><option value="shooter">鼠标</option></select></div>
+      <button id="handheldGameControlButton" class="game-control hidden" type="button" disabled>连接电脑中</button>
       <small id="sensorState">等待传感器</small>
-      <details id="bluetoothPanel" class="panel bluetooth-panel hidden" open><summary>蓝牙连接</summary><p id="bluetoothStatus">先在电脑的蓝牙设置里添加这台手机，再选电脑连接。</p><div class="bluetooth-actions"><button id="bluetoothPair" type="button">允许电脑配对</button><button id="bluetoothRefresh" type="button">刷新设备</button><select id="bluetoothDevice" aria-label="已配对电脑"></select><button id="bluetoothConnect" type="button">连接电脑</button></div><small>蓝牙模拟的是通用手柄；只认 Xbox 手柄的游戏请用网络连接。</small></details>
       <div class="trigger-board handheld-trigger-board" id="handheldTriggerBoard" aria-live="polite"><b class="trigger-board-key">—</b><span class="trigger-board-name">做个动作或者说句口令试试</span></div>
       <div class="shoulders"><button data-pad="l">LB</button><button data-pad="zl">LT</button><button data-pad="zr">RT</button><button data-pad="r">RB</button></div>
       <div class="gamepad"><div id="stick" class="stick"><i></i></div><div class="face-buttons"><button data-pad="y">Y</button><button data-pad="x">X</button><button data-pad="b">B</button><button data-pad="a">A</button></div><div class="middle-buttons"><button data-pad="select">选择</button><button data-pad="start">开始</button></div></div>
       ${SHOOTER_CONTROLS_HTML}
       <details id="shooterSettings" class="panel shooter-settings hidden"><summary>灵敏度</summary><label>陀螺仪微调<input id="gyroSensitivity" type="range" min="0.1" max="2" step="0.1" value="0.5"></label><label>摇杆大移动<input id="stickSensitivity" type="range" min="400" max="3600" step="200" value="1800"></label></details>
-      <details class="panel handheld-more"><summary>更多</summary><div class="handheld-more-body"><label class="field hidden" id="handheldAddressField">电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="自动查找"></label><label class="field">玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span>传感器 <b id="sensorFps">0 次/秒</b></span></div></details>
+      <details id="handheldMore" class="panel handheld-more"><summary>更多</summary><div class="handheld-more-body"><label class="field">连接方式<select id="handheldTransport" aria-label="连接方式"><option value="network">网络连接</option><option value="bluetooth">蓝牙连接</option></select></label><button id="scanComputerHandheldMore" class="connection-scan" type="button">扫码连接 / 换电脑</button><details id="bluetoothPanel" class="bluetooth-panel hidden" open><summary>蓝牙设置</summary><p id="bluetoothStatus">先在电脑的蓝牙设置里添加这台手机，再选电脑连接。</p><div class="bluetooth-actions"><button id="bluetoothPair" type="button">允许电脑配对</button><button id="bluetoothRefresh" type="button">刷新设备</button><select id="bluetoothDevice" aria-label="已配对电脑"></select><button id="bluetoothConnect" type="button">连接电脑</button></div><small>蓝牙模拟的是通用手柄；只认 Xbox 手柄的游戏请用网络连接。</small></details><label class="field hidden" id="handheldAddressField">电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="自动查找"></label><label class="field">玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span>传感器 <b id="sensorFps">0 次/秒</b></span></div></details>
     </section>
   </main>
   <div class="guide hidden" id="guide"><span>全身站进画面</span></div><div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头</b></div>`;
@@ -194,6 +192,7 @@ const voiceStateLabel = document.querySelector<HTMLElement>("#voiceState")!;
 const hideStatus = document.querySelector<HTMLButtonElement>("#hideStatus")!;
 const showStatus = document.querySelector<HTMLButtonElement>("#showStatus")!;
 const gameControlButton = document.querySelector<HTMLButtonElement>("#gameControlButton")!;
+const handheldGameControlButton = document.querySelector<HTMLButtonElement>("#handheldGameControlButton")!;
 const toggleZonesButton = document.querySelector<HTMLButtonElement>("#toggleZonesButton")!;
 const startButton = document.querySelector<HTMLButtonElement>("#startButton")!;
 const START_LABEL = startButton.textContent || "连接并开始";
@@ -224,6 +223,7 @@ let socket: WebSocket | null = null;
 let handheldSocket: WebSocket | null = null;
 // 主动停止和断线重连要分得开：停了之后还在后台重连，是最难查的那种「关不掉」。
 let handheldRunning = false;
+let handheldConnected = false;
 let reconnectTimer: number | null = null;
 let handheldTimer: number | null = null;
 let wakeLock: WakeLockSentinel | null = null;
@@ -359,8 +359,10 @@ const shooterControls = createShooterControls(document.querySelector<HTMLElement
   shooterState = state;
   if (!state.stickPressed) stickMouse.reset();
   // 按键变化直接发送，短点击也不必等下一次传感器轮询。
-  if (buttonsChanged && modeInput.value === "shooter" && bluetoothState?.connected) {
-    void BluetoothController.sendMouse({ buttons: state.mouseButtons, dx: 0, dy: 0, sessionId: bluetoothState.sessionId }).catch(controllerError);
+  if (buttonsChanged && modeInput.value === "shooter") {
+    if (transportInput.value === "bluetooth" && bluetoothState?.connected) {
+      void BluetoothController.sendMouse({ buttons: state.mouseButtons, dx: 0, dy: 0, sessionId: bluetoothState.sessionId }).catch(controllerError);
+    } else if (transportInput.value === "network") sendNetworkMouse(0, 0, state.mouseButtons);
   }
 });
 const CONTROL_CONFIG_STORAGE_KEY = "motionbridge-control-config-v1";
@@ -619,15 +621,19 @@ let gameOutputEnabled: boolean | null = null;
 function applyGameOutputState(message: GameOutputStateV1): void {
   if (typeof message.enabled !== "boolean") return;
   gameOutputEnabled = message.enabled;
-  gameControlButton.disabled = false;
-  gameControlButton.textContent = message.enabled ? "暂停控制" : "开始控制";
-  gameControlButton.classList.toggle("enabled", message.enabled);
-  if (message.ok === false && message.error) gameControlButton.title = message.error;
+  for (const button of [gameControlButton, handheldGameControlButton]) {
+    button.disabled = false;
+    button.textContent = message.enabled ? "暂停控制" : "开始控制";
+    button.classList.toggle("enabled", message.enabled);
+    button.title = message.ok === false && message.error ? message.error : "";
+  }
 }
 function requestGameOutput(enabled: boolean): void {
-  if (socket?.readyState !== WebSocket.OPEN || gameOutputEnabled === null) return;
-  gameControlButton.disabled = true;
-  socket.send(JSON.stringify({ type: "game_output_control", role: "camera", device_id: deviceId, enabled }));
+  const handheld = activeRole === "handheld";
+  const ws = handheld ? handheldSocket : socket;
+  if (ws?.readyState !== WebSocket.OPEN || gameOutputEnabled === null) return;
+  (handheld ? handheldGameControlButton : gameControlButton).disabled = true;
+  ws.send(JSON.stringify({ type: "game_output_control", role: handheld ? "mouse" : "camera", device_id: deviceId, enabled }));
 }
 function actionText(action: SyncedAction | undefined, fallback: string): string {
   const type = String(action?.type || "");
@@ -1290,6 +1296,7 @@ async function start(): Promise<void> {
       try { localStorage.setItem("motionbridge-server", socketUrl); } catch { /* Storage is optional. */ }
       setStartBusy("正在打开摄像头…"); await startCamera(session); cameraSession.assertCurrent(session);
       running = true; setupCard.classList.add("hidden"); runtimeCard.classList.remove("hidden");
+      hideStatus.setAttribute("aria-expanded", "true");
       showStatus.classList.add("hidden"); voiceControl.classList.remove("hidden"); document.querySelector("#guide")!.classList.remove("hidden"); syncScreen();
       connectSocket(socketUrl, session);
       await loadPoseModel(session); cameraSession.assertCurrent(session);
@@ -1974,15 +1981,29 @@ function setSensorState(text: string): void {
   if (el.textContent !== text) el.textContent = text;
 }
 function controllerBadge(online: boolean, text: string): void {
+  handheldConnected = online;
+  if (!online) {
+    gameOutputEnabled = null;
+    handheldGameControlButton.disabled = true;
+    handheldGameControlButton.textContent = "连接电脑中";
+    handheldGameControlButton.classList.remove("enabled"); handheldGameControlButton.title = "";
+  }
   document.querySelector("#handheldConnection")!.className = `badge ${online ? "online" : "connecting"}`;
   document.querySelector("#handheldConnection b")!.textContent = text;
+  renderHandheldPrimaryAction();
+}
+function renderHandheldPrimaryAction(): void {
+  const scan = document.querySelector<HTMLButtonElement>("#scanComputerHandheld")!;
+  const center = document.querySelector<HTMLButtonElement>("#centerSensor")!;
+  scan.hidden = handheldConnected;
+  center.hidden = !handheldConnected;
+  center.textContent = modeInput.value === "shooter" ? "校准" : "重新居中";
+  center.setAttribute("aria-label", modeInput.value === "shooter" ? "校准陀螺仪" : "重新居中");
 }
 function renderControllerMode(): void {
   const shooter = modeInput.value === "shooter";
-  if (shooter) transportInput.value = "bluetooth";
-  transportInput.querySelector<HTMLOptionElement>('[value="network"]')!.disabled = shooter;
   const bluetooth = transportInput.value === "bluetooth";
-  document.querySelector<HTMLElement>("#scanComputerHandheld")!.hidden = bluetooth;
+  handheldGameControlButton.classList.toggle("hidden", !shooter || bluetooth);
   handheldCard.classList.toggle("shooter-mode", shooter);
   for (const button of modeButtons) button.setAttribute("aria-pressed", String(button.dataset.mode === modeInput.value));
   handheldCard.classList.toggle("bluetooth-mode", bluetooth);
@@ -1992,7 +2013,7 @@ function renderControllerMode(): void {
   document.querySelector("#handheldProfileSync")?.classList.toggle("hidden", bluetooth);
   document.querySelectorAll(".shoulders,.gamepad").forEach((el) => el.classList.toggle("hidden", shooter));
   handheldServerInput.closest("label")!.classList.toggle("hidden", bluetooth);
-  document.querySelector<HTMLButtonElement>("#centerSensor")!.textContent = shooter ? "校准陀螺仪" : "重新居中";
+  renderHandheldPrimaryAction();
   document.querySelector<HTMLSelectElement>("#handheldSlot")!.closest("label")!.classList.toggle("hidden", bluetooth);
   document.querySelector<HTMLElement>("header")!.classList.toggle("hidden", activeRole === "handheld");
 }
@@ -2069,6 +2090,18 @@ async function connectBluetooth(address: string, automatic = false): Promise<voi
     if (generation === controllerGeneration && bluetoothControllerActive() && bluetoothState) applyBluetoothState(bluetoothState);
   }
 }
+function sendNetworkMouse(dx: number, dy: number, buttons: number, sample?: SensorSample): boolean {
+  const ws = handheldSocket;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  if (ws.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) { ws.close(); return false; }
+  const sentAt = Date.now();
+  try {
+    ws.send(JSON.stringify({ type: "mouse_frame", role: "mouse", device_id: deviceId, sequence: handheldSequence++,
+      captured_at_ms: sampleCapturedAt(sentAt, sample?.sample_age_ms ?? sample?.gyro_age_ms) + serverClockOffsetMs,
+      sent_at_ms: sentAt + serverClockOffsetMs, dx, dy, buttons }));
+    return true;
+  } catch { ws.close(); return false; }
+}
 async function sendHandheldFrame(): Promise<void> {
   const bluetooth = transportInput.value === "bluetooth";
   if (document.hidden || bluetoothSystemDialog || sensorPollingGeneration === controllerGeneration || handheldTimer == null || (bluetooth ? !bluetoothState?.connected : handheldSocket?.readyState !== WebSocket.OPEN)) return;
@@ -2081,6 +2114,7 @@ async function sendHandheldFrame(): Promise<void> {
       if (!sensorStaleSince) {
         sensorStaleSince = performance.now();
         if (bluetooth) void BluetoothController.releaseAll().catch(() => {});
+        else if (modeInput.value === "shooter") sendNetworkMouse(0, 0, 0);
       }
       setSensorState("等待有效体感采样，请保持手机前台");
       // A stalled native stream must not keep the network source alive with old data.
@@ -2088,9 +2122,7 @@ async function sendHandheldFrame(): Promise<void> {
       return;
     }
     sensorStaleSince = 0;
-    if (bluetooth && bluetoothState?.connected) {
-      const sessionId = bluetoothState.sessionId;
-      if (modeInput.value === "shooter") {
+    if (modeInput.value === "shooter") {
         const hasGravity = sample.accelerationIncludesGravity && optionalSensorFresh(sample.accelerationAvailable, sample.acceleration_age_ms);
         const hasRotation = sample.rotationAvailable && optionalSensorFresh(sample.rotationAvailable, sample.rotation_age_ms);
         const gyroSample = {
@@ -2116,11 +2148,15 @@ async function sendHandheldFrame(): Promise<void> {
         }
         const coarse = stickMouse.update(shooterState.stick, shooterState.stickPressed, performance.now(), Number(document.querySelector<HTMLInputElement>("#stickSensitivity")!.value));
         // 按实际握持反馈，两轴沿用陀螺仪计算方向。
-        const result = await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx: coarse.dx + gyro.dx, dy: coarse.dy + gyro.dy, sessionId });
+        const dx = coarse.dx + gyro.dx, dy = coarse.dy + gyro.dy;
+        const sent = bluetooth && bluetoothState?.connected
+          ? (await BluetoothController.sendMouse({ buttons: shooterState.mouseButtons, dx, dy, sessionId: bluetoothState.sessionId })).sent
+          : sendNetworkMouse(dx, dy, shooterState.mouseButtons, sample);
         if (generation !== controllerGeneration || handheldTimer == null) return;
-        if (!result.sent) throw new Error("蓝牙鼠标输出未送达，请检查连接");
+        if (!sent) throw new Error("鼠标输出未送达，请检查连接");
         setSensorState(shooterState.stickPressed ? "摇杆大移动 · 陀螺仪暂停" : gyro.calibrating ? "请静握 1 秒，校准陀螺仪" : gyroCalibrationSaved ? "陀螺仪微调" : "陀螺仪微调 · 校准没存上，下次要重新校准");
-      } else {
+    } else if (bluetooth && bluetoothState?.connected) {
+        const sessionId = bluetoothState.sessionId;
         const quaternion = [sample.qx, sample.qy, sample.qz, sample.qw];
         if (!tiltBaseline || handheldRecenter) tiltBaseline = quaternion;
         const tilt = relativeTilt(tiltBaseline, quaternion);
@@ -2128,7 +2164,6 @@ async function sendHandheldFrame(): Promise<void> {
         if (generation !== controllerGeneration || handheldTimer == null) return;
         if (!result.sent) throw new Error("蓝牙手柄输出未送达，请检查连接");
         setSensorState("触摸控制左摇杆 · 转动控制右摇杆");
-      }
     } else if (!bluetooth && handheldSocket?.readyState === WebSocket.OPEN) {
       const frameSequence = handheldSequence++;
       if (handheldSocket.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) {
@@ -2142,6 +2177,7 @@ async function sendHandheldFrame(): Promise<void> {
         captured_at_ms: sampleCapturedAt(sentAt, sample.sample_age_ms ?? sample.gyro_age_ms) + serverClockOffsetMs,
         sent_at_ms: sentAt + serverClockOffsetMs,
         player_slot: Number(document.querySelector<HTMLSelectElement>("#handheldSlot")!.value), quaternion: { x: sample.qx, y: sample.qy, z: sample.qz, w: sample.qw }, orientation: {}, rotation_rate: { x: sample.gx, y: sample.gy, z: sample.gz }, acceleration: { x: sample.ax, y: sample.ay, z: sample.az }, touches, recenter: handheldRecenter }));
+      setSensorState("触摸控制左摇杆 · 转动控制右摇杆");
     }
     handheldRecenter = false;
     handheldFrames++;
@@ -2166,6 +2202,7 @@ async function startController(): Promise<void> {
   modeInput.disabled = transportInput.disabled = true;
   const generation = ++controllerGeneration;
   showRole("handheld"); renderControllerMode(); saveHandheldSettings(); resetGyroSession(); tiltBaseline = null;
+  controllerBadge(false, transportInput.value === "bluetooth" ? "正在准备蓝牙" : "连接中");
   try {
     await SensorBridge.start({ mode: modeInput.value });
     if (generation !== controllerGeneration) return;
@@ -2188,7 +2225,7 @@ async function startController(): Promise<void> {
         if (generation === controllerGeneration) { bluetoothSystemDialog = false; scheduleBluetoothReconnect(); }
       }
     } else {
-      const picked = await pickServer(handheldServerInput.value.trim() || serverInput.value.trim(), (phase) => { document.querySelector("#sensorState")!.textContent = phase; });
+      const picked = await pickServer(handheldServerInput.value.trim() || serverInput.value.trim(), (phase) => { if (generation === controllerGeneration) setSensorState(phase); });
       if (generation !== controllerGeneration) return;
       if (!picked.found) throw new Error("没找到电脑");
       const address = picked.url; handheldServerInput.value = address;
@@ -2207,14 +2244,23 @@ async function startController(): Promise<void> {
         handheldSocket = null;
         if (handheldHealthTimer != null) window.clearInterval(handheldHealthTimer); handheldHealthTimer = null;
         ws.close(); markControlConfigCached(); clearTouches(); controllerBadge(false, "电脑已断开");
-        if (handheldRunning) window.setTimeout(() => { if (handheldRunning && generation === controllerGeneration) void (async () => { await suspendHandheld(); await startHandheld(); })(); }, 1500);
+        if (handheldRunning) window.setTimeout(() => {
+          if (!handheldRunning || generation !== controllerGeneration) return;
+          void (async () => {
+            const retryGeneration = controllerGeneration + 1;
+            await suspendHandheld();
+            if (controllerGeneration !== retryGeneration || activeRole !== "handheld" || scannerAbort) return;
+            if (rememberedComputer) computerReconnect.activate("handheld");
+            else await startHandheld();
+          })();
+        }, 1500);
       } };
       ws.addEventListener("close", disconnected);
       ws.addEventListener("error", disconnected);
       handheldHealthTimer = startSocketHealth(ws, disconnected, () => generation === controllerGeneration && handheldSocket === ws);
     }
     if (generation === controllerGeneration) { handheldRunning = true; handheldTimer = window.setInterval(() => void sendHandheldFrame(), 16); }
-  } catch (error) { controllerError(error); await SensorBridge.stop().catch(() => {}); }
+  } catch (error) { if (generation === controllerGeneration) { controllerError(error); await SensorBridge.stop().catch(() => {}); } }
   finally { controllerStarting = false; modeInput.disabled = transportInput.disabled = false; }
 }
 async function suspendHandheld(): Promise<void> {
@@ -2234,6 +2280,7 @@ async function suspendHandheld(): Promise<void> {
     handheldSocket.close();
   }
   handheldSocket = null;
+  controllerBadge(false, "未连接电脑");
   const listener = bluetoothListener; bluetoothListener = null;
   await listener?.remove().catch(() => {});
   await BluetoothController.releaseAll().catch(() => {});
@@ -2270,7 +2317,7 @@ function rememberRole(role: "camera" | "handheld"): void {
   rememberedComputer = { ...rememberedComputer, role }; saveComputer(rememberedComputer);
 }
 async function openComputerScanner(role: "camera" | "handheld"): Promise<void> {
-  if (scannerAbort || (role === "handheld" && transportInput.value !== "network")) return;
+  if (scannerAbort) return;
   const controller = new AbortController(); scannerAbort = controller;
   connectionTouched = true;
   const wasRunning = role === "camera" ? running || Boolean(cameraStartTask) : handheldRunning || Boolean(controllerStartTask);
@@ -2284,6 +2331,11 @@ async function openComputerScanner(role: "camera" | "handheld"): Promise<void> {
     const text = await scanConnectionCode(controller.signal);
     if (!text || controller.signal.aborted || document.hidden || !controllerAppActive) return;
     const computer = parseConnectionCode(text);
+    if (role === "handheld") {
+      transportInput.value = "network";
+      saveHandheldSettings(); renderControllerMode();
+      document.querySelector<HTMLDetailsElement>("#handheldMore")!.open = false;
+    }
     rememberedComputer = { ...computer, role }; saveComputer(rememberedComputer);
     saveCandidates(computer.candidates);
     const first = computer.candidates[0];
@@ -2298,7 +2350,7 @@ async function openComputerScanner(role: "camera" | "handheld"): Promise<void> {
   } finally {
     if (scannerAbort === controller) scannerAbort = null;
     if (controller.signal.reason !== "unload" && activeRole === role && (selected || wasRunning)) {
-      if (rememberedComputer) computerReconnect.activate(role);
+      if (rememberedComputer && (role === "camera" || transportInput.value === "network")) computerReconnect.activate(role);
       else if (!document.hidden && controllerAppActive) { if (role === "camera") void start(); else void startHandheld(); }
       else if (role === "camera") resumeCameraOnReturn = true;
     }
@@ -2372,8 +2424,15 @@ const restartController = async () => { await suspendHandheld(); await controlle
 modeInput.addEventListener("change", () => { void restartController(); });
 transportInput.addEventListener("change", () => { computerReconnect.cancel(); rememberRole("handheld"); void restartController(); });
 document.querySelector("#scanComputerCamera")!.addEventListener("click", () => void openComputerScanner("camera"));
-document.querySelector("#scanComputerRuntime")!.addEventListener("click", () => void openComputerScanner("camera"));
 document.querySelector("#scanComputerHandheld")!.addEventListener("click", () => void openComputerScanner("handheld"));
+document.querySelector("#scanComputerHandheldMore")!.addEventListener("click", () => void openComputerScanner("handheld"));
+const handheldMore = document.querySelector<HTMLDetailsElement>("#handheldMore")!;
+document.querySelector("#handheldConnection")!.addEventListener("click", () => {
+  handheldMore.open = true;
+  handheldMore.querySelector<HTMLElement>("summary")?.focus?.();
+  handheldMore.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+});
+handheldMore.addEventListener("toggle", () => document.querySelector("#handheldConnection")!.setAttribute("aria-expanded", String(handheldMore.open)));
 document.querySelector("#bluetoothRefresh")!.addEventListener("click", () => {
   const generation = controllerGeneration;
   void BluetoothController.getStatus().then((state) => { if (generation === controllerGeneration) applyBluetoothState(state); })
@@ -2412,6 +2471,7 @@ document.querySelector("#bluetoothConnect")!.addEventListener("click", () => {
 document.querySelector("#cameraHome")!.addEventListener("click", () => { computerReconnect.cancel(); void stop().then(() => showRole("home")); });
 document.querySelector("#startButton")!.addEventListener("click", () => { rememberRole("camera"); if (rememberedComputer) computerReconnect.activate("camera"); else void start(); }); document.querySelector("#stopButton")!.addEventListener("click", () => { computerReconnect.cancel(); void stop(); });
 gameControlButton.addEventListener("click", () => { if (gameOutputEnabled !== null) requestGameOutput(!gameOutputEnabled); });
+handheldGameControlButton.addEventListener("click", () => { if (gameOutputEnabled !== null) requestGameOutput(!gameOutputEnabled); });
 function updateZoneToggle(): void {
   toggleZonesButton.setAttribute("aria-pressed", String(zoneOverlayEnabled));
   toggleZonesButton.classList.toggle("selected", zoneOverlayEnabled);
@@ -2424,8 +2484,8 @@ toggleZonesButton.addEventListener("click", () => {
   if (!zoneOverlayEnabled) context.clearRect(0, 0, canvas.width, canvas.height);
   lastOverlayAt = 0;
 });
-hideStatus.addEventListener("click", () => { runtimeCard.classList.add("hidden"); showStatus.classList.remove("hidden"); overlayRenderingEnabled = false; });
-showStatus.addEventListener("click", () => { if (!running) return; runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); overlayRenderingEnabled = true; lastOverlayAt = 0; });
+hideStatus.addEventListener("click", () => { runtimeCard.classList.add("hidden"); showStatus.classList.remove("hidden"); hideStatus.setAttribute("aria-expanded", "false"); overlayRenderingEnabled = false; });
+showStatus.addEventListener("click", () => { if (!running) return; runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); hideStatus.setAttribute("aria-expanded", "true"); overlayRenderingEnabled = true; lastOverlayAt = 0; });
 modelSelect.value = modelChoice;
 modelSelect.addEventListener("change", () => { modelChoice = modelSelect.value === "lite" ? "lite" : "full"; localStorage.setItem("motionbridge-model", modelChoice); updateModelLabel(); });
 cameraDeviceSelect.addEventListener("change", () => void chooseCamera(cameraDeviceSelect.value));
@@ -2440,7 +2500,7 @@ upsideDownButton.addEventListener("click", () => {
   try { localStorage.setItem("motionbridge-upside-down", upsideDown ? "1" : "0"); } catch { /* 存不下只影响下次打开 */ }
   syncScreen();
 }); voiceToggle.addEventListener("change", () => { localStorage.setItem("motionbridge-voice-auto", voiceToggle.checked ? "1" : "0"); void (voiceToggle.checked ? startVoiceControl() : stopVoiceControl()); });
-document.querySelector("#centerSensor")!.addEventListener("click", () => { handheldRecenter = true; gyroCalibrationPending = modeInput.value === "shooter"; gyroMouse.reset(); document.querySelector("#sensorState")!.textContent = modeInput.value === "shooter" ? "请静握 1 秒，校准陀螺仪" : "正在居中"; }); document.querySelector("#stopHandheld")!.addEventListener("click", () => void stopHandheld());
+document.querySelector("#centerSensor")!.addEventListener("click", () => { if (!handheldConnected) return; handheldRecenter = true; gyroCalibrationPending = modeInput.value === "shooter"; gyroMouse.reset(); document.querySelector("#sensorState")!.textContent = modeInput.value === "shooter" ? "请静握 1 秒，校准陀螺仪" : "正在居中"; }); document.querySelector("#stopHandheld")!.addEventListener("click", () => void stopHandheld());
 document.querySelectorAll<HTMLElement>("[data-pad]").forEach((button) => { button.addEventListener("pointerdown", (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); padState.add(button.dataset.pad!); button.classList.add("pressed"); }); const release = () => { padState.delete(button.dataset.pad!); button.classList.remove("pressed"); }; button.addEventListener("pointerup", release); button.addEventListener("pointercancel", release); button.addEventListener("lostpointercapture", release); });
 const stick = document.querySelector<HTMLElement>("#stick")!; stick.addEventListener("pointerdown", (event) => { stick.setPointerCapture(event.pointerId); updateStick(event); }); stick.addEventListener("pointermove", (event) => { if (stick.hasPointerCapture(event.pointerId)) updateStick(event); }); const releaseStick = () => { stickState = { x: 0, y: 0 }; stick.querySelector<HTMLElement>("i")!.style.transform = "translate(0,0)"; }; stick.addEventListener("pointerup", releaseStick); stick.addEventListener("pointercancel", releaseStick);
 window.addEventListener("resize", resizeCanvas);

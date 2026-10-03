@@ -188,16 +188,27 @@ details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
 
 /* ---- 摄像头运行中：底部一块控制条 ----------------------------------------------------- */
 .hud { pointer-events: auto; position: fixed; z-index: 4; left: 50%; bottom: max(10px, env(safe-area-inset-bottom)); transform: translateX(-50%); display: grid; gap: 10px; width: min(560px, calc(100vw - 16px)); padding: 12px; border-radius: 24px; background: var(--hud); }
-.hud-status { display: flex; align-items: center; gap: 10px; min-height: 28px; padding: 0 4px; }
+.hud-status { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 48px; align-items: center; column-gap: 6px; min-height: 48px; padding-left: 4px; }
+.hud-recognition { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.hud-connection { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px 10px; min-width: 0; text-align: right; }
+.hud[data-link="online"] .hud-connection:has(.voice-state.off) { display: none; }
+.hud[data-link="online"] .hud-status:has(.voice-state.off) { grid-template-columns: minmax(0, 1fr) 48px; }
+.hud-collapse { grid-column: -2 / -1; grid-row: 1; align-self: start; display: grid; place-items: center; width: 48px; min-height: 48px; padding: 0; border-radius: 50%; background: transparent; color: var(--text-2); }
+.hud-collapse:active { background: var(--fill); }
+@media (max-width: 360px) {
+  .hud-status { grid-template-columns: minmax(0, 1fr) 48px; }
+  .hud-connection { grid-column: 1; justify-content: flex-start; text-align: left; }
+  .hud-collapse { grid-row: 1 / span 2; }
+}
 .hud-status .dot { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--text-3); }
 .hud[data-link="online"] .dot { background: var(--ok); }
 .hud[data-link="connecting"] .dot { background: var(--warn); }
 .hud[data-link="error"] .dot { background: var(--danger); }
-#sendState { flex: 1; min-width: 0; overflow: hidden; font-size: 17px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
-#panelConnection { flex: none; color: var(--text-2); font-size: 13px; font-weight: 600; }
+#sendState { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 17px; font-weight: 700; }
+#panelConnection { min-width: 0; overflow-wrap: anywhere; color: var(--text-2); font-size: 13px; font-weight: 600; }
 /* 连上了就只剩绿点；没连上才写字。 */
 .hud[data-link="online"] #panelConnection { display: none; }
-.voice-state { flex: 0 1 auto; max-width: 48%; overflow: hidden; color: var(--text-2); font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
+.voice-state { min-width: 0; overflow-wrap: anywhere; color: var(--text-2); font-size: 13px; }
 .voice-state.off { display: none; }
 .voice-state.listening { color: var(--ok); }
 .voice-state.connecting { color: var(--warn); }
@@ -218,7 +229,7 @@ details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
 .camera-switch-state { padding: 0 4px; color: var(--danger); font-size: 13px; }
 .camera-switch-state:empty { display: none; }
 
-.status-show { pointer-events: auto; position: fixed; z-index: 6; right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 10px 16px 10px 12px; border-radius: 999px; background: var(--hud); font-size: 14px; }
+.status-show { pointer-events: auto; position: fixed; z-index: 6; right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); display: grid; place-items: center; width: 48px; min-height: 48px; padding: 0; border-radius: 50%; background: var(--hud); }
 
 /* 没看到人的时候才出现：告诉人往哪儿站。 */
 .guide { position: fixed; z-index: 3; top: 46%; left: 50%; width: min(60vw, 560px); aspect-ratio: 1.25; transform: translate(-50%, -50%); border: 2px dashed rgba(255, 255, 255, .4); border-radius: 40% 40% 18% 18%; pointer-events: none; }
@@ -249,18 +260,30 @@ details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
 .handheld-card { pointer-events: auto; position: fixed; inset: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); display: flex; flex-direction: column; gap: 10px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; }
 .pad-bar { display: flex; align-items: center; gap: 8px; }
 .pad-bar .back-button { margin: 0; }
-.pad-bar .badge { flex: 1; min-width: 0; justify-content: center; background: var(--card); }
-.pill-button { min-height: 36px; padding: 6px 14px; border-radius: 999px; font-size: 14px; }
+.handheld-connection-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; }
+.handheld-connection-row .back-button { min-height: 48px; padding: 6px 0; font-size: 14px; }
+.pad-bar .badge { min-width: 0; min-height: 48px; justify-content: center; padding: 8px 10px; background: var(--card); }
+.pad-bar .badge b { white-space: normal; overflow-wrap: anywhere; }
+.handheld-primary-action { min-width: 0; }
+@media (max-width: 360px) {
+  .handheld-connection-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .handheld-connection-row .back-button { grid-column: 1; grid-row: 1; justify-self: start; }
+  .handheld-primary-action { grid-column: 2; grid-row: 1; }
+  .handheld-connection-row .badge { grid-column: 1 / -1; grid-row: 2; }
+}
+.pill-button { min-height: 48px; padding: 8px 10px; border-radius: 999px; font-size: 14px; }
+.pill-button[hidden] { display: none; }
+.handheld-primary-action #scanComputerHandheld { background: var(--accent); color: #fff; }
 .pad-mode { display: flex; align-items: center; gap: 10px; }
 .pad-mode .seg { flex: 1; }
-.controller-options label { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 13px; white-space: nowrap; }
-.controller-options select { width: auto; min-height: 40px; padding: 6px 30px 6px 12px; background-position: right 11px center; font-size: 15px; }
-.handheld-card.shooter-mode .controller-options { display: none; }
 #sensorState { min-height: 18px; padding: 0 4px; overflow: hidden; color: var(--text-2); font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
 
 .panel { flex: none; padding: 2px 14px; border-radius: 16px; background: var(--card); }
 .panel[open] { padding-bottom: 14px; }
 .panel summary { font-size: 15px; font-weight: 600; }
+.handheld-card details > summary { min-height: 48px; gap: 10px; }
+.handheld-card details > summary::after { flex: none; transform: rotate(-135deg) translateY(-2px); }
+.handheld-card details[open] > summary::after { transform: rotate(45deg) translateY(-2px); }
 .bluetooth-panel p { margin-bottom: 10px; color: var(--text-2); font-size: 14px; line-height: 1.5; }
 .bluetooth-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .bluetooth-actions select { grid-column: 1 / -1; min-width: 0; }
@@ -271,11 +294,12 @@ details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
 .handheld-more-body { display: grid; gap: 10px; }
 .handheld-more-body .field { margin-top: 0; }
 .handheld-more-body > span { color: var(--text-2); font-size: 13px; }
+.connection-scan { min-height: 48px; color: var(--accent); }
+.handheld-more .bluetooth-panel { border-top: 1px solid var(--line); }
 
 /* 蓝牙时没有电脑推来的触发消息，触发牌没东西可显示。 */
 .handheld-card.bluetooth-mode .handheld-trigger-board,
-.handheld-card.shooter-mode .handheld-trigger-board,
-.handheld-card.shooter-mode .handheld-more { display: none; }
+.handheld-card.shooter-mode .handheld-trigger-board { display: none; }
 .handheld-trigger-board { flex: none; }
 
 .shoulders { display: grid; flex: none; grid-template-columns: repeat(4, 1fr); gap: 8px; }

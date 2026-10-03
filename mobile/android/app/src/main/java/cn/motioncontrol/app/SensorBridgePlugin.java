@@ -36,7 +36,10 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
             return;
         }
         boolean shooter = "shooter".equals(call.getString("mode", "gamepad"));
-        Sensor rotation = manager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+        // 手柄只使用相对持握姿态，优先不依赖磁力计的游戏姿态。
+        // 鼠标保留原姿态参考，避免已保存的校准四元数跨参考系失效。
+        Sensor rotation = shooter ? null : manager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
+        if (rotation == null) rotation = manager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
         Sensor gyroscope = manager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
         Sensor linear = manager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
         Sensor accelerometer = manager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
@@ -46,6 +49,10 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
         }
         synchronized (this) { samples.reset(SystemClock.elapsedRealtimeNanos()); }
         boolean rotationRegistered = registerSensor(rotation);
+        if (!shooter && !rotationRegistered && rotation != null
+                && rotation.getType() == Sensor.TYPE_GAME_ROTATION_VECTOR) {
+            rotationRegistered = registerSensor(manager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR));
+        }
         if (!shooter && !rotationRegistered) {
             stopSensors();
             call.reject("无法启动手机姿态传感器");
@@ -118,7 +125,8 @@ public class SensorBridgePlugin extends Plugin implements SensorEventListener {
     public void onSensorChanged(SensorEvent event) {
         synchronized (this) {
             if (!running) return;
-            if (event.sensor.getType() == Sensor.TYPE_ROTATION_VECTOR) {
+            if (event.sensor.getType() == Sensor.TYPE_ROTATION_VECTOR
+                    || event.sensor.getType() == Sensor.TYPE_GAME_ROTATION_VECTOR) {
                 SensorManager.getQuaternionFromVector(androidQuaternion, event.values);
                 quaternion[0] = androidQuaternion[1]; quaternion[1] = androidQuaternion[2];
                 quaternion[2] = androidQuaternion[3]; quaternion[3] = androidQuaternion[0];

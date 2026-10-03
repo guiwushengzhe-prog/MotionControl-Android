@@ -172,9 +172,165 @@ describe("camera lifecycle through actual UI events", () => {
     const first = cameraStream(); getUserMedia.mockResolvedValueOnce(first.stream);
     await enterCamera(); await beginCamera();
     mocks.scan.mockImplementation(async () => { expect(first.track.stop).toHaveBeenCalledOnce(); return null; });
-    click("#scanComputerRuntime"); await vi.dynamicImportSettled(); await flush();
+    click("#scanComputerCamera"); await vi.dynamicImportSettled(); await flush();
     await vi.advanceTimersByTimeAsync(110); await flush();
     expect(mocks.scan).toHaveBeenCalledOnce(); expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+  it("扫码选机后无人入镜也能持续保持电脑心跳", async () => {
+    const instance = "0123456789ab";
+    mocks.plugins.LocalNetwork.probe = vi.fn(async () => ({ ok: true, instance }));
+    mocks.scan.mockResolvedValue(JSON.stringify({ type: "motioncontrol-connect", version: 1, instance,
+      name: "我的电脑", candidates: [{ host: "192.168.1.2", port: 8765, kind: "lan" }] }));
+    await enterCamera(); click("#scanComputerCamera"); await vi.dynamicImportSettled(); await flush();
+    await vi.advanceTimersByTimeAsync(110); await flush();
+    const ws = SocketStub.sockets[0];
+    const send = ws.send.bind(ws);
+    ws.send = body => { send(body); const message = JSON.parse(body); if (message.type === "clock_sync") ws.message({ ...message, server_ms: Date.now() }); };
+    ws.open();
+    const frames = setInterval(() => { element("#camera").currentTime += .5; videoFrame(); }, 500);
+    await vi.advanceTimersByTimeAsync(30000); await flush(); clearInterval(frames);
+    expect(SocketStub.sockets).toHaveLength(1);
+    expect(ws.readyState).toBe(SocketStub.OPEN);
+    expect(element("#runtimeCard").dataset.link).toBe("online");
+    expect(ws.sent.map(body => JSON.parse(body)).filter(message => message.type === "clock_sync").length).toBeGreaterThanOrEqual(10);
+  });
+  it("蓝牙手柄也能扫码并改用同一台电脑的网络连接", async () => {
+    const instance = "0123456789ab";
+    mocks.plugins.LocalNetwork.probe = vi.fn(async () => ({ ok: true, instance }));
+    mocks.scan.mockResolvedValue(JSON.stringify({ type: "motioncontrol-connect", version: 1, instance,
+      name: "我的电脑", candidates: [{ host: "192.168.1.2", port: 8765, kind: "lan" }] }));
+    Object.assign(mocks.plugins.BluetoothController, {
+      start: async () => ({ supported: true, enabled: true, registered: true, connected: false, connecting: false,
+        devices: [], sessionId: 1, message: "等待蓝牙连接" }),
+      addListener: async () => ({ remove: async () => {} }),
+    });
+    element("#handheldTransport").value = "bluetooth";
+    click("#handheldRole"); await flush();
+    expect(SocketStub.sockets).toHaveLength(0);
+    expect(element("#scanComputerHandheld").hidden).toBe(false);
+    expect(element("#centerSensor").hidden).toBe(true);
+    click("#scanComputerHandheld"); await vi.dynamicImportSettled(); await flush();
+    expect(mocks.scan).toHaveBeenCalledOnce();
+    expect(element("#handheldTransport").value).toBe("network");
+    expect(SocketStub.sockets).toHaveLength(1);
+    expect(JSON.parse(localStorage.getItem("motionbridge-remembered-computer")!).instance).toBe(instance);
+    const ws = SocketStub.sockets[0]; ws.open();
+    await vi.advanceTimersByTimeAsync(16); await flush();
+    expect(ws.sent.map(body => JSON.parse(body)).some(message => message.type === "sensor_frame")).toBe(true);
+    expect(element("#handheldConnection b").textContent).toContain("已连接");
+    expect(element("#scanComputerHandheld").hidden).toBe(true);
+    expect(element("#centerSensor").hidden).toBe(false);
+  });
+  it("蓝牙鼠标扫码后走网络发送鼠标帧，不会误发成手柄", async () => {
+    const instance = "0123456789ab";
+    const { GyroMouse } = await import("./gyro-mouse");
+    vi.spyOn(GyroMouse.prototype, "update").mockReturnValue({ dx: 5, dy: -3, calibrating: false });
+    mocks.plugins.LocalNetwork.probe = vi.fn(async () => ({ ok: true, instance }));
+    mocks.scan.mockResolvedValue(JSON.stringify({ type: "motioncontrol-connect", version: 1, instance,
+      name: "我的电脑", candidates: [{ host: "192.168.1.2", port: 8765, kind: "lan" }] }));
+    Object.assign(mocks.plugins.BluetoothController, {
+      start: async () => ({ supported: true, enabled: true, registered: true, connected: false, connecting: false,
+        devices: [], sessionId: 1, message: "等待蓝牙连接" }),
+      addListener: async () => ({ remove: async () => {} }), sendMouse: vi.fn(async () => ({ sent: true })),
+    });
+    element("#handheldTransport").value = "bluetooth"; element("#handheldMode").value = "shooter";
+    click("#handheldRole"); await flush();
+    click("#scanComputerHandheld"); await vi.dynamicImportSettled(); await flush();
+    expect(element("#handheldTransport").value).toBe("network");
+    const ws = SocketStub.sockets.at(-1)!; ws.open();
+    await vi.advanceTimersByTimeAsync(16); await flush();
+    const messages = ws.sent.map(body => JSON.parse(body));
+    const mouse = messages.find(message => message.type === "mouse_frame");
+    expect(mouse).toMatchObject({ role: "mouse", dx: 5, dy: -3, buttons: 0 });
+    expect(mouse.sent_at_ms - mouse.captured_at_ms).toBe(40);
+    expect(messages.some(message => message.type === "sensor_frame")).toBe(false);
+    expect(mocks.plugins.BluetoothController.sendMouse).not.toHaveBeenCalled();
+  });
+  it("网络鼠标的开始和暂停按钮经手持连接请求电脑开关", async () => {
+    element("#handheldMode").value = "shooter";
+    click("#handheldRole"); await flush();
+    const ws = SocketStub.sockets[0]; ws.open();
+    expect(element("#handheldGameControlButton").classes.has("hidden")).toBe(false);
+    expect(element("#handheldGameControlButton").disabled).toBe(true);
+    ws.message({ type: "game_output_state_v1", enabled: false });
+    expect(element("#handheldGameControlButton").textContent).toBe("开始控制");
+    click("#handheldGameControlButton");
+    let requests = ws.sent.map(body => JSON.parse(body)).filter(message => message.type === "game_output_control");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ role: "mouse", enabled: true });
+    expect(element("#handheldGameControlButton").disabled).toBe(true);
+    ws.message({ type: "game_output_state_v1", enabled: true });
+    expect(element("#handheldGameControlButton").textContent).toBe("暂停控制");
+    click("#handheldGameControlButton");
+    requests = ws.sent.map(body => JSON.parse(body)).filter(message => message.type === "game_output_control");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toMatchObject({ role: "mouse", enabled: false });
+    ws.close(); ws.dispatchEvent(new Event("close")); await flush();
+    expect(element("#handheldGameControlButton").disabled).toBe(true);
+    expect(element("#handheldGameControlButton").textContent).toBe("连接电脑中");
+  });
+  it("蓝牙真正连接后顶栏显示校准，未连接时显示扫码", async () => {
+    let stateListener!: (state: unknown) => void;
+    const state = { supported: true, enabled: true, registered: true, connected: true, connecting: false,
+      devices: [], sessionId: 1, message: "已连接" };
+    Object.assign(mocks.plugins.BluetoothController, {
+      start: async () => state,
+      addListener: async (_event: string, listener: (state: unknown) => void) => { stateListener = listener; return { remove: async () => {} }; },
+      sendGamepad: async () => ({ sent: true }),
+    });
+    element("#handheldTransport").value = "bluetooth";
+    click("#handheldRole"); await flush();
+    expect(element("#scanComputerHandheld").hidden).toBe(true);
+    expect(element("#centerSensor").hidden).toBe(false);
+    stateListener({ ...state, connected: false, message: "电脑已断开" }); await flush();
+    expect(element("#scanComputerHandheld").hidden).toBe(false);
+    expect(element("#centerSensor").hidden).toBe(true);
+  });
+  it("取消扫码会恢复蓝牙手柄，不会被已记住的电脑改成网络", async () => {
+    const instance = "0123456789ab";
+    mocks.plugins.LocalNetwork.probe = vi.fn(async () => ({ ok: true, instance }));
+    mocks.scan.mockResolvedValueOnce(JSON.stringify({ type: "motioncontrol-connect", version: 1, instance,
+      name: "我的电脑", candidates: [{ host: "192.168.1.2", port: 8765, kind: "lan" }] })).mockResolvedValue(null);
+    await enterCamera(); click("#scanComputerCamera"); await vi.dynamicImportSettled(); await flush();
+    await vi.advanceTimersByTimeAsync(110); await flush();
+    const startBluetooth = vi.fn(async () => ({ supported: true, enabled: true, registered: true,
+      connected: true, connecting: false, devices: [], sessionId: 1, message: "已连接" }));
+    Object.assign(mocks.plugins.BluetoothController, {
+      start: startBluetooth,
+      addListener: async () => ({ remove: async () => {} }), sendGamepad: async () => ({ sent: true }),
+    });
+    element("#handheldTransport").value = "bluetooth";
+    click("#handheldRole"); await flush();
+    expect(startBluetooth).toHaveBeenCalledOnce();
+    click("#scanComputerHandheld"); await vi.dynamicImportSettled(); await flush();
+    expect(mocks.scan).toHaveBeenCalledTimes(2);
+    expect(element("#handheldTransport").value).toBe("bluetooth");
+    expect(startBluetooth).toHaveBeenCalledTimes(2);
+    expect(element("#handheldConnection b").textContent).toContain("蓝牙已连接");
+  });
+  it("扫码手柄断线后持续重试，电脑恢复就能重连", async () => {
+    const instance = "0123456789ab";
+    let online = true;
+    mocks.plugins.LocalNetwork.probe = vi.fn(async () => ({ ok: online, instance }));
+    mocks.scan.mockResolvedValue(JSON.stringify({ type: "motioncontrol-connect", version: 1, instance,
+      name: "我的电脑", candidates: [{ host: "192.168.1.2", port: 8765, kind: "lan" }] }));
+    click("#handheldRole"); await flush();
+    click("#scanComputerHandheld"); await vi.dynamicImportSettled(); await flush();
+    const ws = SocketStub.sockets.at(-1)!; ws.open();
+    online = false; ws.close(); ws.dispatchEvent(new Event("close")); await flush();
+    expect(element("#scanComputerHandheld").hidden).toBe(false);
+    expect(element("#centerSensor").hidden).toBe(true);
+    await vi.advanceTimersByTimeAsync(6000); await flush();
+    const beforeRecovery = SocketStub.sockets.length;
+    online = true; await vi.advanceTimersByTimeAsync(3000); await flush();
+    expect(SocketStub.sockets.length).toBeGreaterThan(beforeRecovery);
+    const replacement = SocketStub.sockets.at(-1)!; replacement.open();
+    await vi.advanceTimersByTimeAsync(16); await flush();
+    expect(replacement.sent.map(body => JSON.parse(body)).some(message => message.type === "sensor_frame")).toBe(true);
+    click("#stopHandheld"); await flush();
+    const stopped = SocketStub.sockets.length;
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(SocketStub.sockets).toHaveLength(stopped);
   });
   it("stops a late camera open after the user returns home", async () => {
     const pending = deferred<MediaStream>(); const late = cameraStream(); getUserMedia.mockReturnValueOnce(pending.promise);
@@ -304,7 +460,7 @@ describe("camera lifecycle through actual UI events", () => {
         devices: [], sessionId: 1, message: "已连接" }),
       addListener: async () => ({ remove: async () => {} }), sendMouse: async () => ({ sent: true }),
     });
-    element("#handheldMode").value = "shooter";
+    element("#handheldMode").value = "shooter"; element("#handheldTransport").value = "bluetooth";
     click("#handheldRole"); await flush();
     for (const age of [-1, NaN, Infinity, 151]) {
       sample = { ...sample, acceleration_age_ms: age, rotation_age_ms: age };
