@@ -176,6 +176,8 @@ details > summary { display: flex; align-items: center; justify-content: space-b
 details > summary::-webkit-details-marker { display: none; }
 details > summary::after { content: ""; width: 7px; height: 7px; margin-right: 6px; border-right: 2px solid var(--text-3); border-bottom: 2px solid var(--text-3); transform: rotate(45deg) translateY(-2px); transition: transform .2s; }
 details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
+#setupMore > summary::after { transform: rotate(-135deg) translateY(-2px); }
+#setupMore[open] > summary::after { transform: rotate(45deg) translateY(-2px); }
 .more { margin-top: 16px; padding-top: 2px; border-top: 1px solid var(--line); }
 .more summary { color: var(--text-2); font-size: 15px; }
 .field { display: grid; gap: 6px; margin-top: 12px; color: var(--text-2); font-size: 13px; }
@@ -290,7 +292,9 @@ details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
 .bluetooth-actions button { min-height: 44px; font-size: 14px; }
 #bluetoothConnect { background: var(--accent); color: #fff; }
 .bluetooth-panel small { display: block; margin-top: 10px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
-.shooter-settings label { display: grid; gap: 4px; margin-top: 8px; color: var(--text-2); font-size: 13px; }
+.shooter-settings { display: grid; gap: 12px; padding: 8px 0 12px; border-bottom: 1px solid var(--line); }
+.shooter-settings label { display: grid; gap: 6px; color: var(--text-2); font-size: 14px; }
+.shooter-settings input { width: 100%; min-width: 0; }
 .handheld-more-body { display: grid; gap: 10px; }
 .handheld-more-body .field { margin-top: 0; }
 .handheld-more-body > span { color: var(--text-2); font-size: 13px; }
@@ -301,6 +305,11 @@ details[open] > summary::after { transform: rotate(-135deg) translateY(-2px); }
 .handheld-card.bluetooth-mode .handheld-trigger-board,
 .handheld-card.shooter-mode .handheld-trigger-board { display: none; }
 .handheld-trigger-board { flex: none; }
+.handheld-more .handheld-trigger-board { justify-items: start; gap: 6px; padding: 12px; border-radius: 12px; background: var(--fill); }
+.handheld-more .trigger-board-key { font-size: 28px; text-align: left; }
+.handheld-more .trigger-board-name { font-size: 13px; text-align: left; }
+.feedback-title { font-size: 14px; font-weight: 600; }
+.feedback-help { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.5; }
 
 .shoulders { display: grid; flex: none; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .shoulders button { min-height: 60px; border-radius: 16px; font-size: 20px; font-weight: 700; touch-action: none; }

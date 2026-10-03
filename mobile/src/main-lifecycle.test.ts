@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ plugins: {} as Record<string, any>, createPose: vi.fn(), createHand: vi.fn(), createWorker: vi.fn(), scan: vi.fn() }));
+const mocks = vi.hoisted(() => ({ plugins: {} as Record<string, any>, createPose: vi.fn(), createHand: vi.fn(), createWorker: vi.fn(), scan: vi.fn(),
+  shooterChange: null as null | ((state: any) => void) }));
 vi.mock("./qr-scanner", () => ({ scanConnectionCode: mocks.scan }));
 vi.mock("./vision.worker?worker", () => ({ default: class { constructor() { return mocks.createWorker(); } } }));
 vi.mock("@capacitor/core", () => ({
@@ -16,7 +17,9 @@ vi.mock("@mediapipe/tasks-vision", () => ({
   HandLandmarker: { createFromOptions: mocks.createHand },
   DrawingUtils: class { drawConnectors() {} drawLandmarks() {} },
 }));
-vi.mock("./shooter-controls", () => ({ SHOOTER_CONTROLS_HTML: "", createShooterControls: () => ({ reset() {}, destroy() {} }) }));
+vi.mock("./shooter-controls", () => ({ SHOOTER_CONTROLS_HTML: "", createShooterControls: (_element: unknown, change: (state: any) => void) => {
+  mocks.shooterChange = change; return { reset() {}, destroy() {} };
+} }));
 
 // A small event/element harness exercises the production module's real buttons,
 // asynchronous startup and socket listeners without requesting physical devices.
@@ -269,6 +272,89 @@ describe("camera lifecycle through actual UI events", () => {
     expect(element("#handheldGameControlButton").disabled).toBe(true);
     expect(element("#handheldGameControlButton").textContent).toBe("连接电脑中");
   });
+  it("网络手柄也显示开始控制并使用同一电脑输出开关", async () => {
+    click("#handheldRole"); await flush();
+    const ws = SocketStub.sockets[0]; ws.open();
+    ws.message({ type: "game_output_state_v1", enabled: false });
+    expect(element("#handheldGameControlButton").classes.has("hidden")).toBe(false);
+    expect(element("#handheldGameControlButton").textContent).toBe("开始控制");
+    click("#handheldGameControlButton");
+    expect(ws.sent.map(body => JSON.parse(body)).filter(message => message.type === "game_output_control"))
+      .toEqual([expect.objectContaining({ role: "sensor", enabled: true })]);
+    ws.message({ type: "game_output_state_v1", enabled: true });
+    expect(element("#handheldGameControlButton").textContent).toBe("暂停控制");
+  });
+  it("切换手柄鼠标保留网络连接及控制状态，旧采样不进入新模式", async () => {
+    const delayedStart = deferred<void>();
+    mocks.plugins.SensorBridge.start = vi.fn(async ({ mode }) => { if (mode === "shooter") await delayedStart.promise; });
+    click("#handheldRole"); await flush();
+    const ws = SocketStub.sockets[0]; ws.open(); ws.message({ type: "game_output_state_v1", enabled: true });
+    const lateSample = deferred<any>();
+    const fresh = await mocks.plugins.SensorBridge.getLatest();
+    mocks.plugins.SensorBridge.getLatest = vi.fn().mockReturnValueOnce(lateSample.promise).mockResolvedValue(fresh);
+    await vi.advanceTimersByTimeAsync(16); await flush();
+    element("#handheldMode").value = "shooter";
+    element("#handheldMode").dispatchEvent(new Event("change")); await flush();
+    expect(element("#scanComputerHandheld").hidden).toBe(true);
+    expect(element("#centerSensor").hidden).toBe(false);
+    expect(element("#handheldGameControlButton").textContent).toBe("暂停控制");
+    expect(SocketStub.sockets).toHaveLength(1); expect(ws.readyState).toBe(SocketStub.OPEN);
+    const released = ws.sent.map(body => JSON.parse(body)).filter(message => message.type === "sensor_frame");
+    expect(released).toEqual([expect.objectContaining({ touches: [], recenter: true,
+      quaternion: { x: 0, y: 0, z: 0, w: 1 }, rotation_rate: { x: 0, y: 0, z: 0 } })]);
+    delayedStart.resolve(); await flush(); lateSample.resolve(fresh); await flush();
+    await vi.advanceTimersByTimeAsync(16); await flush();
+    expect(ws.sent.map(body => JSON.parse(body)).filter(message => message.type === "sensor_frame")).toHaveLength(1);
+    expect(ws.sent.map(body => JSON.parse(body)).some(message => message.type === "mouse_frame")).toBe(true);
+    mocks.shooterChange!({ stick: { x: 0, y: 0 }, stickPressed: false, mouseButtons: 1 });
+    expect(ws.sent.map(body => JSON.parse(body)).at(-1)).toMatchObject({ type: "mouse_frame", buttons: 1 });
+    element("#handheldMode").value = "gamepad";
+    element("#handheldMode").dispatchEvent(new Event("change")); await flush();
+    expect(ws.sent.map(body => JSON.parse(body)).filter(message => message.type === "mouse_frame").at(-1))
+      .toMatchObject({ dx: 0, dy: 0, buttons: 0 });
+    expect(element("#handheldGameControlButton").textContent).toBe("暂停控制");
+    expect(SocketStub.sockets).toHaveLength(1);
+    ws.close(); ws.dispatchEvent(new Event("close")); await flush();
+    expect(element("#scanComputerHandheld").hidden).toBe(false);
+    expect(element("#handheldGameControlButton").disabled).toBe(true);
+  });
+  it("蓝牙切换模式保留配对连接与开关，暂停后不再发送手柄或鼠标报告", async () => {
+    const state = { supported: true, enabled: true, registered: true, connected: true, connecting: false,
+      devices: [], sessionId: 1, message: "已连接" };
+    Object.assign(mocks.plugins.BluetoothController, {
+      start: vi.fn(async () => state), stop: vi.fn(async () => state),
+      releaseAll: vi.fn(async () => state), addListener: async () => ({ remove: async () => {} }),
+      sendGamepad: vi.fn(async () => ({ sent: true })), sendMouse: vi.fn(async () => ({ sent: true })),
+    });
+    element("#handheldTransport").value = "bluetooth";
+    click("#handheldRole"); await flush();
+    expect(element("#handheldGameControlButton").textContent).toBe("开始控制");
+    await vi.advanceTimersByTimeAsync(16); await flush();
+    expect(mocks.plugins.BluetoothController.sendGamepad).not.toHaveBeenCalled();
+    click("#handheldGameControlButton"); await vi.advanceTimersByTimeAsync(16); await flush();
+    expect(mocks.plugins.BluetoothController.sendGamepad).toHaveBeenCalledOnce();
+    element("#handheldMode").value = "shooter";
+    element("#handheldMode").dispatchEvent(new Event("change"));
+    expect(element("#scanComputerHandheld").hidden).toBe(true);
+    await flush(); await vi.advanceTimersByTimeAsync(16); await flush();
+    expect(element("#handheldGameControlButton").textContent).toBe("暂停控制");
+    expect(mocks.plugins.BluetoothController.start).toHaveBeenCalledOnce();
+    expect(mocks.plugins.BluetoothController.stop).not.toHaveBeenCalled();
+    expect(mocks.plugins.BluetoothController.releaseAll).toHaveBeenCalledOnce();
+    expect(mocks.plugins.BluetoothController.sendMouse).toHaveBeenCalledOnce();
+    click("#handheldGameControlButton"); await flush();
+    const count = mocks.plugins.BluetoothController.sendMouse.mock.calls.length;
+    mocks.shooterChange!({ stick: { x: 0, y: 0 }, stickPressed: false, mouseButtons: 1 });
+    await vi.advanceTimersByTimeAsync(32); await flush();
+    expect(mocks.plugins.BluetoothController.sendMouse).toHaveBeenCalledTimes(count);
+    expect(mocks.plugins.BluetoothController.releaseAll).toHaveBeenCalledTimes(2);
+    expect(element("#handheldGameControlButton").textContent).toBe("开始控制");
+    element("#handheldMode").value = "gamepad";
+    element("#handheldMode").dispatchEvent(new Event("change")); await flush();
+    await vi.advanceTimersByTimeAsync(16); await flush();
+    expect(mocks.plugins.BluetoothController.sendGamepad).toHaveBeenCalledOnce();
+    expect(element("#handheldGameControlButton").textContent).toBe("开始控制");
+  });
   it("蓝牙真正连接后顶栏显示校准，未连接时显示扫码", async () => {
     let stateListener!: (state: unknown) => void;
     const state = { supported: true, enabled: true, registered: true, connected: true, connecting: false,
@@ -487,7 +573,8 @@ describe("camera lifecycle through actual UI events", () => {
       addListener: async () => ({ remove: async () => {} }), sendMouse: send, sendGamepad: send,
     });
     element("#handheldMode").value = mode; element("#handheldTransport").value = "bluetooth";
-    click("#handheldRole"); await flush(); await vi.advanceTimersByTimeAsync(16); await flush();
+    click("#handheldRole"); await flush(); click("#handheldGameControlButton");
+    await vi.advanceTimersByTimeAsync(16); await flush();
     expect(send).toHaveBeenCalledOnce();
     click("#stopHandheld"); await flush();
     element("#handheldMode").value = "gamepad"; element("#handheldTransport").value = "network";
