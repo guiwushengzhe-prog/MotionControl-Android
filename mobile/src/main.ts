@@ -14,7 +14,8 @@ import { VisionWorkerClient, supportsVisionWorker } from "./vision-worker-client
 import { HAND_CROP_SIDE, handCropBox, inferenceSize, packHandCrop, type HandSide, type PackedHand } from "./vision-core";
 import type { VisionResult } from "./vision-protocol";
 import "./style.css";
-import { ComputerReconnect, matchesComputer, parseConnectionCode, readComputer, saveComputer } from "./connection-code";
+import { ComputerReconnect, matchesComputer, parseConnectionCode, probeCanIdentify, readComputer, saveComputer } from "./connection-code";
+import { SEEN_WEB_VERSION_KEY, compareVersions, pendingReleases, readReleaseNotes, renderReleases, webUpdateLine } from "./release-notes";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
 type VoiceStatus = "off" | "connecting" | "listening" | "error" | "unauthorized";
@@ -137,6 +138,7 @@ app.innerHTML = `
         <label class="field">镜头<select id="cameraDeviceSelect"><option value="__auto__">自动</option></select></label>
         <label class="field">语音识别<select id="voiceRecognitionLocation"><option value="computer">电脑识别（用手机麦克风）</option><option value="phone">手机识别</option></select></label>
         <label class="field technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option></select></label>
+        <p class="web-update-line" id="webUpdateLine" hidden></p>
       </details>
     </section>
     <section class="hud hidden" id="runtimeCard" data-link="offline">
@@ -165,7 +167,8 @@ app.innerHTML = `
       <details id="handheldMore" class="panel handheld-more"><summary>更多</summary><div class="handheld-more-body"><div id="shooterSettings" class="shooter-settings hidden"><label>陀螺仪灵敏度<input id="gyroSensitivity" type="range" min="0.1" max="2" step="0.1" value="0.5"></label><label>摇杆灵敏度<input id="stickSensitivity" type="range" min="400" max="3600" step="200" value="1800"></label></div><label class="field">连接方式<select id="handheldTransport" aria-label="连接方式"><option value="network">网络连接</option><option value="bluetooth">蓝牙连接</option></select></label><button id="scanComputerHandheldMore" class="connection-scan" type="button">扫码连接 / 换电脑</button><details id="bluetoothPanel" class="bluetooth-panel hidden" open><summary>蓝牙设置</summary><p id="bluetoothStatus">先在电脑的蓝牙设置里添加这台手机，再选电脑连接。</p><div class="bluetooth-actions"><button id="bluetoothPair" type="button">允许电脑配对</button><button id="bluetoothRefresh" type="button">刷新设备</button><select id="bluetoothDevice" aria-label="已配对电脑"></select><button id="bluetoothConnect" type="button">连接电脑</button></div><small>蓝牙模拟的是通用手柄；只认 Xbox 手柄的游戏请用网络连接。</small></details><label class="field hidden" id="handheldAddressField">电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="自动查找"></label><label class="field">玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span>传感器 <b id="sensorFps">0 次/秒</b></span><div class="trigger-board handheld-trigger-board" id="handheldTriggerBoard" aria-live="polite"><strong class="feedback-title">电脑动作反馈</strong><p class="feedback-help">显示电脑识别的动作、口令和对应按键，不影响手动操作。</p><b class="trigger-board-key">—</b><span class="trigger-board-name">暂无动作或口令触发</span></div></div></details>
     </section>
   </main>
-  <div class="guide hidden" id="guide"><span>全身站进画面</span></div><div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头</b></div>`;
+  <div class="guide hidden" id="guide"><span>全身站进画面</span></div><div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头</b></div>
+  <div class="release-notes" id="releaseNotes" role="dialog" aria-modal="true" aria-labelledby="releaseNotesTitle" hidden><section><h2 id="releaseNotesTitle"></h2><div class="release-notes-body" id="releaseNotesBody"></div><button id="releaseNotesOk" class="start-primary" type="button">知道了</button></section></div>`;
 
 const video = document.querySelector<HTMLVideoElement>("#camera")!;
 const canvas = document.querySelector<HTMLCanvasElement>("#overlay")!;
@@ -834,7 +837,7 @@ async function answers(candidate: ServerCandidate, timeoutMs = SERVER_PROBE_TIME
     const result = await LocalNetwork.probe({
       host: candidate.host, port: candidate.port, timeoutMs,
     });
-    return matchesComputer(result, rememberedComputer);
+    if (probeCanIdentify(result, rememberedComputer)) return matchesComputer(result, rememberedComputer);
   } catch { /* 旧壳子，往下走 */ }
   try {
     if (rememberedComputer) {
@@ -1420,6 +1423,31 @@ function deviceHttpBase(): string {
   }
 }
 
+function showWebUpdateLine(text: string): void {
+  const line = document.querySelector<HTMLElement>("#webUpdateLine");
+  if (!line || !text) return;
+  line.textContent = text; line.hidden = false;
+}
+
+// 换上了新网页：功能更新弹一次说明，系统维护只在「更多设置」里留一句。
+async function announceWebUpdate(): Promise<void> {
+  let seen = "";
+  try { seen = localStorage.getItem(SEEN_WEB_VERSION_KEY) ?? ""; } catch { /* 读不到就按新装算 */ }
+  const remember = () => { try { localStorage.setItem(SEEN_WEB_VERSION_KEY, __WEB_VERSION__); } catch { /* 下次再记 */ } };
+  if (seen && compareVersions(seen, __WEB_VERSION__) >= 0) return;
+  // 头一回带着这个功能：APK 自带的网页就是 APK 那个版本，比它新说明是热更来的。
+  if (!seen) seen = (await App.getInfo().then(info => info?.version ?? "").catch(() => "")) || __WEB_VERSION__;
+  if (compareVersions(seen, __WEB_VERSION__) >= 0) { remember(); return; }
+  showWebUpdateLine(`已更新到网页 ${__WEB_VERSION__}`);
+  const releases = pendingReleases(await readReleaseNotes(), seen, __WEB_VERSION__);
+  const overlay = document.querySelector<HTMLElement>("#releaseNotes");
+  if (!releases.length || !overlay) { remember(); return; }
+  document.querySelector<HTMLElement>("#releaseNotesTitle")!.textContent = `已更新到网页 ${__WEB_VERSION__}`;
+  renderReleases(document.querySelector<HTMLElement>("#releaseNotesBody")!, releases);
+  overlay.hidden = false;
+  document.querySelector<HTMLButtonElement>("#releaseNotesOk")!.addEventListener("click", () => { overlay.hidden = true; remember(); }, { once: true });
+}
+
 // 一次连接只问一次。失败不拦任何事：APK 里那份永远是好的，照样能玩。
 async function checkWebUpdate(): Promise<void> {
   const base = deviceHttpBase();
@@ -1433,6 +1461,7 @@ async function checkWebUpdate(): Promise<void> {
       const result = await WebUpdate.sync({ baseUrl: base });
       if (webUpdateBase !== base || !cameraSession.isCurrent(session)) return;
       motionDebug.webUpdateState = result.state;
+      showWebUpdateLine(webUpdateLine(result.state, result.message));
       webUpdateChecked = result.state !== "failed";
       retry = result.state === "failed";
     } catch { retry = Capacitor.isPluginAvailable("WebUpdate"); }
@@ -2684,6 +2713,7 @@ void nativeCapabilitiesReady.then(async () => {
       showRole(rememberedComputer.role); computerReconnect.activate(rememberedComputer.role);
     }
   }
+  void announceWebUpdate();
 }).catch(error => {
   if (Capacitor.isPluginAvailable("WebUpdate")) motionDebug.bootHealthError = error instanceof Error ? error.message : String(error);
 });

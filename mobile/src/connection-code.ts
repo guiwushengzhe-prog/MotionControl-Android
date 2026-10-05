@@ -28,6 +28,14 @@ export function saveComputer(computer: RememberedComputer): void {
 export function matchesComputer(identity: { ok?: boolean; instance?: string }, computer: RememberedComputer | null): boolean {
   return Boolean(identity.ok) && (!computer || identity.instance === computer.instance);
 }
+/**
+ * 原生 probe 的回答能不能用来认"是不是扫码选定的那台"。加扫码之前的壳子也有 probe，
+ * 但答不出电脑编号（新壳子没有也给空字符串）；网页包热更会送到这些旧壳子上，拿它
+ * 判断就会把扫码选定的电脑一律当成别人家的、再也连不上。这时改走网页直接读。
+ */
+export function probeCanIdentify(identity: { ok?: boolean; instance?: unknown }, computer: RememberedComputer | null): boolean {
+  return !computer || !identity.ok || typeof identity.instance === "string";
+}
 
 /** 只有扫码选定的电脑才自动开上次模式；手动停止取消本次重试，保存的选择供下次打开。 */
 export class ComputerReconnect {
