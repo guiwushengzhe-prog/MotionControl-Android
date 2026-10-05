@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ComputerReconnect, matchesComputer, parseConnectionCode } from "./connection-code";
+import { ComputerReconnect, matchesComputer, parseConnectionCode, probeCanIdentify } from "./connection-code";
 
 const code = JSON.stringify({ type: "motioncontrol-connect", version: 1, instance: "0123456789ab",
   name: "电脑", candidates: [{ host: "192.168.1.2", port: 8765, kind: "lan" }] });
@@ -16,6 +16,13 @@ describe("选机与重连", () => {
     expect(matchesComputer({ ok: true }, computer)).toBe(false);
     expect(matchesComputer({ ok: true, instance: computer.instance }, computer)).toBe(true);
     expect(matchesComputer({ ok: true }, null)).toBe(true);
+  });
+  it("旧壳子的 probe 答不出电脑编号时改走直接读取，不能认定不是这台", () => {
+    const computer = parseConnectionCode(code);
+    expect(probeCanIdentify({ ok: true }, computer)).toBe(false);
+    expect(probeCanIdentify({ ok: true, instance: "" }, computer)).toBe(true);
+    expect(probeCanIdentify({ ok: false }, computer)).toBe(true);
+    expect(probeCanIdentify({ ok: true }, null)).toBe(true);
   });
   it("电脑还没开时自动重试；手动停止后不再重启", async () => {
     vi.useFakeTimers(); const attempt = vi.fn(async () => {});

@@ -14,7 +14,7 @@ import { VisionWorkerClient, supportsVisionWorker } from "./vision-worker-client
 import { HAND_CROP_SIDE, handCropBox, inferenceSize, packHandCrop, type HandSide, type PackedHand } from "./vision-core";
 import type { VisionResult } from "./vision-protocol";
 import "./style.css";
-import { ComputerReconnect, matchesComputer, parseConnectionCode, readComputer, saveComputer } from "./connection-code";
+import { ComputerReconnect, matchesComputer, parseConnectionCode, probeCanIdentify, readComputer, saveComputer } from "./connection-code";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
 type VoiceStatus = "off" | "connecting" | "listening" | "error" | "unauthorized";
@@ -834,7 +834,7 @@ async function answers(candidate: ServerCandidate, timeoutMs = SERVER_PROBE_TIME
     const result = await LocalNetwork.probe({
       host: candidate.host, port: candidate.port, timeoutMs,
     });
-    return matchesComputer(result, rememberedComputer);
+    if (probeCanIdentify(result, rememberedComputer)) return matchesComputer(result, rememberedComputer);
   } catch { /* 旧壳子，往下走 */ }
   try {
     if (rememberedComputer) {
