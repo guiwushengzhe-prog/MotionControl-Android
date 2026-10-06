@@ -142,6 +142,37 @@ public final class ManifestSync {
         return manifest.optString("digest", "");
     }
 
+    /**
+     * Fetch a single listed file and check it against its manifest entry.
+     *
+     * <p>For looking at a small description (the APK update's apk.json) before
+     * deciding whether the large file is worth downloading at all.
+     */
+    public static void fetchEntry(String baseUrl, String fileRoute, JSONObject entry, File output,
+                                  BooleanSupplier cancelled) throws IOException {
+        String relative = entry.optString("path", "").replace('\\', '/');
+        String expected = entry.optString("sha256", "");
+        long size = entry.optLong("size", -1L);
+        if (relative.isEmpty() || expected.isEmpty() || size < 0) throw new IOException("清单有坏条目");
+        String actual = fetchTo(baseUrl + fileRoute + URLEncoder.encode(relative, "UTF-8"), output, cancelled);
+        if (!expected.equalsIgnoreCase(actual) || output.length() != size) {
+            output.delete();
+            throw new IOException("文件校验不过：" + relative);
+        }
+    }
+
+    /** The listing digest recomputed from the entries, or "" if any entry is malformed. */
+    public static String listingDigest(JSONArray files) {
+        if (files == null || files.length() == 0) return "";
+        ListingDigest digest = new ListingDigest();
+        for (int index = 0; index < files.length(); index++) {
+            JSONObject entry = files.optJSONObject(index);
+            if (entry == null || !(entry.opt("size") instanceof Number)) return "";
+            digest.add(entry.optString("path", ""), entry.optLong("size"), entry.optString("sha256", ""));
+        }
+        return digest.hex();
+    }
+
     /** 删掉清单里没有的文件：换了一版之后上一版的残留会留在这里。 */
     private static void prune(File root, File directory, Set<String> wanted) {
         File[] entries = directory.listFiles();

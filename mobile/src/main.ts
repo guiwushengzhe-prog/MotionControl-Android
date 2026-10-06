@@ -16,6 +16,7 @@ import type { VisionResult } from "./vision-protocol";
 import "./style.css";
 import { ComputerReconnect, matchesComputer, parseConnectionCode, probeCanIdentify, readComputer, saveComputer } from "./connection-code";
 import { SEEN_WEB_VERSION_KEY, compareVersions, pendingReleases, readReleaseNotes, renderReleases, webUpdateLine } from "./release-notes";
+import { APP_UPDATE_CHECKED_KEY, APP_UPDATE_DISMISSED_KEY, appUpdateView, progressLine, shouldCheck, shouldPrompt, type AppUpdateResult } from "./app-update";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
 type VoiceStatus = "off" | "connecting" | "listening" | "error" | "unauthorized";
@@ -74,6 +75,7 @@ type MotionDebug = {
   cameraRecoveries: number;
   nativeApi: number;
   webUpdateState: string;
+  appUpdateState: string;
   bootHealthError: string | null;
   timingSamples: { atMs: number; copyMs: number; poseMs: number; handsMs: number; overlayMs: number; encodeMs: number; frameToSendMs: number; totalMs: number }[];
 };
@@ -139,6 +141,8 @@ app.innerHTML = `
         <label class="field">语音识别<select id="voiceRecognitionLocation"><option value="computer">电脑识别（用手机麦克风）</option><option value="phone">手机识别</option></select></label>
         <label class="field technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option></select></label>
         <p class="web-update-line" id="webUpdateLine" hidden></p>
+        <p class="web-update-line" id="appUpdateLine" hidden></p>
+        <button id="appUpdateButton" class="scan-computer" type="button" hidden>下载并安装</button>
       </details>
     </section>
     <section class="hud hidden" id="runtimeCard" data-link="offline">
@@ -168,7 +172,8 @@ app.innerHTML = `
     </section>
   </main>
   <div class="guide hidden" id="guide"><span>全身站进画面</span></div><div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头</b></div>
-  <div class="release-notes" id="releaseNotes" role="dialog" aria-modal="true" aria-labelledby="releaseNotesTitle" hidden><section><h2 id="releaseNotesTitle"></h2><div class="release-notes-body" id="releaseNotesBody"></div><button id="releaseNotesOk" class="start-primary" type="button">知道了</button></section></div>`;
+  <div class="release-notes" id="releaseNotes" role="dialog" aria-modal="true" aria-labelledby="releaseNotesTitle" hidden><section><h2 id="releaseNotesTitle"></h2><div class="release-notes-body" id="releaseNotesBody"></div><button id="releaseNotesOk" class="start-primary" type="button">知道了</button></section></div>
+  <div class="release-notes" id="appUpdateDialog" role="dialog" aria-modal="true" aria-labelledby="appUpdateTitle" hidden><section><h2 id="appUpdateTitle"></h2><div class="release-notes-body" id="appUpdateBody"></div><button id="appUpdateNow" class="start-primary" type="button">更新</button><button id="appUpdateLater" class="scan-computer" type="button">以后再说</button></section></div>`;
 
 const video = document.querySelector<HTMLVideoElement>("#camera")!;
 const canvas = document.querySelector<HTMLCanvasElement>("#overlay")!;
@@ -768,6 +773,7 @@ const motionDebug: MotionDebug = window.__motionDebug = {
   cameraRecoveries: 0,
   nativeApi: 1,
   webUpdateState: "idle",
+  appUpdateState: "idle",
   bootHealthError: null,
   timingSamples: [],
 };
@@ -1448,6 +1454,100 @@ async function announceWebUpdate(): Promise<void> {
   document.querySelector<HTMLButtonElement>("#releaseNotesOk")!.addEventListener("click", () => { overlay.hidden = true; remember(); }, { once: true });
 }
 
+// 新版 APK。网页能跟着电脑热更，原生部分只能换安装包：服务器上有更新的就在
+// 「更多设置」里留一行和一个按钮，功能更新另外弹一次说明；装不装由人在系统界面确认。
+const AppUpdate = registerPlugin<{
+  check(): Promise<AppUpdateResult>;
+  download(): Promise<AppUpdateResult>;
+  install(): Promise<AppUpdateResult>;
+  addListener(event: "appUpdateProgress", listener: (progress: { done: number; total: number }) => void): Promise<PluginListenerHandle>;
+}>("AppUpdate");
+let appUpdateResult: AppUpdateResult | null = null;
+let appUpdateTask: Promise<void> | null = null;
+let appUpdatePrompted = "";
+
+function showAppUpdate(result: AppUpdateResult | null): void {
+  appUpdateResult = result;
+  motionDebug.appUpdateState = result?.state ?? "idle";
+  const view = appUpdateView(result);
+  const line = document.querySelector<HTMLElement>("#appUpdateLine");
+  const button = document.querySelector<HTMLButtonElement>("#appUpdateButton");
+  if (line) { line.textContent = view.line; line.hidden = !view.line; }
+  if (button) { button.textContent = view.button; button.hidden = !view.button; button.disabled = false; }
+}
+
+function promptAppUpdate(result: AppUpdateResult): void {
+  const overlay = document.querySelector<HTMLElement>("#appUpdateDialog");
+  const notes = document.querySelector<HTMLElement>("#releaseNotes");
+  if (!overlay) return;
+  // 网页更新说明正开着：等人看完那个再弹，两层叠在一起谁也看不清。
+  if (notes && !notes.hidden) {
+    document.querySelector<HTMLButtonElement>("#releaseNotesOk")?.addEventListener("click", () => promptAppUpdate(result), { once: true });
+    return;
+  }
+  document.querySelector<HTMLElement>("#appUpdateTitle")!.textContent = `新版 App ${result.version ?? ""}`;
+  const body = document.querySelector<HTMLElement>("#appUpdateBody")!;
+  renderReleases(body, [{ version: result.version ?? "", sections: result.sections ?? [] }]);
+  appUpdatePrompted = result.version ?? "";
+  overlay.hidden = false;
+}
+
+// 每次打开问一下（没新版时最多六小时一次）。连不上服务器不提示：离线照样能玩。
+async function checkAppUpdate(forced = false): Promise<void> {
+  if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable("AppUpdate") || appUpdateTask) return;
+  let last: { at?: number; state?: string } | null = null;
+  try { last = JSON.parse(localStorage.getItem(APP_UPDATE_CHECKED_KEY) ?? "null"); } catch { /* 当作没查过 */ }
+  if (!shouldCheck(last, Date.now(), forced)) return;
+  const task = (async () => {
+    try {
+      const result = await AppUpdate.check();
+      if (result.state === "failed") { motionDebug.appUpdateState = `failed: ${result.message ?? ""}`; return; }
+      try { localStorage.setItem(APP_UPDATE_CHECKED_KEY, JSON.stringify({ at: Date.now(), state: result.state })); } catch { /* 下次再问 */ }
+      showAppUpdate(result);
+      let dismissed = "";
+      try { dismissed = localStorage.getItem(APP_UPDATE_DISMISSED_KEY) ?? ""; } catch { /* 当作没点过 */ }
+      if (shouldPrompt(result, dismissed)) promptAppUpdate(result);
+    } catch { /* 旧壳子没有这个插件 */ }
+  })();
+  appUpdateTask = task;
+  try { await task; } finally { if (appUpdateTask === task) appUpdateTask = null; }
+}
+
+async function startAppUpdate(): Promise<void> {
+  if (!Capacitor.isPluginAvailable("AppUpdate") || appUpdateTask) return;
+  const line = document.querySelector<HTMLElement>("#appUpdateLine");
+  const button = document.querySelector<HTMLButtonElement>("#appUpdateButton");
+  if (button) button.disabled = true;
+  const progress = (text: string) => { if (line) { line.textContent = text; line.hidden = false; } };
+  const task = (async () => {
+    let listener: PluginListenerHandle | null = null;
+    try {
+      const state = appUpdateResult?.state;
+      if (!(state === "ready" || state === "permission" || (state === "available" && appUpdateResult?.downloaded))) {
+        listener = await AppUpdate.addListener("appUpdateProgress", ({ done, total }) => progress(progressLine(done, total)));
+        progress(progressLine(0, 0));
+        const downloaded = await AppUpdate.download();
+        if (downloaded.state !== "ready") { showAppUpdate(downloaded); return; }
+      }
+      showAppUpdate(await AppUpdate.install());
+    } catch (error) {
+      showAppUpdate({ state: "failed", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      void listener?.remove();
+    }
+  })();
+  appUpdateTask = task;
+  try { await task; } finally { if (appUpdateTask === task) appUpdateTask = null; if (button) button.disabled = false; }
+}
+document.querySelector<HTMLButtonElement>("#appUpdateButton")?.addEventListener("click", () => { void startAppUpdate(); });
+document.querySelector<HTMLButtonElement>("#appUpdateNow")?.addEventListener("click", () => {
+  document.querySelector<HTMLElement>("#appUpdateDialog")!.hidden = true; void startAppUpdate();
+});
+document.querySelector<HTMLButtonElement>("#appUpdateLater")?.addEventListener("click", () => {
+  document.querySelector<HTMLElement>("#appUpdateDialog")!.hidden = true;
+  try { localStorage.setItem(APP_UPDATE_DISMISSED_KEY, appUpdatePrompted); } catch { /* 下次再问一遍 */ }
+});
+
 // 一次连接只问一次。失败不拦任何事：APK 里那份永远是好的，照样能玩。
 async function checkWebUpdate(): Promise<void> {
   const base = deviceHttpBase();
@@ -1462,6 +1562,8 @@ async function checkWebUpdate(): Promise<void> {
       if (webUpdateBase !== base || !cameraSession.isCurrent(session)) return;
       motionDebug.webUpdateState = result.state;
       showWebUpdateLine(webUpdateLine(result.state, result.message));
+      // 电脑上的网页要新壳子才跑得了：马上去问有没有新版 APK，好把按钮摆出来。
+      if (result.state === "incompatible") void checkAppUpdate(true);
       webUpdateChecked = result.state !== "failed";
       retry = result.state === "failed";
     } catch { retry = Capacitor.isPluginAvailable("WebUpdate"); }
@@ -2696,6 +2798,8 @@ void App.addListener("appStateChange", ({ isActive }) => {
     if (activeRole === "handheld" && !bluetoothSystemDialog) controllerSuspendTask = suspendHandheld();
   }
   else computerReconnect.resume();
+  // 系统安装界面被取消了就回到这里：重新看一眼，让「安装」按钮回来。
+  if (isActive && appUpdateResult?.state === "installing") void checkAppUpdate(true);
   if (!isActive) cancelBluetoothReconnect();
   else if (activeRole === "handheld") scheduleBluetoothReconnect();
   // Some WebViews delay visibilitychange; the native Activity is authoritative.
@@ -2714,6 +2818,7 @@ void nativeCapabilitiesReady.then(async () => {
     }
   }
   void announceWebUpdate();
+  void checkAppUpdate();
 }).catch(error => {
   if (Capacitor.isPluginAvailable("WebUpdate")) motionDebug.bootHealthError = error instanceof Error ? error.message : String(error);
 });
