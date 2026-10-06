@@ -14,7 +14,7 @@ import { VisionWorkerClient, supportsVisionWorker } from "./vision-worker-client
 import { HAND_CROP_SIDE, handCropBox, inferenceSize, packHandCrop, type HandSide, type PackedHand } from "./vision-core";
 import type { VisionResult } from "./vision-protocol";
 import "./style.css";
-import { ComputerReconnect, matchesComputer, parseConnectionCode, probeCanIdentify, readComputer, saveComputer } from "./connection-code";
+import { ComputerReconnect, matchesComputer, parseConnectionCode, probeCanIdentify, readComputer, saveComputer, withPairingKey } from "./connection-code";
 import { SEEN_WEB_VERSION_KEY, compareVersions, pendingReleases, readReleaseNotes, renderReleases, webUpdateLine } from "./release-notes";
 import { APP_UPDATE_CHECKED_KEY, APP_UPDATE_DISMISSED_KEY, appUpdateView, progressLine, shouldCheck, shouldPrompt, type AppUpdateResult } from "./app-update";
 
@@ -1092,7 +1092,10 @@ function getSuggestedServer(): string { const parameter = new URLSearchParams(lo
 serverInput.value = localStorage.getItem("motionbridge-server") || getSuggestedServer(); handheldServerInput.value = localStorage.getItem("motionbridge-server") || getSuggestedServer();
 handheldServerInput.addEventListener("change", () => { const value = handheldServerInput.value.trim(); if (value) { serverInput.value = value; localStorage.setItem("motionbridge-server", value); } });
 
-function setConnection(state: ConnectionState): void { const text = ({ offline: "未连接电脑", connecting: "连接中", online: "已连接电脑", error: "连接异常" })[state]; badge.className = `badge ${state}`; badge.querySelector("b")!.textContent = text; runtimeCard.dataset.link = state; const panel = document.querySelector<HTMLElement>("#panelConnection"); if (panel) panel.textContent = text; }
+// 电脑说这台手机还没配对（没扫过码，或扫的是加配对之前的旧码）：连着，但输入不算数。
+// 顶上那个状态牌一直写着，比底下那行会被识别状态刷掉的小字醒目。
+const PAIRING_REQUIRED_BADGE = "未配对，请扫码连接";
+function setConnection(state: ConnectionState, detail?: string): void { const text = detail ?? ({ offline: "未连接电脑", connecting: "连接中", online: "已连接电脑", error: "连接异常" })[state]; badge.className = `badge ${state}`; badge.querySelector("b")!.textContent = text; runtimeCard.dataset.link = state; const panel = document.querySelector<HTMLElement>("#panelConnection"); if (panel) panel.textContent = text; }
 function setVoiceStatus(status: VoiceStatus, detail?: string): void { voiceState = status; voiceStateLabel.textContent = detail || ({ off: "关闭", connecting: "连接中", listening: "正在听", error: "错误", unauthorized: "未授权" })[status]; voiceStateLabel.className = `voice-state ${status}`; }
 function poseVoiceState(): "not_connected" | "connected" | "enabled" | "unauthorized" | "failed" { return voiceState === "off" ? "not_connected" : voiceState === "connecting" ? "connected" : voiceState === "listening" ? "enabled" : voiceState === "unauthorized" ? "unauthorized" : "failed"; }
 function clearWebCamera(): void {
@@ -1377,7 +1380,7 @@ function connectSocket(url: string, session = cameraSession.current): void {
   if (socketHealthTimer != null) window.clearInterval(socketHealthTimer); socketHealthTimer = null;
   const previous = socket; socket = null; previous?.close();
   setConnection("connecting");
-  const ws = new WebSocket(url); socket = ws;
+  const ws = new WebSocket(withPairingKey(url, rememberedComputer)); socket = ws;
   const current = () => cameraSession.isCurrent(session) && cameraSocketSession.isCurrent(connection) && socket === ws && running;
   let failed = false;
   const disconnected = () => {
@@ -1401,7 +1404,7 @@ function connectSocket(url: string, session = cameraSession.current): void {
   socketHealthTimer = startSocketHealth(ws, disconnected, current);
 }
 
-function handleCameraMessage(event: MessageEvent): void { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") applyClockSync(message, received); if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "voice_result" && voiceEnabled) { const text = String(message.final || message.partial || message.text || "").trim(); const command = String(message.command || message.result?.command || "").trim(); if (command) setVoiceStatus("listening", `已执行：${command}`); else if (text) setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); else if (message.matched === false) setVoiceStatus("listening", "语音未匹配到电脑口令"); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }
+function handleCameraMessage(event: MessageEvent): void { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") applyClockSync(message, received); if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "voice_result" && voiceEnabled) { const text = String(message.final || message.partial || message.text || "").trim(); const command = String(message.command || message.result?.command || "").trim(); if (command) setVoiceStatus("listening", `已执行：${command}`); else if (text) setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); else if (message.matched === false) setVoiceStatus("listening", "语音未匹配到电脑口令"); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "error" && message.code === "pairing_required") setConnection("error", PAIRING_REQUIRED_BADGE); if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }
 
 async function reconnectToBestServer(session = cameraSession.current, connection = cameraSocketSession.current): Promise<void> {
   const current = () => cameraSession.isCurrent(session) && cameraSocketSession.isCurrent(connection) && running && !document.hidden;
@@ -2396,7 +2399,7 @@ async function startController(): Promise<void> {
       if (!picked.found) throw new Error("没找到电脑");
       const address = picked.url; handheldServerInput.value = address;
       serverInput.value = address; localStorage.setItem("motionbridge-server", address);
-      const ws = new WebSocket(normalizeSocketUrl(address)); handheldSocket = ws;
+      const ws = new WebSocket(withPairingKey(normalizeSocketUrl(address), rememberedComputer)); handheldSocket = ws;
       ws.addEventListener("open", () => {
         if (generation !== controllerGeneration) return;
         controllerBadge(true, "已连接电脑"); document.querySelector("#sensorState")!.textContent = "自然持握 1 秒";
@@ -2404,7 +2407,7 @@ async function startController(): Promise<void> {
       });
       ws.addEventListener("message", (event) => {
         if (generation !== controllerGeneration) return;
-        try { const message = JSON.parse(event.data); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") applyClockSync(message, performance.now()); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; } catch { /* 忽略无法解析的消息 */ }
+        try { const message = JSON.parse(event.data); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") applyClockSync(message, performance.now()); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; if (message.type === "error" && message.code === "pairing_required") controllerBadge(false, PAIRING_REQUIRED_BADGE); } catch { /* 忽略无法解析的消息 */ }
       });
       const disconnected = () => { if (generation === controllerGeneration && handheldSocket === ws) {
         handheldSocket = null;

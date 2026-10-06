@@ -227,6 +227,21 @@ describe("camera lifecycle through actual UI events", () => {
     expect(element("#scanComputerHandheld").hidden).toBe(true);
     expect(element("#centerSensor").hidden).toBe(false);
   });
+  it("扫码存下配对钥匙，每次连接带上；电脑说没配对时状态牌写明请扫码", async () => {
+    const instance = "0123456789ab", key = "AbCdEfGhIjKlMnOpQrStUv";
+    mocks.plugins.LocalNetwork.probe = vi.fn(async () => ({ ok: true, instance }));
+    mocks.scan.mockResolvedValue(JSON.stringify({ type: "motioncontrol-connect", version: 1, instance, key,
+      name: "我的电脑", candidates: [{ host: "192.168.1.2", port: 8765, kind: "lan" }] }));
+    click("#handheldRole"); await flush();
+    click("#scanComputerHandheld"); await vi.dynamicImportSettled(); await flush();
+    expect(JSON.parse(localStorage.getItem("motionbridge-remembered-computer")!).key).toBe(key);
+    const ws = SocketStub.sockets.at(-1)!;
+    expect(new URL(ws.url).searchParams.get("key")).toBe(key);
+    ws.open(); await flush();
+    ws.message({ type: "error", code: "pairing_required", message: "这台手机还没和电脑配对" }); await flush();
+    expect(element("#handheldConnection b").textContent).toBe("未配对，请扫码连接");
+    expect(element("#sensorState").textContent).toBe("这台手机还没和电脑配对");
+  });
   it("蓝牙鼠标扫码后走网络发送鼠标帧，不会误发成手柄", async () => {
     const instance = "0123456789ab";
     const { GyroMouse } = await import("./gyro-mouse");

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ComputerReconnect, matchesComputer, parseConnectionCode, probeCanIdentify } from "./connection-code";
+import { ComputerReconnect, matchesComputer, parseConnectionCode, probeCanIdentify, withPairingKey } from "./connection-code";
 
 const code = JSON.stringify({ type: "motioncontrol-connect", version: 1, instance: "0123456789ab",
   name: "电脑", candidates: [{ host: "192.168.1.2", port: 8765, kind: "lan" }] });
@@ -9,6 +9,20 @@ describe("选机与重连", () => {
     expect(parseConnectionCode(code).instance).toBe("0123456789ab");
     expect(() => parseConnectionCode("https://example.com")).toThrow();
     expect(() => parseConnectionCode(code.replace("192.168.1.2", "example.com"))).toThrow();
+  });
+  it("扫码存下配对钥匙，连接时带上；旧码没有钥匙就不带", () => {
+    const key = "AbCdEfGhIjKlMnOpQrStUv";
+    const computer = parseConnectionCode(code.replace('"name"', `"key":"${key}","name"`));
+    expect(computer.key).toBe(key);
+    // 存下来再读回来还在：重启 App 不用再扫。
+    expect(parseConnectionCode(JSON.stringify({ ...computer, role: "camera" })).key).toBe(key);
+    expect(withPairingKey("ws://192.168.1.2:8765/ws/input", computer)).toBe(`ws://192.168.1.2:8765/ws/input?key=${key}`);
+    const old = parseConnectionCode(code);
+    expect(old.key).toBeUndefined();
+    expect(withPairingKey("ws://192.168.1.2:8765/ws/input", old)).toBe("ws://192.168.1.2:8765/ws/input");
+    expect(withPairingKey("ws://192.168.1.2:8765/ws/input", null)).toBe("ws://192.168.1.2:8765/ws/input");
+    // 格式不对的钥匙不收，免得把奇怪的东西拼进地址。
+    expect(parseConnectionCode(code.replace('"name"', '"key":"a&b=c","name"')).key).toBeUndefined();
   });
   it("旧地址被另一台电脑使用时不能连错，地址变化后仍认同一台电脑", () => {
     const computer = parseConnectionCode(code);

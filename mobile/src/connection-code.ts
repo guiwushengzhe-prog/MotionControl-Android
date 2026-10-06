@@ -3,8 +3,11 @@ import { parseCandidates, toLong, type ServerCandidate } from "./discovery";
 export type RememberedComputer = {
   type: "motioncontrol-connect"; version: 1; instance: string; name: string;
   candidates: ServerCandidate[]; role?: "camera" | "handheld";
+  /** 配对钥匙：电脑藏在二维码里，扫过码的手机每次连接带上；没带的只能连上、发不了输入。 */
+  key?: string;
 };
 export const COMPUTER_KEY = "motionbridge-remembered-computer";
+const PAIRING_KEY = /^[A-Za-z0-9_-]{22,64}$/;
 
 export function parseConnectionCode(text: string): RememberedComputer {
   if (text.length > 8192) throw new Error("这不是 MotionControl 的连接二维码");
@@ -17,7 +20,13 @@ export function parseConnectionCode(text: string): RememberedComputer {
   if (!candidates.length) throw new Error("二维码里没有可用的电脑地址");
   return { type: "motioncontrol-connect", version: 1, instance: raw.instance,
     name: typeof raw.name === "string" ? raw.name.slice(0, 80) : "上次的电脑", candidates,
-    role: ["camera", "handheld"].includes(raw.role) ? raw.role : undefined };
+    role: ["camera", "handheld"].includes(raw.role) ? raw.role : undefined,
+    key: typeof raw.key === "string" && PAIRING_KEY.test(raw.key) ? raw.key : undefined };
+}
+/** 扫码存下的钥匙带到连接地址上。没扫过码（或扫的是加配对之前的旧码）就不带，电脑会提示去扫。 */
+export function withPairingKey(url: string, computer: RememberedComputer | null): string {
+  if (!computer?.key) return url;
+  try { const parsed = new URL(url); parsed.searchParams.set("key", computer.key); return parsed.href; } catch { return url; }
 }
 export function readComputer(): RememberedComputer | null {
   try { return parseConnectionCode(localStorage.getItem(COMPUTER_KEY) || ""); } catch { return null; }
