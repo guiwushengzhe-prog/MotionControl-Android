@@ -59,6 +59,11 @@ public final class BundleSignature {
         if (payloadText.isEmpty() || signatureText.isEmpty() || digest.isEmpty()) {
             return -1;   // 没签名。不报错，就是不装。
         }
+        if (!digest.equals(ManifestSync.listingDigest(manifest.optJSONArray("files")))) {
+            // 签名只担保这个摘要。不拿手上的文件列表重算一遍，别人就能把真包的签名
+            // 原样搬过来，配上一份自己的文件列表。
+            return -1;
+        }
         try {
             byte[] payload = Base64.decode(payloadText, Base64.DEFAULT);
             byte[] signature = Base64.decode(signatureText, Base64.DEFAULT);

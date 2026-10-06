@@ -142,6 +142,18 @@ public final class ManifestSync {
         return manifest.optString("digest", "");
     }
 
+    /** The listing digest recomputed from the entries, or "" if any entry is malformed. */
+    public static String listingDigest(JSONArray files) {
+        if (files == null || files.length() == 0) return "";
+        ListingDigest digest = new ListingDigest();
+        for (int index = 0; index < files.length(); index++) {
+            JSONObject entry = files.optJSONObject(index);
+            if (entry == null || !(entry.opt("size") instanceof Number)) return "";
+            digest.add(entry.optString("path", ""), entry.optLong("size"), entry.optString("sha256", ""));
+        }
+        return digest.hex();
+    }
+
     /** 删掉清单里没有的文件：换了一版之后上一版的残留会留在这里。 */
     private static void prune(File root, File directory, Set<String> wanted) {
         File[] entries = directory.listFiles();
