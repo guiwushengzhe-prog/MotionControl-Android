@@ -42,7 +42,8 @@ public class WebUpdatePlugin extends Plugin {
                 .put("sensor_sample_age", true)
                 .put("bluetooth_release_result", true)
                 .put("display_orientation", true)
-                .put("web_update_boot_health", true);
+                .put("web_update_boot_health", true)
+                .put("app_update", true);
         call.resolve(new JSObject().put("native_api", NativeCapabilities.API)
                 .put("protocol", NativeCapabilities.PROTOCOL).put("capabilities", capabilities));
     }

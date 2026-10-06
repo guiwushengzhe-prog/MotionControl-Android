@@ -62,6 +62,9 @@
          permission with no prompt, and adding one costs a new APK, which is the
          exact thing the hot-update channel exists to avoid. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- App 内更新：下载签名过的新版 APK 后交给系统安装器。安卓 8 起用户还要在系统里
+         允许本 App 安装应用，每次安装也都要用户自己点确认，不会静默安装。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 普通配对设备和系统可发现入口；不扫描附近设备，不申请位置权限。 -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />

@@ -48,7 +48,7 @@ class ElementStub extends EventTarget {
   }
   querySelectorAll(): ElementStub[] { return []; }
   closest(selector: string): ElementStub { return this.querySelector(selector); }
-  setAttribute() {} removeAttribute() {} replaceChildren() {} pause() {}
+  setAttribute() {} removeAttribute() {} replaceChildren() {} appendChild() {} pause() {}
   load() { this.readyState = 0; this.currentTime = 0; }
   async play() { this.readyState = 2; }
   getContext() { return new Proxy({}, { get: (_, key) => key === "measureText" ? () => ({ width: 10 }) : () => {} }); }
@@ -120,6 +120,7 @@ beforeEach(async () => {
   vi.stubGlobal("document", {
     hidden: false, body: new ElementStub(), documentElement: new ElementStub(),
     querySelector: element, querySelectorAll: () => [], createElement: () => new ElementStub(),
+    createTextNode: (text: string) => ({ textContent: text }),
     addEventListener: documentEvents.addEventListener.bind(documentEvents),
     removeEventListener: documentEvents.removeEventListener.bind(documentEvents),
   });
@@ -144,6 +145,8 @@ beforeEach(async () => {
     NativeAudio: { addListener: vi.fn(async () => ({ remove: vi.fn(async () => {}) })), start: vi.fn(async () => ({ audioReady: true, recognizerReady: true })), stop: vi.fn(async () => {}) },
     Display: { setOrientation: async () => {}, setBars: async () => {} },
     WebUpdate: { bootOk: vi.fn(async () => {}), sync: vi.fn(async () => ({ state: "current" })), getCapabilities: async () => ({ capabilities: {} }) },
+    AppUpdate: { check: vi.fn(async () => ({ state: "current" })), download: vi.fn(async () => ({ state: "ready", version: "2.4.0" })),
+      install: vi.fn(async () => ({ state: "installing" })), addListener: vi.fn(async () => ({ remove: vi.fn(async () => {}) })) },
     BluetoothController: { releaseAll: async () => {}, stop: async () => {} },
     SensorBridge: { start: async () => {}, stop: async () => {}, getLatest: async () => ({ qx: 0, qy: 0, qz: 0, qw: 1,
       gx: 0, gy: 0, gz: 0, ax: 0, ay: 0, az: 0, timestamp: 1, running: true,
@@ -601,6 +604,28 @@ describe("camera lifecycle through actual UI events", () => {
     await vi.advanceTimersByTimeAsync(30050); await flush(); clearInterval(frames);
     expect(mocks.plugins.WebUpdate.sync).toHaveBeenCalledTimes(2);
     expect(ws.readyState).toBe(SocketStub.OPEN);
+  });
+  it("网页需要新壳子时马上问新版 APK：功能更新弹一次，以后再说记住版本，按钮下载后交给系统安装", async () => {
+    expect(mocks.plugins.AppUpdate.check).toHaveBeenCalledOnce();
+    expect(element("#appUpdateButton").hidden).toBe(true);
+    element("#releaseNotes").hidden = true; element("#appUpdateDialog").hidden = true;
+    mocks.plugins.AppUpdate.check.mockResolvedValue({ state: "available", version: "2.4.0", kind: "feature", size: 1048576,
+      sections: [{ title: "新增", items: ["App 内更新"] }] });
+    mocks.plugins.WebUpdate.sync.mockResolvedValue({ state: "incompatible" });
+    await enterCamera(); await beginCamera(); const ws = SocketStub.sockets[0];
+    ws.open(); ws.message({ type: "control_config_v1" }); await flush();
+    expect(mocks.plugins.AppUpdate.check).toHaveBeenCalledTimes(2);
+    expect(element("#appUpdateDialog").hidden).toBe(false);
+    expect(element("#appUpdateTitle").textContent).toBe("新版 App 2.4.0");
+    expect(element("#appUpdateLine").textContent).toBe("新版 App 2.4.0 可以更新，1.0 MB");
+    click("#appUpdateLater");
+    expect(element("#appUpdateDialog").hidden).toBe(true);
+    expect(localStorage.getItem("motionbridge-app-update-dismissed")).toBe("2.4.0");
+    click("#appUpdateButton"); await flush();
+    expect(mocks.plugins.AppUpdate.download).toHaveBeenCalledOnce();
+    expect(mocks.plugins.AppUpdate.install).toHaveBeenCalledOnce();
+    expect(element("#appUpdateLine").textContent).toBe("正在打开系统安装…");
+    expect(element("#appUpdateButton").hidden).toBe(true);
   });
 });
 
