@@ -882,7 +882,10 @@ async function connectFitness(): Promise<WebSocket | null> {
 async function sendFitnessControl(message: FitnessControl): Promise<boolean> {
   const ws = fitnessTransport() || await connectFitness();
   if (!ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) return false;
-  try { ws.send(JSON.stringify({ ...message, role: "fitness", device_id: deviceId })); return true; } catch { return false; }
+  try {
+    if (message.action !== "profile" && message.profile) ws.send(JSON.stringify({ type: "fitness_control_v1", action: "profile", profile: message.profile, role: "fitness", device_id: deviceId }));
+    ws.send(JSON.stringify({ ...message, role: "fitness", device_id: deviceId })); return true;
+  } catch { return false; }
 }
 // 一个够到的地址在局域网里几毫秒就答应了。这个时限是留给"根本不通"的那些：
 // 超过就别等了，后面还有别的要试。
