@@ -148,6 +148,8 @@ beforeEach(async () => {
     AppUpdate: { check: vi.fn(async () => ({ state: "current" })), download: vi.fn(async () => ({ state: "ready", version: "2.4.0" })),
       install: vi.fn(async () => ({ state: "installing" })), addListener: vi.fn(async () => ({ remove: vi.fn(async () => {}) })) },
     BluetoothController: { releaseAll: async () => {}, stop: async () => {} },
+    HeartRate: { addListener: vi.fn(async () => ({ remove: vi.fn(async () => {}) })), start: vi.fn(async () => ({ state: "scanning", message: "", device: "", wanted: true })),
+      stop: vi.fn(async () => ({ state: "off", message: "", device: "", wanted: false })), getStatus: vi.fn(async () => ({ state: "off", message: "", device: "", wanted: false })) },
     SensorBridge: { start: async () => {}, stop: async () => {}, getLatest: async () => ({ qx: 0, qy: 0, qz: 0, qw: 1,
       gx: 0, gy: 0, gz: 0, ax: 0, ay: 0, az: 0, timestamp: 1, running: true,
       rotationAvailable: true, rotation_age_ms: 40, sample_age_ms: 40 }) },

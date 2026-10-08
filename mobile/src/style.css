@@ -106,6 +106,21 @@ body { margin: 0; min-height: 100dvh; overflow: hidden; background: var(--bg); f
 .fitness-actions > button[hidden] { display: none; }
 .fitness-mode-links { margin-bottom: 22px; }
 .fitness-note { font-size: 12px; color: var(--text-2); line-height: 1.65; margin: 10px 0 0; }
+.fitness-heart { border-radius: 22px; padding: 16px 20px; background: var(--card); margin-bottom: 12px; }
+.fitness-heart[hidden], .fitness-nudge[hidden] { display: none; }
+.fitness-heart-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.fitness-heart .fitness-note { margin-top: 6px; }
+/* 开关：和系统设置里的一样，点一下开、再点关。 */
+.fitness-switch { position: relative; width: 51px; height: 31px; flex: none; margin: 0; padding: 0; border: none; border-radius: 16px; background: var(--fill); transition: background-color .2s; }
+.fitness-switch i { position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(0, 0, 0, .25); transition: transform .2s; }
+.fitness-switch[aria-checked="true"] { background: var(--ok); }
+.fitness-switch[aria-checked="true"] i { transform: translateX(20px); }
+.fitness-nudge button { margin: 0 0 0 6px; padding: 0; border: none; background: none; color: var(--accent); font: inherit; }
+/* 玩的时候的大字心率：人站在几米外也看得清。只在读到心率时出现。 */
+.heart-rate-badge { position: fixed; z-index: 40; top: max(12px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left)); display: flex; align-items: baseline; gap: 6px; padding: 6px 16px 8px; border-radius: 22px; background: var(--hud); color: var(--text); pointer-events: none; }
+.heart-rate-badge[hidden] { display: none; }
+.heart-rate-badge b { color: var(--danger); font-size: 26px; line-height: 1; }
+.heart-rate-badge strong { font-size: 46px; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -1px; }
 .fitness-settings { width: 100%; }
 .fitness-settings .field { margin-bottom: 12px; }
 .fitness-settings input { max-width: 160px; }

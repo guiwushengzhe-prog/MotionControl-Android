@@ -65,11 +65,18 @@
     <!-- App 内更新：下载签名过的新版 APK 后交给系统安装器。安卓 8 起用户还要在系统里
          允许本 App 安装应用，每次安装也都要用户自己点确认，不会静默安装。 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- 普通配对设备和系统可发现入口；不扫描附近设备，不申请位置权限。 -->
+    <!-- 手柄模式：普通配对设备和系统可发现入口，不扫描附近设备。 -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <!-- 手环心率：找正在「心率广播」的手环、心率带，只认标准心率服务，不拿扫描结果定位。
+         安卓 11 及以下系统规定低功耗蓝牙扫描必须有位置权限，所以只在那些版本上申请。
+         只在用户打开「手环心率」时才申请。 -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="true" />
 </manifest>

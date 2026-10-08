@@ -20,6 +20,7 @@ import { APP_UPDATE_CHECKED_KEY, APP_UPDATE_DISMISSED_KEY, appUpdateView, progre
 import { FitnessStore, type FitnessControl } from "./fitness";
 import { FITNESS_PAGE_HTML, FitnessUI } from "./fitness-ui";
 import { StudioVideo, type StudioRequest } from "./studio-video";
+import { HeartRate } from "./heart-rate";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
 type VoiceStatus = "off" | "connecting" | "listening" | "error" | "unauthorized";
@@ -178,6 +179,7 @@ app.innerHTML = `
     </section>
   </main>
   ${FITNESS_PAGE_HTML}
+  <div class="heart-rate-badge" id="heartRateBadge" hidden><b aria-hidden="true">♥</b><strong id="heartRateValue"></strong></div>
   <div class="guide hidden" id="guide"><span>全身站进画面</span></div><div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头</b></div>
   <div class="release-notes" id="releaseNotes" role="dialog" aria-modal="true" aria-labelledby="releaseNotesTitle" hidden><section><h2 id="releaseNotesTitle"></h2><div class="release-notes-body" id="releaseNotesBody"></div><button id="releaseNotesOk" class="start-primary" type="button">知道了</button></section></div>
   <div class="release-notes" id="appUpdateDialog" role="dialog" aria-modal="true" aria-labelledby="appUpdateTitle" hidden><section><h2 id="appUpdateTitle"></h2><div class="release-notes-body" id="appUpdateBody"></div><button id="appUpdateNow" class="start-primary" type="button">更新</button><button id="appUpdateLater" class="scan-computer" type="button">以后再说</button></section></div>`;
@@ -800,6 +802,8 @@ const DEVICE_PORT = 8765;
 let rememberedComputer = readComputer();
 const studioVideo = new StudioVideo(deviceId);
 const fitnessStore = new FitnessStore(localStorage);
+// 手环心率：读到一次就看看该不该发给电脑（每秒最多一次），并刷新大字。
+const heartRate = new HeartRate(localStorage, () => sendHeartRate());
 let fitnessSocket: WebSocket | null = null;
 let fitnessConnectTask: Promise<WebSocket | null> | null = null;
 let fitnessRetryTimer: number | null = null;
@@ -807,11 +811,33 @@ let fitnessHealthTimer: number | null = null;
 let fitnessGeneration = 0;
 const fitnessUI = new FitnessUI(fitnessStore, {
   control: sendFitnessControl,
-  open: () => { connectionTouched = true; void connectFitness(); },
-  close: () => { if (!fitnessStore.current) closeFitnessSocket(); },
+  open: () => { connectionTouched = true; void connectFitness(); syncHeartRate(); },
+  close: () => { if (!fitnessStore.current) closeFitnessSocket(); syncHeartRate(); },
   camera: () => document.querySelector<HTMLButtonElement>("#cameraRole")!.click(),
   pair: () => { showRole("camera"); void openComputerScanner("camera"); },
-});
+}, heartRate);
+heartRate.subscribe(renderHeartRateBadge);
+fitnessStore.subscribe(syncHeartRate);
+/** 要不要找手环：开着「手环心率」，而且正在玩、开着运动记录或者正在记录。 */
+function syncHeartRate(): void {
+  const playing = (activeRole === "camera" && running) || activeRole === "handheld";
+  heartRate.want(!document.hidden && controllerAppActive && (playing || fitnessUI.visible || Boolean(fitnessStore.current)));
+  renderHeartRateBadge();
+}
+/** 玩的时候屏幕上的大字心率。没读到、读数过期、在看运动记录时都不显示。 */
+function renderHeartRateBadge(): void {
+  const bpm = heartRate.feed.bpm(Date.now());
+  const show = bpm != null && (activeRole === "camera" || activeRole === "handheld") && !fitnessUI.visible;
+  const badge = document.querySelector<HTMLElement>("#heartRateBadge")!;
+  if (badge.hidden !== !show) badge.hidden = !show;
+  if (show) document.querySelector("#heartRateValue")!.textContent = String(bpm);
+}
+function sendHeartRate(): void {
+  const reading = heartRate.feed.takeSend(Date.now());
+  const ws = reading && fitnessTransport();
+  if (!reading || !ws || ws.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) return;
+  try { ws.send(JSON.stringify({ type: "heart_rate_v1", bpm: reading.bpm, at_ms: reading.at, device_id: deviceId })); } catch { /* 断了就等下一次。 */ }
+}
 document.querySelector("#fitnessRole")!.addEventListener("click", () => fitnessUI.show());
 document.querySelector("#fitnessCameraButton")!.addEventListener("click", () => fitnessUI.show());
 const handheldFitnessButton = document.createElement("button");
@@ -2216,6 +2242,7 @@ const prefersLight = window.matchMedia("(prefers-color-scheme: light)");
 let upsideDown = localStorage.getItem("motionbridge-upside-down") === "1";
 let screenApplied = "";
 function syncScreen(): void {
+  syncHeartRate();
   const cameraLive = running && activeRole === "camera";
   document.body.classList.toggle("camera-live", cameraLive);
   const reverse = displayNative && activeRole === "camera" && upsideDown;
@@ -2855,7 +2882,7 @@ let resumeCameraOnReturn = false;
 let cameraSuspending: Promise<void> | null = null;
 function onVisibilityChange(): void {
   if (document.hidden) {
-    studioVideo.stop(); closeFitnessSocket();
+    studioVideo.stop(); closeFitnessSocket(); syncHeartRate();
     computerReconnect.pause(); scannerAbort?.abort();
     cancelBluetoothReconnect();
     if ((running || cameraStartTask) && activeRole === "camera") {
@@ -2871,6 +2898,7 @@ function onVisibilityChange(): void {
     return;
   }
   if (fitnessUI.visible || fitnessStore.current) void connectFitness();
+  syncHeartRate();
   if (activeRole === "handheld" && handheldTimer == null && !bluetoothSystemDialog) void (async () => { await controllerSuspendTask; controllerSuspendTask = null; await controllerStartTask; if (activeRole === "handheld" && !document.hidden) await startHandheld(); })();
   else if (activeRole === "handheld") scheduleBluetoothReconnect();
   if (resumeCameraOnReturn && activeRole === "camera") {
@@ -2906,6 +2934,7 @@ void App.addListener("appStateChange", ({ isActive }) => {
   controllerAppActive = isActive;
   if (!isActive) { studioVideo.stop(); closeFitnessSocket(); }
   else if (fitnessUI.visible || fitnessStore.current) void connectFitness();
+  syncHeartRate();
   if (!isActive) {
     computerReconnect.pause(); scannerAbort?.abort();
     if (activeRole === "handheld" && !bluetoothSystemDialog) controllerSuspendTask = suspendHandheld();

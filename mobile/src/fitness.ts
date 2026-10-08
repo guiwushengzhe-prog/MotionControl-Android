@@ -1,6 +1,10 @@
-export type FitnessProfile = { weight_kg: number; goal_active_minutes: number; goal_steps: number; goal_kcal: number; primary_goal: "minutes" | "steps" | "kcal" };
+// 年龄、性别可以不填：按心率算热量时要用，没填就按平均成年人算，热量标「估算」。
+export type Sex = "male" | "female";
+export type FitnessProfile = { weight_kg: number; goal_active_minutes: number; goal_steps: number; goal_kcal: number; primary_goal: "minutes" | "steps" | "kcal"; age?: number | null; sex?: Sex | null };
 type FitnessCounters = { active_seconds: number; steps: number; action_count: number; estimated_kcal: number };
-export type FitnessSession = { session_id: string; status: "active" | "paused" | "finished"; started_at_ms: number; updated_at_ms: number; ended_at_ms?: number; elapsed_seconds: number; active_seconds: number; steps: number; action_count: number; estimated_kcal: number; source: "motion_estimate"; days?: Record<string, FitnessCounters> };
+// 心率：手环「心率广播」读到的。hr_curve 是每 30 秒一个平均值 [第几秒, 心率]，给人看曲线用。
+export type HeartRateSummary = { hr_avg?: number; hr_max?: number; hr_seconds?: number; hr_curve?: [number, number][]; kcal_source?: "motion" | "heart_rate" };
+export type FitnessSession = { session_id: string; status: "active" | "paused" | "finished"; started_at_ms: number; updated_at_ms: number; ended_at_ms?: number; elapsed_seconds: number; active_seconds: number; steps: number; action_count: number; estimated_kcal: number; source: "motion_estimate"; days?: Record<string, FitnessCounters> } & HeartRateSummary;
 export type FitnessStateMessage = Partial<FitnessSession> & { type: "fitness_state_v1"; profile?: Partial<FitnessProfile>; history?: FitnessSession[]; checkins?: string[] };
 export type FitnessControl = { type: "fitness_control_v1"; action: "start" | "pause" | "resume" | "finish" | "profile"; session_id?: string; profile?: FitnessProfile };
 export const FITNESS_KEY = "motioncontrol-fitness-v1";
@@ -8,11 +12,21 @@ export const DEFAULT_FITNESS_PROFILE: FitnessProfile = { weight_kg: 70, goal_act
 const nonnegative = (value: unknown): number => typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
 const bounded = (value: unknown, fallback: number, min: number, max: number): number => typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
 export function normalizeProfile(raw: Partial<FitnessProfile> = {}): FitnessProfile {
-  return { weight_kg: bounded(raw.weight_kg, 70, 20, 300), goal_active_minutes: bounded(raw.goal_active_minutes, 20, 1, 600), goal_steps: bounded(raw.goal_steps, 1000, 1, 100000), goal_kcal: bounded(raw.goal_kcal, 100, 1, 10000), primary_goal: ["minutes", "steps", "kcal"].includes(raw.primary_goal || "") ? raw.primary_goal! : "minutes" };
+  const age = typeof raw.age === "number" && Number.isInteger(raw.age) && raw.age >= 10 && raw.age <= 100 ? raw.age : null;
+  const sex = raw.sex === "male" || raw.sex === "female" ? raw.sex : null;
+  return { weight_kg: bounded(raw.weight_kg, 70, 20, 300), goal_active_minutes: bounded(raw.goal_active_minutes, 20, 1, 600), goal_steps: bounded(raw.goal_steps, 1000, 1, 100000), goal_kcal: bounded(raw.goal_kcal, 100, 1, 10000), primary_goal: ["minutes", "steps", "kcal"].includes(raw.primary_goal || "") ? raw.primary_goal! : "minutes", age, sex };
 }
 export function dayKey(timestamp: number): string {
   const date = new Date(timestamp);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+/** 电脑发来的心率摘要，只收认得的字段、合理的数。没有心率就是 null。 */
+export function heartRateSummary(raw: Partial<HeartRateSummary>): HeartRateSummary | null {
+  const bpm = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 25 && value <= 250 ? Math.round(value) : undefined;
+  const avg = bpm(raw.hr_avg), max = bpm(raw.hr_max);
+  if (avg == null) return null;
+  const curve = Array.isArray(raw.hr_curve) ? raw.hr_curve.filter((point): point is [number, number] => Array.isArray(point) && point.length === 2 && Number.isFinite(point[0]) && point[0] >= 0 && bpm(point[1]) != null).slice(0, 2880) : [];
+  return { hr_avg: avg, hr_max: max ?? avg, hr_seconds: nonnegative(raw.hr_seconds), hr_curve: curve, kcal_source: raw.kcal_source === "heart_rate" ? "heart_rate" : "motion" };
 }
 export type FitnessDay = { day: string; active_seconds: number; elapsed_seconds: number; steps: number; estimated_kcal: number; action_count: number; sessions: number };
 /** 电脑推送绝对累计值；重复推送和断线补传不增加第二份记录。 */
@@ -72,6 +86,10 @@ export class FitnessStore {
       active_seconds: Math.max(previous?.active_seconds || 0, nonnegative(raw.active_seconds)), steps: Math.floor(Math.max(previous?.steps || 0, nonnegative(raw.steps))),
       action_count: Math.floor(Math.max(previous?.action_count || 0, nonnegative(raw.action_count))), estimated_kcal: Math.max(previous?.estimated_kcal || 0, nonnegative(raw.estimated_kcal)),
     };
+    // 心率是电脑算好的整份摘要，新的一份整份换掉旧的。
+    const hr = newer ? heartRateSummary(raw) : null;
+    if (hr) Object.assign(session, hr);
+    else if (previous) Object.assign(session, heartRateSummary(previous));
     const ended = nonnegative(raw.ended_at_ms) || previous?.ended_at_ms;
     if (ended) session.ended_at_ms = ended;
     if (raw.days && typeof raw.days === "object" && !Array.isArray(raw.days)) {
