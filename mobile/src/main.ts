@@ -18,6 +18,10 @@ import { readHeavyModel, receiveHeavyModel, type PoseModelOffer } from "./pose-m
 import { ComputerReconnect, matchesComputer, parseConnectionCode, probeCanIdentify, readComputer, saveComputer, withPairingKey } from "./connection-code";
 import { SEEN_WEB_VERSION_KEY, compareVersions, pendingReleases, readReleaseNotes, renderReleases, webUpdateLine } from "./release-notes";
 import { APP_UPDATE_CHECKED_KEY, APP_UPDATE_DISMISSED_KEY, appUpdateView, progressLine, shouldCheck, shouldPrompt, type AppUpdateResult } from "./app-update";
+import { FitnessStore, type FitnessControl } from "./fitness";
+import { FITNESS_PAGE_HTML, FitnessUI } from "./fitness-ui";
+import { StudioVideo, type StudioRequest } from "./studio-video";
+import { HeartRate } from "./heart-rate";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
 type VoiceStatus = "off" | "connecting" | "listening" | "error" | "unauthorized";
@@ -117,6 +121,7 @@ const ICONS = {
   collapse: icon('<path d="M6 9l6 6 6-6"/>'),
   expand: icon('<path d="M6 15l6-6 6 6"/>'),
   stop: icon('<rect x="6.5" y="6.5" width="11" height="11" rx="2"/>'),
+  fitness: icon('<path d="M4 12h4l3-7 3 14 3-7h3"/>'),
 };
 app.innerHTML = `
   <div id="cameraStage"><video id="camera" autoplay playsinline muted poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAACH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></video><canvas id="overlay"></canvas><div class="shade"></div><canvas id="inferenceCanvas" aria-hidden="true"></canvas></div>
@@ -127,6 +132,7 @@ app.innerHTML = `
       <div class="role-list">
         <button id="cameraRole" class="role-option" type="button"><em class="role-tag">推荐</em><span class="role-icon">${ICONS.camera}</span><span class="role-text"><strong>固定摄像头</strong><small>立在面前，识别身体动作</small></span></button>
         <button id="handheldRole" class="role-option" type="button"><span class="role-icon">${ICONS.gamepad}</span><span class="role-text"><strong>手持控制器</strong><small>拿在手里，当手柄或鼠标用</small></span></button>
+        <button id="fitnessRole" class="role-option" type="button"><span class="role-icon fitness-role-icon">${ICONS.fitness}</span><span class="role-text"><strong>运动记录</strong><small>今日目标、游戏锻炼与长期记录</small></span></button>
       </div>
     </section>
     <section class="page setup-page hidden" id="setupCard">
@@ -156,6 +162,7 @@ app.innerHTML = `
         <button id="flipCameraButton" class="tool" type="button" aria-label="换镜头">${ICONS.flip}<span>换镜头</span></button>
         <button id="upsideDownButton" class="tool" type="button" aria-pressed="false" aria-label="倒过来放，充电口朝上">${ICONS.upsideDown}<span>倒过来</span></button>
         <button id="toggleZonesButton" class="tool" type="button" aria-pressed="true">${ICONS.frame}<span>区域框</span></button>
+        <button id="fitnessCameraButton" class="tool" type="button">${ICONS.fitness}<span>运动</span></button>
         <button id="stopButton" class="tool danger" type="button">${ICONS.stop}<span>停止</span></button>
       </div>
       <small id="cameraSwitchState" class="camera-switch-state"></small>
@@ -174,6 +181,8 @@ app.innerHTML = `
       <details id="handheldMore" class="panel handheld-more"><summary>更多</summary><div class="handheld-more-body"><div id="shooterSettings" class="shooter-settings hidden"><label>陀螺仪灵敏度<input id="gyroSensitivity" type="range" min="0.1" max="2" step="0.1" value="0.5"></label><label>摇杆灵敏度<input id="stickSensitivity" type="range" min="400" max="3600" step="200" value="1800"></label></div><label class="field">连接方式<select id="handheldTransport" aria-label="连接方式"><option value="network">网络连接</option><option value="bluetooth">蓝牙连接</option></select></label><button id="scanComputerHandheldMore" class="connection-scan" type="button">扫码连接 / 换电脑</button><details id="bluetoothPanel" class="bluetooth-panel hidden" open><summary>蓝牙设置</summary><p id="bluetoothStatus">先在电脑的蓝牙设置里添加这台手机，再选电脑连接。</p><div class="bluetooth-actions"><button id="bluetoothPair" type="button">允许电脑配对</button><button id="bluetoothRefresh" type="button">刷新设备</button><select id="bluetoothDevice" aria-label="已配对电脑"></select><button id="bluetoothConnect" type="button">连接电脑</button></div><small>蓝牙模拟的是通用手柄；只认 Xbox 手柄的游戏请用网络连接。</small></details><label class="field hidden" id="handheldAddressField">电脑地址<input id="handheldServerUrl" inputmode="url" autocomplete="url" placeholder="自动查找"></label><label class="field">玩家<select id="handheldSlot"><option value="0">玩家一</option><option value="1">玩家二</option></select></label><span>传感器 <b id="sensorFps">0 次/秒</b></span><div class="trigger-board handheld-trigger-board" id="handheldTriggerBoard" aria-live="polite"><strong class="feedback-title">电脑动作反馈</strong><p class="feedback-help">显示电脑识别的动作、口令和对应按键，不影响手动操作。</p><b class="trigger-board-key">—</b><span class="trigger-board-name">暂无动作或口令触发</span></div></div></details>
     </section>
   </main>
+  ${FITNESS_PAGE_HTML}
+  <div class="heart-rate-badge" id="heartRateBadge" hidden><b aria-hidden="true">♥</b><strong id="heartRateValue"></strong></div>
   <div class="guide hidden" id="guide"><span>全身站进画面</span></div><div class="loading hidden" id="loading"><i></i><b id="loadingText">正在打开摄像头</b></div>
   <div class="release-notes" id="releaseNotes" role="dialog" aria-modal="true" aria-labelledby="releaseNotesTitle" hidden><section><h2 id="releaseNotesTitle"></h2><div class="release-notes-body" id="releaseNotesBody"></div><button id="releaseNotesOk" class="start-primary" type="button">知道了</button></section></div>
   <div class="release-notes" id="appUpdateDialog" role="dialog" aria-modal="true" aria-labelledby="appUpdateTitle" hidden><section><h2 id="appUpdateTitle"></h2><div class="release-notes-body" id="appUpdateBody"></div><button id="appUpdateNow" class="start-primary" type="button">更新</button><button id="appUpdateLater" class="scan-computer" type="button">以后再说</button></section></div>`;
@@ -795,6 +804,119 @@ const SERVER_CANDIDATES_KEY = "motionbridge-server-candidates";
 // 电脑那边设备口固定在这个端口上。扫描时没有别的线索可用，只能按它来。
 const DEVICE_PORT = 8765;
 let rememberedComputer = readComputer();
+const studioVideo = new StudioVideo(deviceId);
+const fitnessStore = new FitnessStore(localStorage);
+// 手环心率：读到一次就看看该不该发给电脑（每秒最多一次），并刷新大字。
+const heartRate = new HeartRate(localStorage, () => sendHeartRate());
+let fitnessSocket: WebSocket | null = null;
+let fitnessConnectTask: Promise<WebSocket | null> | null = null;
+let fitnessRetryTimer: number | null = null;
+let fitnessHealthTimer: number | null = null;
+let fitnessGeneration = 0;
+const fitnessUI = new FitnessUI(fitnessStore, {
+  control: sendFitnessControl,
+  open: () => { connectionTouched = true; void connectFitness(); syncHeartRate(); },
+  close: () => { if (!fitnessStore.current) closeFitnessSocket(); syncHeartRate(); },
+  camera: () => document.querySelector<HTMLButtonElement>("#cameraRole")!.click(),
+  pair: () => { showRole("camera"); void openComputerScanner("camera"); },
+}, heartRate);
+heartRate.subscribe(renderHeartRateBadge);
+fitnessStore.subscribe(syncHeartRate);
+/** 要不要找手环：开着「手环心率」，而且正在玩、开着运动记录或者正在记录。 */
+function syncHeartRate(): void {
+  const playing = (activeRole === "camera" && running) || activeRole === "handheld";
+  heartRate.want(!document.hidden && controllerAppActive && (playing || fitnessUI.visible || Boolean(fitnessStore.current)));
+  renderHeartRateBadge();
+}
+/** 玩的时候屏幕上的大字心率。没读到、读数过期、在看运动记录时都不显示。 */
+function renderHeartRateBadge(): void {
+  const bpm = heartRate.feed.bpm(Date.now());
+  const show = bpm != null && (activeRole === "camera" || activeRole === "handheld") && !fitnessUI.visible;
+  const badge = document.querySelector<HTMLElement>("#heartRateBadge")!;
+  if (badge.hidden !== !show) badge.hidden = !show;
+  if (show) document.querySelector("#heartRateValue")!.textContent = String(bpm);
+}
+function sendHeartRate(): void {
+  const reading = heartRate.feed.takeSend(Date.now());
+  const ws = reading && fitnessTransport();
+  if (!reading || !ws || ws.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) return;
+  try { ws.send(JSON.stringify({ type: "heart_rate_v1", bpm: reading.bpm, at_ms: reading.at, device_id: deviceId })); } catch { /* 断了就等下一次。 */ }
+}
+document.querySelector("#fitnessRole")!.addEventListener("click", () => fitnessUI.show());
+document.querySelector("#fitnessCameraButton")!.addEventListener("click", () => fitnessUI.show());
+const handheldFitnessButton = document.createElement("button");
+handheldFitnessButton.type = "button"; handheldFitnessButton.className = "scan-computer"; handheldFitnessButton.textContent = "运动记录";
+handheldFitnessButton.addEventListener("click", () => fitnessUI.show());
+document.querySelector(".handheld-more-body")!.appendChild(handheldFitnessButton);
+function fitnessTransport(): WebSocket | null {
+  return [socket, handheldSocket, fitnessSocket].find(ws => ws?.readyState === WebSocket.OPEN) || null;
+}
+function applyFitnessMessage(message: any): void {
+  if (message?.type === "fitness_state_v1") fitnessStore.receive(message);
+  if (message?.type === "fitness_history_v1" && Array.isArray(message.sessions)) fitnessStore.receive({ type: "fitness_state_v1", history: message.sessions, profile: message.profile });
+}
+function closeFitnessSocket(): void {
+  fitnessGeneration++; fitnessConnectTask = null;
+  if (fitnessRetryTimer != null) window.clearTimeout(fitnessRetryTimer); fitnessRetryTimer = null;
+  if (fitnessHealthTimer != null) window.clearInterval(fitnessHealthTimer); fitnessHealthTimer = null;
+  const ws = fitnessSocket; fitnessSocket = null; ws?.close();
+  fitnessUI.connection(Boolean(fitnessTransport()));
+}
+async function connectFitness(): Promise<WebSocket | null> {
+  const connected = fitnessTransport();
+  if (connected) { fitnessUI.connection(true); return connected; }
+  if (fitnessConnectTask) return fitnessConnectTask;
+  if (document.hidden || !controllerAppActive || (!fitnessUI.visible && !fitnessStore.current)) return null;
+  const generation = ++fitnessGeneration;
+  const current = () => generation === fitnessGeneration && !document.hidden && controllerAppActive;
+  fitnessUI.connection(false, "正在连接电脑…");
+  const task = (async () => {
+    try {
+      const picked = await pickServer(serverInput.value.trim());
+      if (!current()) return null;
+      if (!picked.found) { fitnessUI.connection(false, "未连接电脑"); return null; }
+      const ws = new WebSocket(withPairingKey(picked.url, rememberedComputer)); fitnessSocket = ws;
+      const disconnected = () => {
+        if (!current() || fitnessSocket !== ws) return;
+        if (fitnessHealthTimer != null) window.clearInterval(fitnessHealthTimer); fitnessHealthTimer = null;
+        fitnessSocket = null; ws.close(); fitnessUI.connection(Boolean(fitnessTransport()));
+        if (fitnessUI.visible || fitnessStore.current) fitnessRetryTimer = window.setTimeout(() => { fitnessRetryTimer = null; void connectFitness(); }, 2500);
+      };
+      ws.addEventListener("close", disconnected); ws.addEventListener("error", disconnected);
+      ws.addEventListener("message", event => {
+        if (!current() || fitnessSocket !== ws) return;
+        try { const message = JSON.parse(event.data); applyFitnessMessage(message); if (message.type === "error") fitnessUI.connection(false, message.code === "pairing_required" ? "请先扫码连接" : "运动记录连接失败"); } catch { /* 无法解析的消息不计入记录。 */ }
+      });
+      fitnessHealthTimer = startSocketHealth(ws, disconnected, () => current() && fitnessSocket === ws);
+      return await new Promise<WebSocket | null>(resolve => {
+        const timer = window.setTimeout(() => { disconnected(); resolve(null); }, 5000);
+        ws.addEventListener("open", () => {
+          window.clearTimeout(timer);
+          if (!current() || fitnessSocket !== ws) { ws.close(); resolve(null); return; }
+          fitnessUI.connection(true);
+          ws.send(JSON.stringify({ type: "hello_v1", role: "fitness", device_id: deviceId }));
+          ws.send(JSON.stringify({ type: "fitness_control_v1", action: "history", role: "fitness", device_id: deviceId }));
+          if (fitnessStore.profileConfigured) ws.send(JSON.stringify({ type: "fitness_control_v1", action: "profile", profile: fitnessStore.profile, device_id: deviceId }));
+          resolve(ws);
+        }, { once: true });
+        ws.addEventListener("close", () => { window.clearTimeout(timer); resolve(null); }, { once: true });
+      });
+    } catch { if (current()) fitnessUI.connection(false, "未连接电脑"); return null; }
+  })();
+  fitnessConnectTask = task;
+  try { return await task; } finally {
+    if (fitnessConnectTask === task) fitnessConnectTask = null;
+    if (current() && !fitnessTransport() && fitnessRetryTimer == null && (fitnessUI.visible || fitnessStore.current)) fitnessRetryTimer = window.setTimeout(() => { fitnessRetryTimer = null; void connectFitness(); }, 2500);
+  }
+}
+async function sendFitnessControl(message: FitnessControl): Promise<boolean> {
+  const ws = fitnessTransport() || await connectFitness();
+  if (!ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) return false;
+  try {
+    if (message.action !== "profile" && message.profile) ws.send(JSON.stringify({ type: "fitness_control_v1", action: "profile", profile: message.profile, role: "fitness", device_id: deviceId }));
+    ws.send(JSON.stringify({ ...message, role: "fitness", device_id: deviceId })); return true;
+  } catch { return false; }
+}
 // 一个够到的地址在局域网里几毫秒就答应了。这个时限是留给"根本不通"的那些：
 // 超过就别等了，后面还有别的要试。
 const SERVER_PROBE_TIMEOUT_MS = 800;
@@ -1103,6 +1225,7 @@ function setConnection(state: ConnectionState, detail?: string): void { const te
 function setVoiceStatus(status: VoiceStatus, detail?: string): void { voiceState = status; voiceStateLabel.textContent = detail || ({ off: "关闭", connecting: "连接中", listening: "正在听", error: "错误", unauthorized: "未授权" })[status]; voiceStateLabel.className = `voice-state ${status}`; }
 function poseVoiceState(): "not_connected" | "connected" | "enabled" | "unauthorized" | "failed" { return voiceState === "off" ? "not_connected" : voiceState === "connecting" ? "connected" : voiceState === "listening" ? "enabled" : voiceState === "unauthorized" ? "unauthorized" : "failed"; }
 function clearWebCamera(): void {
+  studioVideo.stop();
   cameraSource.next();
   visionWorker?.clearPending(); workerCaptureToken = null;
   cameraFrameLoop = false;
@@ -1418,7 +1541,7 @@ function startSocketHealth(ws: WebSocket, onTimeout: () => void, current: () => 
     const action = liveness.check(performance.now());
     if (action === "timeout") onTimeout();
     else if (action === "ping" && ws.readyState === WebSocket.OPEN) {
-      if (ws.bufferedAmount > MAX_SOCKET_BUFFERED_BYTES) { onTimeout(); return; }
+      if (ws.bufferedAmount > (studioVideo.active && ws === socket ? 128 * 1024 : MAX_SOCKET_BUFFERED_BYTES)) { onTimeout(); return; }
       try { ws.send(JSON.stringify({ type: "clock_sync", client_sent_ms: performance.now() })); }
       catch { onTimeout(); }
     }
@@ -1437,6 +1560,7 @@ function connectSocket(url: string, session = cameraSession.current): void {
   let failed = false;
   const disconnected = () => {
     if (!current() || failed) return;
+    studioVideo.stop();
     failed = true;
     if (socketHealthTimer != null) window.clearInterval(socketHealthTimer); socketHealthTimer = null;
     socket = null; ws.close();
@@ -1447,6 +1571,10 @@ function connectSocket(url: string, session = cameraSession.current): void {
   };
   ws.addEventListener("open", () => {
     if (!current()) { ws.close(); return; }
+    fitnessUI.connection(true);
+    ws.send(JSON.stringify({ type: "hello_v1", role: "camera", device_id: deviceId }));
+    ws.send(JSON.stringify({ type: "fitness_control_v1", action: "history", device_id: deviceId }));
+    if (fitnessStore.profileConfigured) ws.send(JSON.stringify({ type: "fitness_control_v1", action: "profile", profile: fitnessStore.profile, device_id: deviceId }));
     setConnection("online"); syncClock();
     if (voiceToggle.checked && !voiceEnabled) void startVoiceControl();
   });
@@ -1456,7 +1584,7 @@ function connectSocket(url: string, session = cameraSession.current): void {
   socketHealthTimer = startSocketHealth(ws, disconnected, current);
 }
 
-function handleCameraMessage(event: MessageEvent): void { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") applyClockSync(message, received); if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "voice_result" && voiceEnabled) { const text = String(message.final || message.partial || message.text || "").trim(); const command = String(message.command || message.result?.command || "").trim(); if (command) setVoiceStatus("listening", `已执行：${command}`); else if (text) setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); else if (message.matched === false) setVoiceStatus("listening", "语音未匹配到电脑口令"); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "error" && message.code === "pairing_required") setConnection("error", PAIRING_REQUIRED_BADGE); if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }
+function handleCameraMessage(event: MessageEvent): void { const received = performance.now(); let message: any; try { message = JSON.parse(event.data); } catch { return; } applyFitnessMessage(message); applyFitnessMessage(message); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") applyClockSync(message, received); if (message.type === "ack") { if (message.runtime_zones && typeof message.runtime_zones === "object") runtimeZones = message.runtime_zones; else runtimeZones = {}; lastServerPoseCount = Number(message.pose_count || 0); document.querySelector("#sendState")!.textContent = poseStatusText(Boolean(message.players?.some((player: any) => player.signals?.pose_visible))); } if (message.type === "voice_result" && voiceEnabled) { const text = String(message.final || message.partial || message.text || "").trim(); const command = String(message.command || message.result?.command || "").trim(); if (command) setVoiceStatus("listening", `已执行：${command}`); else if (text) setVoiceStatus("listening", `识别：${text.replace(/\s+/g, "")}`); else if (message.matched === false) setVoiceStatus("listening", "语音未匹配到电脑口令"); } if (message.type === "error") document.querySelector("#sendState")!.textContent = message.message || "数据错误"; if (message.type === "error" && message.code === "pairing_required") setConnection("error", PAIRING_REQUIRED_BADGE); if (message.type === "studio_video_request_v1") studioVideo.request(message as StudioRequest, socket!, activeRole === "camera" && !document.hidden && controllerAppActive); if (message.type === "studio_video_request_v1") studioVideo.request(message as StudioRequest, socket!, activeRole === "camera" && !document.hidden && controllerAppActive); if (message.type === "scene_snapshot_request") void sendSceneSnapshot(message); if (message.type === "scene_snapshot_result") { document.querySelector("#sendState")!.textContent = message.ok === false ? (message.message || "场景截图失败") : "场景截图已发送"; } }
 
 async function reconnectToBestServer(session = cameraSession.current, connection = cameraSocketSession.current): Promise<void> {
   const current = () => cameraSession.isCurrent(session) && cameraSocketSession.isCurrent(connection) && running && !document.hidden;
@@ -1878,6 +2006,7 @@ async function captureWorkerFrame(worker: VisionWorkerClient<CameraInferenceFram
 }
 function predict(now: number): void {
   if (!running) return;
+  if (!cameraFrameLoop) recordCameraFrame(now);
   schedulePredict();
   if (inferenceBusy || (!poseLandmarker && !visionWorker) || motionDebug.modelState !== "ready"
       || video.readyState < 2 || video.currentTime === lastVideoTime || now - lastInferenceAt < currentInferenceIntervalMs()) return;
@@ -1977,6 +2106,7 @@ function recordCameraFrame(now: number, metadata?: VideoFrameCallbackMetadata): 
   // Some providers expose captureTime; otherwise this measures frame arrival.
   const capturedAt = typeof captureTime === "number" && Number.isFinite(captureTime) && captureTime >= 0 && captureTime <= now ? captureTime : now;
   lastCameraCapturedAtMs = Date.now() - Math.max(0, performance.now() - capturedAt);
+  if (running) studioVideo.frame(video, lastCameraCapturedAtMs, now, activeRole === "camera" && !document.hidden && controllerAppActive, socket);
   cameraFrameCount++;
   if (now - cameraFpsStarted >= 1000) {
     document.querySelector("#cameraFps")!.textContent = `${Math.round(cameraFrameCount * 1000 / (now - cameraFpsStarted))} FPS`;
@@ -2095,6 +2225,7 @@ async function startVoiceControl(): Promise<void> {
 }
 
 async function stop(): Promise<void> {
+  studioVideo.stop();
   cameraSession.next(); cameraSocketSession.next(); poseModelSession.next();
   cameraStartTask = null;
   cameraRecoveryTask = modelRecoveryTask = null;
@@ -2164,6 +2295,7 @@ const prefersLight = window.matchMedia("(prefers-color-scheme: light)");
 let upsideDown = localStorage.getItem("motionbridge-upside-down") === "1";
 let screenApplied = "";
 function syncScreen(): void {
+  syncHeartRate();
   const cameraLive = running && activeRole === "camera";
   document.body.classList.toggle("camera-live", cameraLive);
   const reverse = displayNative && activeRole === "camera" && upsideDown;
@@ -2460,7 +2592,7 @@ async function startController(): Promise<void> {
       });
       ws.addEventListener("message", (event) => {
         if (generation !== controllerGeneration) return;
-        try { const message = JSON.parse(event.data); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") applyClockSync(message, performance.now()); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; if (message.type === "error" && message.code === "pairing_required") controllerBadge(false, PAIRING_REQUIRED_BADGE); } catch { /* 忽略无法解析的消息 */ }
+        try { const message = JSON.parse(event.data); applyFitnessMessage(message); applyFitnessMessage(message); if (message.type === "control_config_v1") applyControlConfig(message); if (message.type === "trigger_state_v1") applyTriggerState(message); if (message.type === "game_output_state_v1") applyGameOutputState(message); if (message.type === "clock_sync") applyClockSync(message, performance.now()); if (message.type === "error") document.querySelector("#sensorState")!.textContent = message.message || "连接失败"; if (message.type === "error" && message.code === "pairing_required") controllerBadge(false, PAIRING_REQUIRED_BADGE); } catch { /* 忽略无法解析的消息 */ }
       });
       const disconnected = () => { if (generation === controllerGeneration && handheldSocket === ws) {
         handheldSocket = null;
@@ -2517,6 +2649,7 @@ async function suspendHandheld(): Promise<void> {
 async function stopHandheld(): Promise<void> { computerReconnect.cancel(); await suspendHandheld(); showRole("home"); document.querySelector<HTMLElement>("header")!.classList.remove("hidden"); setConnection("offline"); }
 async function handleBackButton(): Promise<void> {
   connectionTouched = true;
+  if (fitnessUI.visible) { fitnessUI.hide(); return; }
   if (scannerAbort) { scannerAbort.abort(); return; }
   computerReconnect.cancel();
   if (activeRole === "home") { await App.exitApp(); return; }
@@ -2817,6 +2950,7 @@ let resumeCameraOnReturn = false;
 let cameraSuspending: Promise<void> | null = null;
 function onVisibilityChange(): void {
   if (document.hidden) {
+    studioVideo.stop(); closeFitnessSocket(); syncHeartRate();
     computerReconnect.pause(); scannerAbort?.abort();
     cancelBluetoothReconnect();
     if ((running || cameraStartTask) && activeRole === "camera") {
@@ -2831,6 +2965,8 @@ function onVisibilityChange(): void {
     }
     return;
   }
+  if (fitnessUI.visible || fitnessStore.current) void connectFitness();
+  syncHeartRate();
   if (activeRole === "handheld" && handheldTimer == null && !bluetoothSystemDialog) void (async () => { await controllerSuspendTask; controllerSuspendTask = null; await controllerStartTask; if (activeRole === "handheld" && !document.hidden) await startHandheld(); })();
   else if (activeRole === "handheld") scheduleBluetoothReconnect();
   if (resumeCameraOnReturn && activeRole === "camera") {
@@ -2864,6 +3000,9 @@ App.addListener("backButton", () => { void handleBackButton(); });
 // 那行字会停在"两条路都没开"，而他刚刚照做了。
 void App.addListener("appStateChange", ({ isActive }) => {
   controllerAppActive = isActive;
+  if (!isActive) { studioVideo.stop(); closeFitnessSocket(); }
+  else if (fitnessUI.visible || fitnessStore.current) void connectFitness();
+  syncHeartRate();
   if (!isActive) {
     computerReconnect.pause(); scannerAbort?.abort();
     if (activeRole === "handheld" && !bluetoothSystemDialog) controllerSuspendTask = suspendHandheld();

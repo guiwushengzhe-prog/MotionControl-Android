@@ -21,6 +21,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(WebUpdatePlugin.class);
         registerPlugin(DisplayPlugin.class);
         registerPlugin(AppUpdatePlugin.class);
+        registerPlugin(HeartRatePlugin.class);
         // 换包只在这里发生：此刻还没有页面在跑，换掉它脚下的文件才是安全的。
         File live = promoteStagedBundle();
         // 必须在 super.onCreate() 之前：那一句里 bridgeBuilder 就被用来建 Bridge 了。

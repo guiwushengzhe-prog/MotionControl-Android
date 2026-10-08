@@ -78,6 +78,65 @@
 body.camera-live { color: var(--text); }
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100dvh; overflow: hidden; background: var(--bg); font-size: 15px; line-height: 1.4; -webkit-font-smoothing: antialiased; }
+
+.fitness-role-icon { color: var(--ok); background: var(--ok-tint); }
+.fitness-page[hidden] { display: none; }
+.fitness-page { position: fixed; inset: 0; z-index: 85; overflow-y: auto; background: var(--bg); color: var(--text); padding: max(12px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left)); overscroll-behavior: contain; touch-action: pan-y; }
+.fitness-page-inner { max-width: 520px; margin: 0 auto; }
+.fitness-heading, .fitness-goal-top, .fitness-current-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.fitness-heading { margin-bottom: 18px; }
+.fitness-connection, .fitness-current-top span { font-size: 13px; color: var(--text-2); }
+.fitness-page h2 { margin: 0; font-size: 32px; letter-spacing: -.8px; }
+.fitness-intro { color: var(--text-2); margin: 8px 0 20px; }
+.fitness-goal-card, .fitness-session-card, .fitness-history-session { border-radius: 22px; padding: 20px; background: var(--card); }
+.fitness-goal-top span { color: var(--text-2); text-align: right; font-size: 13px; }
+.fitness-goal-card progress { width: 100%; height: 10px; display: block; appearance: none; margin: 16px 0 22px; border: none; border-radius: 10px; overflow: hidden; background: var(--fill); }
+.fitness-goal-card progress::-webkit-progress-bar { background: var(--fill); }
+.fitness-goal-card progress::-webkit-progress-value { background: var(--ok); border-radius: 10px; }
+.fitness-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.fitness-metrics strong { display: block; font-size: clamp(20px, 6vw, 30px); font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
+.fitness-metrics span { display: block; font-size: 11px; color: var(--text-2); margin-top: 5px; }
+.fitness-achievements { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 14px 0 20px; }
+.fitness-achievements > span { background: var(--card); border-radius: 18px; padding: 16px; color: var(--text-2); font-size: 12px; }
+.fitness-achievements strong { display: block; color: var(--text); font-size: 17px; margin-bottom: 4px; }
+.fitness-session-card { margin-bottom: 12px; }
+.fitness-timer { display: block; font-size: 44px; font-variant-numeric: tabular-nums; letter-spacing: -1px; margin: 12px 0; }
+.fitness-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.fitness-actions > button { flex: 1; min-width: 110px; margin: 0; padding: 13px 8px; font-size: 15px; border-radius: 14px; }
+.fitness-actions > button[hidden] { display: none; }
+.fitness-mode-links { margin-bottom: 22px; }
+.fitness-note { font-size: 12px; color: var(--text-2); line-height: 1.65; margin: 10px 0 0; }
+.fitness-heart { border-radius: 22px; padding: 16px 20px; background: var(--card); margin-bottom: 12px; }
+.fitness-heart[hidden], .fitness-nudge[hidden] { display: none; }
+.fitness-heart-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.fitness-heart .fitness-note { margin-top: 6px; }
+/* 开关：和系统设置里的一样，点一下开、再点关。 */
+.fitness-switch { position: relative; width: 51px; height: 31px; flex: none; margin: 0; padding: 0; border: none; border-radius: 16px; background: var(--fill); transition: background-color .2s; }
+.fitness-switch i { position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(0, 0, 0, .25); transition: transform .2s; }
+.fitness-switch[aria-checked="true"] { background: var(--ok); }
+.fitness-switch[aria-checked="true"] i { transform: translateX(20px); }
+.fitness-nudge button { margin: 0 0 0 6px; padding: 0; border: none; background: none; color: var(--accent); font: inherit; }
+/* 玩的时候的大字心率：人站在几米外也看得清。只在读到心率时出现。 */
+.heart-rate-badge { position: fixed; z-index: 40; top: max(12px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left)); display: flex; align-items: baseline; gap: 6px; padding: 6px 16px 8px; border-radius: 22px; background: var(--hud); color: var(--text); pointer-events: none; }
+.heart-rate-badge[hidden] { display: none; }
+.heart-rate-badge b { color: var(--danger); font-size: 26px; line-height: 1; }
+.heart-rate-badge strong { font-size: 46px; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -1px; }
+.fitness-settings { width: 100%; }
+.fitness-settings .field { margin-bottom: 12px; }
+.fitness-settings input { max-width: 160px; }
+.fitness-page h3 { font-size: 19px; margin: 25px 0 12px; }
+.fitness-day { display: grid; grid-template-columns: 42px 1fr 1fr 1fr 16px; align-items: center; gap: 5px; border-bottom: 1px solid var(--line); padding: 12px 0; font-size: 12px; }
+.fitness-day span { color: var(--text-2); text-align: right; font-variant-numeric: tabular-nums; }
+.fitness-day i { color: var(--ok); font-style: normal; text-align: right; }
+.fitness-history-session { padding: 16px; margin-bottom: 10px; }
+.fitness-history-session > div { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.fitness-history-session > div > span { color: var(--text-2); font-size: 12px; }
+.fitness-history-session p { font-size: 13px; margin: 10px 0 4px; }
+.fitness-history-session small, .fitness-empty { color: var(--text-2); font-size: 12px; }
+.fitness-week-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 25px; }
+.fitness-week-nav h3 { margin: 0; font-size: 17px; }
+.fitness-week-nav > div { display: flex; gap: 6px; }
+.fitness-week-nav button { border-radius: 10px; padding: 8px; background: var(--fill); font-size: 12px; white-space: nowrap; }
 h1, h2, p { margin: 0; }
 button, input, select { font: inherit; color: inherit; }
 button { min-height: 44px; padding: 10px 16px; border: 0; border-radius: 12px; background: var(--fill); color: var(--text); font-weight: 600; cursor: pointer; touch-action: manipulation; }
