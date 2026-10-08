@@ -1,4 +1,4 @@
-import { DrawingUtils, FilesetResolver, HandLandmarker, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
+import { DrawingUtils, FilesetResolver, GestureRecognizer, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import { App } from "@capacitor/app";
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import {
@@ -14,13 +14,14 @@ import { VisionWorkerClient, supportsVisionWorker } from "./vision-worker-client
 import { HAND_CROP_SIDE, handCropBox, inferenceSize, packHandCrop, type HandSide, type PackedHand } from "./vision-core";
 import type { VisionResult } from "./vision-protocol";
 import "./style.css";
+import { readHeavyModel, receiveHeavyModel, type PoseModelOffer } from "./pose-model-store";
 import { ComputerReconnect, matchesComputer, parseConnectionCode, probeCanIdentify, readComputer, saveComputer, withPairingKey } from "./connection-code";
 import { SEEN_WEB_VERSION_KEY, compareVersions, pendingReleases, readReleaseNotes, renderReleases, webUpdateLine } from "./release-notes";
 import { APP_UPDATE_CHECKED_KEY, APP_UPDATE_DISMISSED_KEY, appUpdateView, progressLine, shouldCheck, shouldPrompt, type AppUpdateResult } from "./app-update";
 
 type ConnectionState = "offline" | "connecting" | "online" | "error";
 type VoiceStatus = "off" | "connecting" | "listening" | "error" | "unauthorized";
-type ModelChoice = "full" | "lite";
+type ModelChoice = "full" | "heavy";
 type VoiceRecognitionMode = "computer" | "phone";
 type SyncedAction = { type?: string; target?: string; behavior?: string };
 type SyncedBinding = { label?: string; action?: SyncedAction; disabled?: boolean };
@@ -45,6 +46,7 @@ type ControlConfigV1 = {
   // Whether to run the hand model, and on which hand.  The desktop asks only
   // while it is actually steering with a hand -- see the hand joint section.
   hand_tracking?: { enabled?: boolean; hand?: string; hands?: string[] };
+  pose_model_offer?: PoseModelOffer | null;
   // Every address the desktop can be reached at, best link first.
   server_candidates?: { host?: string; port?: number; kind?: string }[];
 };
@@ -139,7 +141,8 @@ app.innerHTML = `
         <label class="field">电脑地址<input id="serverUrl" inputmode="url" autocomplete="url" placeholder="自动查找"></label>
         <label class="field">镜头<select id="cameraDeviceSelect"><option value="__auto__">自动</option></select></label>
         <label class="field">语音识别<select id="voiceRecognitionLocation"><option value="computer">电脑识别（用手机麦克风）</option><option value="phone">手机识别</option></select></label>
-        <label class="field technical">识别模型<select id="modelSelect"><option value="full">Full（精度）</option></select></label>
+        <label class="field hidden" id="poseModelField">身体模型<select id="modelSelect"><option value="full">完整（Full）</option><option value="heavy">高精度（Heavy）</option></select></label>
+        <p class="model-transfer-line hidden" id="poseModelTransferLine" role="status"></p>
         <p class="web-update-line" id="webUpdateLine" hidden></p>
         <p class="web-update-line" id="appUpdateLine" hidden></p>
         <button id="appUpdateButton" class="scan-computer" type="button" hidden>下载并安装</button>
@@ -248,8 +251,7 @@ let connectionTouched = false;
 let facingMode: "user" | "environment" =
   localStorage.getItem("motionbridge-facing") === "environment" ? "environment" : "user";
 let selectedCameraDeviceId = "__auto__";
-// Only the Full model ships: Lite saved 5.5 MB of build but nothing chose it,
-// and a stale "lite" in storage would ask for a file that is no longer there.
+// 安装包只带 Full；收到电脑发送的 Heavy 后才开放选择。
 let modelChoice: ModelChoice = "full";
 let cameraDevices: MediaDeviceInfo[] = [];
 let voiceEnabled = false;
@@ -696,6 +698,7 @@ function applyControlConfig(message: unknown): void {
   // 只在电脑真的发来配置时才动手部模型。缓存下来的那份不算数：刚启动、还没连
   // 上电脑就先加载 7.8 MB 的模型，是白占内存。
   syncHandTracking();
+  if (syncedControlConfig.pose_model_offer) void acceptHeavyModel(syncedControlConfig.pose_model_offer);
   rememberCandidates(syncedControlConfig.server_candidates);
   void checkWebUpdate();
   try { localStorage.setItem(CONTROL_CONFIG_STORAGE_KEY, JSON.stringify(syncedControlConfig)); } catch { /* Cache is optional. */ }
@@ -711,6 +714,7 @@ function applyControlConfig(message: unknown): void {
 function markControlConfigCached(): void {
   if (!syncedControlConfig) return;
   controlConfigFresh = false;
+  syncHandTracking();
   renderControlConfig();
 }
 
@@ -1154,13 +1158,61 @@ async function createPose(modelUrl: string, cpuOnly: boolean, generation: number
   poseModelSession.assertCurrent(generation);
   return { model: await options("CPU"), delegate: "CPU", fallbackError };
 }
-function updateModelLabel(): void { modelStatus.textContent = modelChoice === "lite" ? "Lite33" : "Full33"; modelSelect.value = modelChoice; }
+let heavyModelUrl = "";
+let heavyModelDigest = "";
+let heavyTransferTask: Promise<void> | null = null;
+let receivedOffer = "";
+
+function showModelTransfer(text: string): void {
+  const line = document.querySelector<HTMLElement>("#poseModelTransferLine")!;
+  line.textContent = text; line.classList.toggle("hidden", !text);
+}
+function showModelChoice(): void {
+  document.querySelector("#poseModelField")!.classList.toggle("hidden", !heavyModelUrl);
+  updateModelLabel();
+}
+const heavyModelReady = readHeavyModel().then(cached => {
+  if (cached) {
+    heavyModelUrl = URL.createObjectURL(cached.blob); heavyModelDigest = cached.sha256;
+    if (localStorage.getItem("motionbridge-model") === "heavy") modelChoice = "heavy";
+  }
+  showModelChoice();
+}).catch(() => { showModelChoice(); });
+
+async function acceptHeavyModel(offer: PoseModelOffer): Promise<void> {
+  await heavyModelReady;
+  if (receivedOffer === offer.request_id || heavyTransferTask) return;
+  receivedOffer = offer.request_id;
+  const task = (async () => {
+    try {
+      showModelTransfer("正在接收高精度模型…");
+      const saved = await receiveHeavyModel(deviceHttpBase(), offer,
+        percent => showModelTransfer("正在接收高精度模型 · " + percent + "%"));
+      if (saved.sha256 !== heavyModelDigest) {
+        // 当前识别可能仍使用旧模型的地址，不在传输途中替换。
+        heavyModelUrl = URL.createObjectURL(saved.blob); heavyModelDigest = saved.sha256;
+      }
+      showModelChoice(); showModelTransfer("高精度模型已保存，可在更多设置中选择");
+    } catch (error) {
+      showModelTransfer(error instanceof Error ? error.message : "模型接收失败，请重新发送");
+    }
+  })();
+  heavyTransferTask = task;
+  try { await task; } finally { if (heavyTransferTask === task) heavyTransferTask = null; }
+}
+function updateModelLabel(): void {
+  modelStatus.textContent = modelChoice === "heavy" ? "高精度 · 33 点" : "完整 · 33 点";
+  modelSelect.value = modelChoice;
+}
 async function loadPoseModel(session = cameraSession.current): Promise<void> {
   const modelGeneration = poseModelSession.next();
+  await heavyModelReady;
+  cameraSession.assertCurrent(session); poseModelSession.assertCurrent(modelGeneration);
   const started = performance.now();
   document.querySelector("#loading")!.classList.remove("hidden");
   motionDebug.modelState = "loading"; motionDebug.actualModel = modelChoice;
-  motionDebug.modelUrl = new URL(`./models/pose_landmarker_${modelChoice}.task`, location.href).href;
+  motionDebug.modelUrl = modelChoice === "heavy" && heavyModelUrl ? heavyModelUrl :
+    new URL("./models/pose_landmarker_full.task", location.href).href;
   updateModelLabel(); motionDebug.delegate = "unknown";
   if (!forceCpuDelegate) motionDebug.fallbackError = null;
   motionDebug.detectCalls = 0; motionDebug.lastPoseCount = 0; motionDebug.lastInferenceMs = 0; motionDebug.lastDetectError = null;
@@ -1172,7 +1224,7 @@ async function loadPoseModel(session = cameraSession.current): Promise<void> {
       let worker: VisionWorkerClient<CameraInferenceFrame> | null = null;
       try {
         worker = new VisionWorkerClient(new VisionWorker(), { type: "init", wasmBaseUrl: new URL("./wasm", location.href).href,
-          poseModelUrl: motionDebug.modelUrl, handModelUrl: new URL("./models/hand_landmarker.task", location.href).href,
+          poseModelUrl: motionDebug.modelUrl, handModelUrl: new URL("./models/gesture_recognizer.task", location.href).href,
           cpuOnly: forceCpuDelegate },
           (frame, result, queueMs) => {
             if (currentInferenceFrame(frame)) {
@@ -1425,7 +1477,8 @@ async function reconnectToBestServer(session = cameraSession.current, connection
 // 语音模型从连着的那台电脑取，走的是同一个设备口，只是把 ws:// 换成 http://。
 function deviceHttpBase(): string {
   try {
-    const parsed = new URL(serverInput.value);
+    const parsed = new URL((socket?.readyState === WebSocket.OPEN ? socket.url :
+      handheldSocket?.readyState === WebSocket.OPEN ? handheldSocket.url : serverInput.value));
     return `${parsed.protocol === "wss:" ? "https" : "http"}://${parsed.host}`;
   } catch {
     return "";
@@ -1702,7 +1755,7 @@ function currentInferenceIntervalMs(): number {
 // 降到 36——整幅画面偶尔要满图重新找手，裁过之后搜索范围只有巴掌大。另外裁
 // 哪里是电脑说了算的，所以不存在把左右手认反。
 let handTrackingSides: HandSide[] = [];
-let handLandmarker: HandLandmarker | null = null;
+let gestureRecognizer: GestureRecognizer | null = null;
 let handModelLoading = false;
 const handCropCanvas = document.createElement("canvas");
 handCropCanvas.width = HAND_CROP_SIDE;
@@ -1712,31 +1765,31 @@ const handCropContext = handCropCanvas.getContext("2d")!;
 function syncHandTracking(): void {
   const request = syncedControlConfig?.hand_tracking;
   const requested = request?.hands ?? [request?.hand];
-  handTrackingSides = request?.enabled ? [...new Set(requested.filter((hand): hand is HandSide => hand === "left" || hand === "right"))] : [];
+  handTrackingSides = controlConfigFresh && request?.enabled ? [...new Set(requested.filter((hand): hand is HandSide => hand === "left" || hand === "right"))] : [];
   if (!handTrackingSides.length) { releaseHandModel(); return; }
-  if (visionWorker) return;
-  if (handLandmarker || handModelLoading || !running) return;
+  if (visionWorker) { visionWorker.setHandsEnabled(handTrackingSides.length > 0); return; }
+  if (gestureRecognizer || handModelLoading || !running) return;
   void loadHandModel(cameraSession.current);
 }
 function releaseHandModel(): void {
   handModelSession.next(); handModelLoading = false;
-  const model = handLandmarker; handLandmarker = null; model?.close();
+  const model = gestureRecognizer; gestureRecognizer = null; model?.close();
 }
 async function loadHandModel(session: number): Promise<void> {
   const generation = handModelSession.next(); handModelLoading = true;
-  let loaded: HandLandmarker | null = null;
+  let loaded: GestureRecognizer | null = null;
   try {
     const files = await getVision();
     if (!cameraSession.isCurrent(session) || !handModelSession.isCurrent(generation) || !handTrackingSides.length) return;
-    const options = (delegate: "GPU" | "CPU") => HandLandmarker.createFromOptions(files, {
-      baseOptions: { modelAssetPath: new URL("./models/hand_landmarker.task", location.href).href, delegate },
+    const options = (delegate: "GPU" | "CPU") => GestureRecognizer.createFromOptions(files, {
+      baseOptions: { modelAssetPath: new URL("./models/gesture_recognizer.task", location.href).href, delegate },
       // Each crop changes position and size; IMAGE mode avoids stale VIDEO tracking.
       runningMode: "IMAGE", numHands: 1,
     });
     if (forceCpuDelegate) loaded = await options("CPU");
     else { try { loaded = await options("GPU"); } catch { loaded = await options("CPU"); } }
     if (!cameraSession.isCurrent(session) || !handModelSession.isCurrent(generation) || !handTrackingSides.length) { loaded.close(); return; }
-    handLandmarker = loaded; loaded = null;
+    gestureRecognizer = loaded; loaded = null;
   } catch (error) {
     loaded?.close();
     if (cameraSession.isCurrent(session) && handModelSession.isCurrent(generation)) document.querySelector("#modelError")!.textContent = "手部模型暂不可用，身体识别仍可使用";
@@ -1746,12 +1799,12 @@ async function loadHandModel(session: number): Promise<void> {
 // 手掌在手腕之外，所以框心要沿着"手肘指向手腕"这个方向再往外推一点；框的大小
 // 跟着前臂长度走，人离摄像头远近就不影响它。
 function detectHand(points: NormalizedLandmark[], side: HandSide): PackedHand | null {
-  if (!handLandmarker) return null;
+  if (!gestureRecognizer) return null;
   const box = handCropBox(points, side, inferenceCanvas.width, inferenceCanvas.height);
   if (!box) return null;
   handCropContext.drawImage(inferenceCanvas, box.sx, box.sy, box.side, box.side,
                             0, 0, HAND_CROP_SIDE, HAND_CROP_SIDE);
-  return packHandCrop(handLandmarker.detect(handCropCanvas).landmarks[0], side, box, inferenceCanvas.width, inferenceCanvas.height);
+  return packHandCrop(gestureRecognizer.recognize(handCropCanvas).landmarks[0], side, box, inferenceCanvas.width, inferenceCanvas.height);
 }
 // ==== 手部关节到此为止 =====================================================
 
@@ -2721,7 +2774,22 @@ toggleZonesButton.addEventListener("click", () => {
 hideStatus.addEventListener("click", () => { runtimeCard.classList.add("hidden"); showStatus.classList.remove("hidden"); hideStatus.setAttribute("aria-expanded", "false"); overlayRenderingEnabled = false; });
 showStatus.addEventListener("click", () => { if (!running) return; runtimeCard.classList.remove("hidden"); showStatus.classList.add("hidden"); hideStatus.setAttribute("aria-expanded", "true"); overlayRenderingEnabled = true; lastOverlayAt = 0; });
 modelSelect.value = modelChoice;
-modelSelect.addEventListener("change", () => { modelChoice = modelSelect.value === "lite" ? "lite" : "full"; localStorage.setItem("motionbridge-model", modelChoice); updateModelLabel(); });
+modelSelect.addEventListener("change", () => void (async () => {
+  modelChoice = modelSelect.value === "heavy" && heavyModelUrl ? "heavy" : "full";
+  localStorage.setItem("motionbridge-model", modelChoice); updateModelLabel();
+  if (!running) return;
+  modelSelect.disabled = true;
+  const session = cameraSession.current;
+  try { releaseHandModel(); await loadPoseModel(session); syncHandTracking(); schedulePredict(); }
+  catch (error) {
+    if (!isSessionCancelled(error)) {
+      modelChoice = "full"; localStorage.setItem("motionbridge-model", "full"); updateModelLabel();
+      showModelTransfer("高精度模型暂不可用，继续使用完整模型");
+      try { await loadPoseModel(session); syncHandTracking(); schedulePredict(); }
+      catch (fallback) { if (!isSessionCancelled(fallback)) await stop(); }
+    }
+  } finally { modelSelect.disabled = false; }
+})());
 cameraDeviceSelect.addEventListener("change", () => void chooseCamera(cameraDeviceSelect.value));
 voiceRecognitionSelect.addEventListener("change", () => {
   voiceRecognitionMode = voiceRecognitionSelect.value === "phone" ? "phone" : "computer";

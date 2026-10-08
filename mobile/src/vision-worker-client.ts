@@ -37,6 +37,10 @@ export class VisionWorkerClient<T> {
     this.latest = { id: ++this.nextId, frame, context, queuedAt: performance.now(), dispatchedAt: 0 };
     this.drain();
   }
+  setHandsEnabled(enabled: boolean): void {
+    if (!this.closed) this.worker.postMessage({ type: "hands", enabled });
+    if (!enabled && this.latest) this.latest.frame.hands = [];
+  }
   clearPending(): void {
     if (this.latest) { this.latest.frame.bitmap.close(); this.latest = null; this.droppedFrames++; }
   }

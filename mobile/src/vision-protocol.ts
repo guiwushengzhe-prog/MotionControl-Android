@@ -11,5 +11,5 @@ export type VisionResult = { type: "result"; id: number; landmarks: NormalizedLa
   timings: { copyMs: number; poseMs: number; handsMs: number; totalMs: number };
   handState?: "idle" | "loading" | "ready" | "error"; handError?: string };
 export type VisionError = { type: "error"; id?: number; message: string };
-export type VisionRequest = VisionInit | VisionFrame;
+export type VisionRequest = VisionInit | VisionFrame | { type: "hands"; enabled: boolean };
 export type VisionResponse = VisionReady | VisionResult | VisionError;

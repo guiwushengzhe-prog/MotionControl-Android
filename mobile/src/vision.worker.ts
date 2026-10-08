@@ -1,11 +1,11 @@
-import { FilesetResolver, HandLandmarker, PoseLandmarker } from "@mediapipe/tasks-vision";
+import { FilesetResolver, GestureRecognizer, PoseLandmarker } from "@mediapipe/tasks-vision";
 import { HAND_CROP_SIDE, handCropBox, inferenceSize, packHandCrop, type PackedHand } from "./vision-core";
 import type { VisionFrame, VisionInit, VisionRequest, VisionResponse } from "./vision-protocol";
 
 // The MediaPipe WASM loader calls importScripts. This entry is bundled as a
 // classic IIFE worker; module workers cannot execute that loader.
 const scope = self as unknown as { onmessage: (event: MessageEvent<VisionRequest>) => void; postMessage(message: VisionResponse): void };
-let pose: PoseLandmarker | null = null, hand: HandLandmarker | null = null;
+let pose: PoseLandmarker | null = null, hand: GestureRecognizer | null = null;
 let files: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>>;
 let options: VisionInit;
 let delegate: "GPU" | "CPU" = "CPU";
@@ -33,9 +33,9 @@ async function initialize(init: VisionInit): Promise<void> {
   scope.postMessage({ type: "ready", delegate, fallbackError });
 }
 async function loadHand(generation: number): Promise<void> {
-  let loaded: HandLandmarker | null = null;
+  let loaded: GestureRecognizer | null = null;
   const current = () => generation === handGeneration && handRequested;
-  const create = (choice: "GPU" | "CPU") => HandLandmarker.createFromOptions(files, {
+  const create = (choice: "GPU" | "CPU") => GestureRecognizer.createFromOptions(files, {
     canvas: new OffscreenCanvas(1, 1), baseOptions: { modelAssetPath: options.handModelUrl, delegate: choice },
     runningMode: "IMAGE", numHands: 1,
   });
@@ -61,7 +61,7 @@ function configureHands(enabled: boolean): void {
     return;
   }
   handRequested = true;
-  if (hand || handFailed || handTask) return;
+  if (!pose || hand || handFailed || handTask) return;
   const task = loadHand(handGeneration); handTask = task;
   void task.finally(() => { if (handTask === task) handTask = null; });
 }
@@ -86,7 +86,7 @@ async function infer(frame: VisionFrame): Promise<void> {
       const box = handCropBox(result.landmarks[0], side, image.width, image.height);
       if (!box) continue;
       cropContext.drawImage(image, box.sx, box.sy, box.side, box.side, 0, 0, HAND_CROP_SIDE, HAND_CROP_SIDE);
-      const packed = packHandCrop(hand.detect(crop).landmarks[0], side, box, image.width, image.height);
+      const packed = packHandCrop(hand.recognize(crop).landmarks[0], side, box, image.width, image.height);
       if (packed) packedHands.push(packed);
     }
     scope.postMessage({ type: "result", id: frame.id, landmarks: result.landmarks, worldLandmarks: result.worldLandmarks,
@@ -97,6 +97,7 @@ async function infer(frame: VisionFrame): Promise<void> {
 }
 scope.onmessage = event => {
   const message = event.data;
+  if (message.type === "hands") { configureHands(message.enabled); return; }
   void (message.type === "init" ? initialize(message) : infer(message)).catch(error => {
     scope.postMessage({ type: "error", ...(message.type === "frame" ? { id: message.id } : {}),
       message: error instanceof Error ? error.message : String(error) });
